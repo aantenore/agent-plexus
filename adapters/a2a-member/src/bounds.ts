@@ -1,0 +1,18 @@
+import type { OutboundBounds } from '@agent-plexus/core';
+
+/** URI of the A2A extension that carries a run's bounds to the next agent; see spec/extensions/bounds-v1.md. */
+export const BOUNDS_URI = 'https://github.com/aantenore/agent-plexus/blob/main/spec/extensions/bounds-v1.md';
+
+/** The extension data for one message: the outbound bounds with the time left already tightened to `remainingMs`. */
+export function boundsData(outbound: OutboundBounds, remainingMs: number): Record<string, unknown> {
+  const data: Record<string, unknown> = {
+    remainingMs: Math.max(0, Math.floor(remainingMs)),
+    hops: outbound.hops,
+    maxHops: outbound.maxHops,
+  };
+  if (outbound.tokens !== undefined) data.tokens = outbound.tokens;
+  if (outbound.costUsd !== undefined) data.costUsd = outbound.costUsd;
+  data.rootRunId = outbound.rootRunId;
+  data.parentRunId = outbound.parentRunId;
+  return data;
+}

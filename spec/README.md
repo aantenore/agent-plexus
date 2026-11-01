@@ -9,6 +9,7 @@ one binding of the spec, not the spec itself. When the two disagree, the spec wi
 | [`language.md`](language.md) | The language 0.1: naming rules, shapes, vocabularies, `ext`, `Condition`, `TopologySpec`, stop codes, telemetry names. |
 | [`hooks.md`](hooks.md) | The four host hooks: `gate`, `telemetry`, `score`, `state`, and the `Host` that carries them. |
 | [`ports/`](ports/README.md) | One page per port: operations, data shapes, semantics, errors, conformance. |
+| [`extensions/`](extensions/bounds-v1.md) | Extensions of a protocol that carry what the protocol lacks. [`bounds-v1`](extensions/bounds-v1.md) passes the remaining time, hops, budget and lineage of a run to a remote agent over A2A. |
 
 JSON Schemas of the data that crosses a port, and a `VERSIONING.md` with the rules for breaking changes, are planned.
 Until then the shapes are defined by the tables in these pages and by `packages/core/src/shapes.ts`.

@@ -203,3 +203,95 @@ test('the route that chose the call is kept in its record', async () => {
   await memberCall(s.env, s.run, 'm', 'a', { node: 'root', route: { member: 'm', ranked: [{ member: 'm', score: 1 }] } });
   assert.deepEqual(s.run.records[0]?.route, { member: 'm', ranked: [{ member: 'm', score: 1 }] });
 });
+
+test('parts never reach the member: only the checked text does, and the drop is an event with a count', async () => {
+  let got: unknown;
+  const s = await setup({
+    host: { check: (c) => (c.stage === 'send' ? { action: 'redact', text: 'clean' } : { action: 'allow' }) },
+    members: { m: (i) => { got = i; return completed('ok'); } },
+  });
+  const parts = [{ type: 'media' as const, mediaType: 'image/png', data: 'SECRET-BYTES' }, { type: 'text' as const, text: 'extra' }];
+  const out = await memberCall(s.env, s.run, 'm', { text: 'dirty', parts }, { node: 'root' });
+  assert.equal(out.result.status, 'completed');
+  assert.deepEqual(got, { text: 'clean' });
+  assert.deepEqual(s.events.filter((e) => e.name === 'plexus.parts.dropped'), [{ name: 'plexus.parts.dropped', attrs: { 'plexus.parts.count': 2 } }]);
+  assert.ok(!JSON.stringify(s.events).includes('SECRET-BYTES'));
+});
+
+test('input without parts raises no parts event', async () => {
+  const s = await setup();
+  await memberCall(s.env, s.run, 'm', { text: 'plain' }, { node: 'root' });
+  await memberCall(s.env, s.run, 'm', 'plain', { node: 'root' });
+  assert.deepEqual(s.events.filter((e) => e.name === 'plexus.parts.dropped'), []);
+});
+
+test('a cut-off at the run deadline is a topology timeout naming who set the deadline', async () => {
+  const system = await call({ limits: { timeoutMs: 1200, stepTimeoutMs: 60_000 }, members: { m: () => new Promise(() => {}) } });
+  assert.equal(system.out.result.status, 'stopped');
+  assert.deepEqual([system.reason?.code, system.reason?.layer, system.reason?.by], ['timeout', 'topology', 'limits.system.timeoutMs']);
+  const host = await call({ bounds: { deadlineAt: new Date(Date.now() + 1200).toISOString() }, limits: { stepTimeoutMs: 60_000 }, members: { m: () => new Promise(() => {}) } });
+  assert.deepEqual([host.reason?.code, host.reason?.layer, host.reason?.by], ['timeout', 'topology', 'host.bounds']);
+  assert.equal(host.record.reason?.by, 'host.bounds');
+});
+
+test('concurrent calls on one ledger never reserve more than the budget', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((done) => { release = done; });
+  const reserved: number[] = [];
+  const s = await setup({
+    bounds: { tokens: 100 },
+    members: { m: async (_i, ctx) => { reserved.push(ctx.outbound.tokens ?? 0); await gate; return completed('ok', { usage: { inputTokens: 1, outputTokens: 1 } }); } },
+  });
+  const calls = Array.from({ length: 6 }, () => memberCall(s.env, s.run, 'm', 'x', { node: 'root', share: 0.5 }));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(reserved.length >= 2);
+  assert.ok(reserved.reduce((a, b) => a + b, 0) <= 100, `reserved ${reserved.join('+')}`);
+  assert.ok((s.run.ledger.remaining().tokens ?? -1) >= 0);
+  release();
+  const results = await Promise.all(calls);
+  assert.ok(results.every((r) => r.result.status === 'completed' || r.result.reason?.code === 'limit'));
+  const spent = 2 * results.filter((r) => r.result.status === 'completed').length;
+  assert.deepEqual(s.run.ledger.remaining(), { tokens: 100 - spent });
+});
+
+test('a member that throws settles as fully spent, not released', async () => {
+  const s = await setup({ bounds: { tokens: 100 }, members: { m: () => { throw new Error('boom'); } } });
+  const out = await memberCall(s.env, s.run, 'm', 'x', { node: 'root' });
+  assert.equal(out.result.status, 'failed');
+  assert.deepEqual(s.run.ledger.remaining(), { tokens: 0 });
+});
+
+test('a journal step that rejects is a failed result in the execution layer; the reservation is settled', async () => {
+  const s = await setup({ bounds: { tokens: 100 } });
+  s.run.execution = { ...s.run.execution, step: async () => { throw new Error('journal down'); } };
+  const out = await memberCall(s.env, s.run, 'm', 'x', { node: 'root' });
+  assert.equal(out.result.status, 'failed');
+  assert.deepEqual([out.result.reason?.code, out.result.reason?.layer, out.result.reason?.detail], ['error', 'execution', 'journal down']);
+  assert.deepEqual(s.run.ledger.remaining(), { tokens: 0 });
+  assert.equal(s.run.records.at(-1)?.reason?.layer, 'execution');
+});
+
+test('a member result that is not an object is a failed error in the member layer', async () => {
+  for (const bad of ['text', null, 42]) {
+    const r = await call({ members: { m: () => bad as never } });
+    assert.equal(r.out.result.status, 'failed');
+    assert.deepEqual([r.reason?.code, r.reason?.layer], ['error', 'member']);
+  }
+});
+
+test('gate.check receive: redact replaces the output the caller gets and the stored one', async () => {
+  const r = await call({
+    host: { check: (c) => (c.stage === 'receive' ? { action: 'redact', text: 'masked' } : { action: 'allow' }) },
+    members: { m: () => completed('card 4111 1111 1111 1111') },
+  });
+  assert.equal(r.out.result.status, 'completed');
+  assert.equal(r.out.result.output, 'masked');
+  assert.equal(r.s.execution.texts.get(r.record.outputRef!), 'masked');
+});
+
+test('gate.check: redact without text is a block, on both stages', async () => {
+  const send = await call({ host: { check: () => ({ action: 'redact' }) } });
+  assert.deepEqual([send.reason?.code, send.reason?.stage], ['guard_block', 'send']);
+  const receive = await call({ host: { check: (c) => (c.stage === 'receive' ? { action: 'redact' } : { action: 'allow' }) } });
+  assert.deepEqual([receive.out.result.status, receive.reason?.code, receive.reason?.stage, receive.out.result.output], ['stopped', 'guard_block', 'receive', '']);
+});

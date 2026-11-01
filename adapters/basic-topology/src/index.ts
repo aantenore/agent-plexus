@@ -140,21 +140,22 @@ function bindRun(spec: TopologySpec): BoundTopology {
         const first = n.join === 'first';
         const share = (frame.share ?? 1) / count;
         const controller = new AbortController();
-        const signal = !first ? frame.signal : frame.signal ? AbortSignal.any([frame.signal, controller.signal]) : controller.signal;
+        const signal = frame.signal ? AbortSignal.any([frame.signal, controller.signal]) : controller.signal;
         const results: (MemberResult | undefined)[] = new Array(count).fill(undefined);
         const hops: string[][] = n.branches.map(() => []);
         let next = 0;
         let winner = -1;
         let inflight: number[] = [];
+        const running = new Set<number>();
         let failure: { error: unknown } | undefined;
 
         const worker = async (): Promise<void> => {
           while (winner < 0 && !failure) {
             const i = next++;
             if (i >= count) return;
+            running.add(i);
             try {
-              const branchFrame: Frame = { share, hops: hops[i] as string[] };
-              if (signal) branchFrame.signal = signal;
+              const branchFrame: Frame = { share, hops: hops[i] as string[], signal };
               const result = await node(n.branches[i] as TopologyNode, `${path}.branches[${i}]`, input, branchFrame);
               results[i] = result;
               if (first && winner < 0 && result.status === 'completed') {
@@ -163,8 +164,11 @@ function bindRun(spec: TopologySpec): BoundTopology {
                 controller.abort();
               }
             } catch (error) {
+              if (!failure && winner < 0) inflight = [...running].filter((j) => j !== i);
               failure ??= { error };
               controller.abort();
+            } finally {
+              running.delete(i);
             }
           }
         };

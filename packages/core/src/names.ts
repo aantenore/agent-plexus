@@ -11,8 +11,9 @@ export const ATTR = {
   routeChoice: 'plexus.route.choice',
   runStatus: 'plexus.run.status',
   runReason: 'plexus.run.reason',
+  partsCount: 'plexus.parts.count',
 } as const;
 
-export const EVENT = { limit: 'plexus.limit' } as const;
+export const EVENT = { limit: 'plexus.limit', partsDropped: 'plexus.parts.dropped' } as const;
 
 export const METRIC = { hops: 'plexus.hops', attributions: 'plexus.attributions' } as const;

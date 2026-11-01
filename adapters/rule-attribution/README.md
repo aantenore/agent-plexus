@@ -13,9 +13,10 @@ options and calls nothing. Reasons and evidence are short identifiers (codes, ho
 | 1 | Completed hop of a member that failed an expectation | `member` | The hop | medium |
 | 2 | A route node that chose no member (a hop with `route` and no member) | `routing` | none | high |
 | 3 | `hop_limit` | `topology`, `routing` when a router chose the call | none | high |
-| 3 | `timeout`, `limit` | `topology` when `reason.layer` is `topology`, else `member` | The hop with the longest duration | medium |
+| 3 | `timeout`, `limit` with `reason.layer` `topology` (the system's own limit or deadline) | `topology` | none; evidence has the code and `by:<reason.by>` | high |
+| 3 | `timeout`, `limit` otherwise | `member` | `limit`: the hop with the most tokens (input + output) when any hop reports usage, else the highest `costUsd`, else the longest duration. `timeout`: the longest duration | medium |
 | 3 | `reason.layer` is `host`: `denied`, `needs_auth` | `host` | none | high |
-| 3 | `reason.layer` is `host`: `guard_block` | `host` | `stage` `receive`: the hop's own member (its output was blocked); `send` or absent: the previous completed hop's member, if any | high |
+| 3 | `reason.layer` is `host`: `guard_block` | `host` | `stage` `receive`: the hop's own member (its output was blocked); `send` or absent: the previous completed hop's member, if any (a host `guard_block` on `send` names the upstream member) | high |
 | 3 | `guard_block` from a member, with an earlier completed hop | `member` | That upstream hop's member | medium |
 | 3 | `guard_block` otherwise, `failed`, `error`, other codes | `member` | The hop | high with a member layer, else medium |
 | 3 | `rejected` | `member` | The hop | low |

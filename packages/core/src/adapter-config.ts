@@ -10,7 +10,7 @@ export function interpolate<T>(value: T, env: Env, problems: string[], path: str
   if (typeof value === 'string') {
     return value.replace(ENV_REF, (_m, name: string, fallback: string | undefined) => {
       const v = env[name];
-      if (v) return v;
+      if (v !== undefined) return v;
       if (fallback !== undefined) return fallback;
       problems.push(`${path}: environment variable ${name} is not set`);
       return '';

@@ -3,7 +3,7 @@ import type { AdapterContext, Fills, FillTypes, Tier } from './adapter.ts';
 import { loadConditionFns, matchesCondition } from './condition.ts';
 import type { ResolvedConfig } from './config.ts';
 import type { Host } from './hooks.ts';
-import { deadlineMs, Ledger, openBounds } from './ledger.ts';
+import { deadlineBy, deadlineMs, Ledger, openBounds } from './ledger.ts';
 import { memberCall, type MemberCallEnv, type RunState } from './member-call.ts';
 import { ATTR, METRIC, SPAN } from './names.ts';
 import type {
@@ -31,6 +31,8 @@ export interface AssembleOptions {
   env?: Env;
   /** Finds adapter descriptors (default: `@agent-plexus/adapter-<name>` or a module path). For tests. */
   resolveAdapter?: DescriptorLoader;
+  /** The default prototype host prints no hop lines (ignored when a host is given or configured). */
+  quiet?: boolean;
 }
 
 /** An assembled system: run it, ask for its members, attribute a failure, check its readiness. */
@@ -66,7 +68,7 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
 
   let execution: ExecutionPort | undefined;
   const host: Host = opts.host
-    ?? (config.host ? await create('Host', config.host, { name: 'host', cwd, env, telemetry: noopTelemetry }, '$.host') : prototypeHost({ read: async (key) => execution?.read?.(key) }));
+    ?? (config.host ? await create('Host', config.host, { name: 'host', cwd, env, telemetry: noopTelemetry }, '$.host') : prototypeHost({ ...(opts.quiet ? { quiet: true } : {}), read: async (key) => execution?.read?.(key) }));
 
   const entryCache = new Map<string, Promise<AgentEntry>>();
   const members = new Map<string, MemberPort>();
@@ -144,20 +146,19 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
         if (decision.member === undefined) recordNoRoute(state, request.node, decision);
         return decision;
       });
+    const { caller } = state.ctx;
     return {
-      ctx: state.ctx,
+      ctx: { ...state.ctx, ...(caller ? { caller: withoutCredential(caller) } : {}) },
       input,
       limits: {
         maxParallel: limitNumber(limits.maxParallel),
         maxIterations: limitNumber(limits.maxIterations),
         maxHandoffs: limitNumber(limits.maxHandoffs),
-        maxRepeats: limitNumber(limits.maxRepeats),
       },
       call: (member, text, options) => memberCall(callEnv, state, member, text, options),
       route,
       matches: (condition, result) => matchesCondition(condition, result, fns),
       abandon: (hopId) => {
-        state.abandoned.add(hopId);
         const record = state.records.find((r) => r.hopId === hopId);
         if (record) record.abandoned = true;
       },
@@ -172,8 +173,9 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
     } catch (err) {
       return record(failed('error', 'execution', errorMessage(err)));
     }
-    const ledger = new Ledger(openBounds(ctx, limits, Date.now()));
-    const state: RunState = { ctx, rootRunId, ledger, execution: run, steps: 0, recent: [], records: [], abandoned: new Set() };
+    const now = Date.now();
+    const ledger = new Ledger(openBounds(ctx, limits, now), Date.now, deadlineBy(ctx, limits, now));
+    const state: RunState = { ctx, rootRunId, ledger, execution: run, steps: 0, recent: [], records: [] };
     let result: MemberResult;
     if (!bound) result = failed('error', 'topology', bindError ?? 'topology is not bound');
     else if (Date.now() >= deadlineMs(ledger.bounds)) result = { status: 'stopped', output: '', reason: { code: 'timeout', layer: 'topology' } };

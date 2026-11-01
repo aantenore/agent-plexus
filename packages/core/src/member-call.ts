@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { Attributes, Host } from './hooks.ts';
-import { deadlineMs, type Ledger, type Reservation } from './ledger.ts';
+import type { Attributes, Host, SpanHandle } from './hooks.ts';
+import { deadlineMs, type DeadlineBy, type Ledger, type Reservation } from './ledger.ts';
 import { ATTR, EVENT, METRIC, SPAN } from './names.ts';
 import type { CallOptions, CallOutcome, Execution, MemberCallContext, MemberPort } from './ports.ts';
 import {
@@ -36,8 +36,6 @@ export interface RunState {
   /** Members called, in order (the tail is enough to see back-and-forth). */
   recent: string[];
   records: HopRecord[];
-  /** Hops the topology abandoned before their record was written. */
-  abandoned: Set<string>;
 }
 
 interface Outcome {
@@ -89,7 +87,10 @@ async function checkText(env: MemberCallEnv, stage: 'send' | 'receive', text: st
   }
 }
 
-const withText = (input: RunInput, text: string): RunInput => (typeof input === 'string' ? text : { ...input, text });
+/** The checked text only: `parts` never reach a member, as the gate's check sees text alone. */
+const withText = (input: RunInput, text: string): RunInput => (typeof input === 'string' ? text : { text });
+
+const partCount = (input: RunInput): number => (typeof input === 'string' || !Array.isArray(input.parts) ? 0 : input.parts.length);
 
 /** A member's answer as the pipeline relies on it: a known status, a text, and a reason when it did not complete. */
 function normalize(value: unknown): MemberResult {
@@ -105,7 +106,10 @@ interface Invocation {
   input: RunInput;
   ctx: MemberCallContext;
   timeoutMs: number;
+  /** True when the step timeout, not the run deadline, is the shorter. */
   stepBinding: boolean;
+  /** Who set the run deadline. */
+  deadlineBy: DeadlineBy;
   timer: AbortController;
 }
 
@@ -116,7 +120,7 @@ async function invoke(inv: Invocation): Promise<MemberResult> {
     ? setTimeout(() => inv.timer.abort(), Math.max(0, inv.timeoutMs))
     : undefined;
   const cutOff = (): MemberResult => inv.timer.signal.aborted
-    ? stop('timeout', 'member', inv.stepBinding ? 'limits.system.stepTimeoutMs' : undefined)
+    ? (inv.stepBinding ? stop('timeout', 'member', 'limits.system.stepTimeoutMs') : stop('timeout', 'topology', inv.deadlineBy))
     : stop('aborted');
   const aborted = new Promise<'aborted'>((done) => {
     if (signal.aborted) done('aborted');
@@ -143,7 +147,7 @@ async function safePut(execution: Execution, text: string): Promise<string | und
 }
 
 async function pipeline(
-  env: MemberCallEnv, run: RunState, hopId: string, member: string, input: RunInput, options: CallOptions, clock: () => number,
+  env: MemberCallEnv, run: RunState, hopId: string, member: string, input: RunInput, options: CallOptions, clock: () => number, span: SpanHandle,
 ): Promise<Outcome> {
   const { host } = env;
   const { ctx, ledger } = run;
@@ -184,6 +188,8 @@ async function pipeline(
   const sent = await checkText(env, 'send', inputText(input), entry, caller);
   if ('blocked' in sent) return early(sent.blocked);
   const sentInput = withText(input, sent.text);
+  const dropped = partCount(input);
+  if (dropped > 0) span.event(EVENT.partsDropped, { [ATTR.partsCount]: dropped });
 
   // 4. Credential for the member's audience, on behalf of the caller.
   let credential: string | undefined;
@@ -237,7 +243,7 @@ async function callAsStep(
         ...(credential ? { credential } : {}),
         outbound: ledger.outbound(ctx.runId, run.rootRunId, reservation),
       };
-      return invoke({ port, input, ctx: memberCtx, timeoutMs: Math.min(remaining, stepMs), stepBinding: stepMs <= remaining, timer });
+      return invoke({ port, input, ctx: memberCtx, timeoutMs: Math.min(remaining, stepMs), stepBinding: stepMs <= remaining, deadlineBy: ledger.deadlineBy, timer });
     });
   } catch (err) {
     return stop('error', 'execution', undefined, errorMessage(err), 'failed');
@@ -257,7 +263,7 @@ export async function memberCall(env: MemberCallEnv, run: RunState, member: stri
     [ATTR.layer]: 'member', [ATTR.system]: env.system, [ATTR.member]: member, [ATTR.hop]: hopId, [ATTR.nodePath]: options.node,
   };
   const result = await env.host.telemetry.span(SPAN.hop, attrs, async (span) => {
-    const outcome = await pipeline(env, run, hopId, member, input, options, clock);
+    const outcome = await pipeline(env, run, hopId, member, input, options, clock, span);
     const { result: r } = outcome;
     run.records.push({
       hopId,
@@ -276,7 +282,6 @@ export async function memberCall(env: MemberCallEnv, run: RunState, member: stri
       ...(options.route ? { route: options.route } : {}),
       ...(outcome.inputRef ? { inputRef: outcome.inputRef } : {}),
       ...(outcome.outputRef ? { outputRef: outcome.outputRef } : {}),
-      ...(run.abandoned.has(hopId) ? { abandoned: true } : {}),
     });
     span.set({ [ATTR.runStatus]: r.status, ...(r.reason ? { [ATTR.runReason]: r.reason.code } : {}) });
     env.host.telemetry.metric(METRIC.hops, 1, { [ATTR.layer]: 'member', [ATTR.member]: member, [ATTR.runStatus]: r.status });

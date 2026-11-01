@@ -1,5 +1,5 @@
 import type { Attributes, GateCheck, GateDecision, GateHook, GateVerdict, Host } from '../src/hooks.ts';
-import { Ledger, openBounds } from '../src/ledger.ts';
+import { deadlineBy, Ledger, openBounds } from '../src/ledger.ts';
 import type { MemberCallEnv, RunState } from '../src/member-call.ts';
 import type { Execution, ExecutionPort, MemberCallContext, MemberPort } from '../src/ports.ts';
 import type { AgentEntry, Bounds, Caller, MemberResult, RunContext } from '../src/shapes.ts';
@@ -49,7 +49,7 @@ export function recordingHost(o: HostOptions = {}, log: string[] = []): Harness 
       async span(name, attrs, fn) {
         const own: Attributes = { ...attrs };
         spans.push({ name, attrs: own });
-        return fn({ set: (more) => { Object.assign(own, more); }, event: () => {} });
+        return fn({ set: (more) => { Object.assign(own, more); }, event: (name, attrs = {}) => { events.push({ name, attrs }); } });
       },
       event: (name, attrs) => { events.push({ name, attrs }); },
       metric: () => {},
@@ -107,10 +107,11 @@ export async function setup(o: SetupOptions = {}): Promise<Setup> {
     runId: 'run-1', system: 'sys', ...(o.caller ? { caller: o.caller } : {}), ...(o.signal ? { signal: o.signal } : {}),
     ...(o.bounds ? { bounds: { deadlineAt: new Date(Date.now() + 60_000).toISOString(), hops: 0, maxHops: 3, ...o.bounds } } : {}),
   };
-  const bounds = openBounds(ctx, limits, (o.now ?? Date.now)());
+  const now = (o.now ?? Date.now)();
+  const bounds = openBounds(ctx, limits, now);
   const run: RunState = {
-    ctx, rootRunId: 'root-1', ledger: new Ledger(bounds, o.now), execution: await execution.begin('run-1'),
-    steps: 0, recent: [], records: [], abandoned: new Set(),
+    ctx, rootRunId: 'root-1', ledger: new Ledger(bounds, o.now, deadlineBy(ctx, limits, now)), execution: await execution.begin('run-1'),
+    steps: 0, recent: [], records: [],
   };
   const env: MemberCallEnv = {
     system: 'sys', host: harness.host, members, limits, entry: (id) => members.get(id)!.describe(), ...(o.now ? { now: o.now } : {}),

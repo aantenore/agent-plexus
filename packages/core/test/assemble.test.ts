@@ -13,7 +13,7 @@ import { recordingHost, member as fakeMemberPort, memoryExecution } from './fake
 const maps = { standard: 'none' };
 const both: Tier[] = ['prototype', 'production'];
 
-interface Probe { closed: number; begun: string[] }
+interface Probe { closed: number; begun: string[]; scopes: RunScope[] }
 
 function descriptors(probe: Probe, tiers: Tier[] = both): AdapterDescriptor[] {
   const member = defineAdapter({
@@ -46,6 +46,7 @@ function descriptors(probe: Probe, tiers: Tier[] = both): AdapterDescriptor[] {
       kinds: ['sequence', 'route'],
       bind: (spec): BoundTopology => ({
         async run(input, scope) {
+          probe.scopes.push(scope);
           const walk = async (node: TopologyNode, text: RunInput, path: string): Promise<MemberResult> => {
             if (typeof node === 'string') return (await scope.call(node, text, { node: path })).result;
             if (node.kind === 'sequence') {
@@ -109,7 +110,7 @@ const rawConfig = (over: Record<string, unknown> = {}) => ({
 });
 
 async function build(over: Record<string, unknown> = {}, opts: { tiers?: Tier[]; host?: ReturnType<typeof recordingHost>['host']; profile?: string } = {}) {
-  const probe: Probe = { closed: 0, begun: [] };
+  const probe: Probe = { closed: 0, begun: [], scopes: [] };
   const all = descriptors(probe, opts.tiers);
   const config = resolveConfig(rawConfig(over), { cwd: process.cwd(), ...(opts.profile ? { profile: opts.profile } : {}) });
   const system = await assemble(config, {
@@ -163,6 +164,17 @@ test('lineage keeps the root run id; the journal is keyed by the run, never by t
   assert.deepEqual(probe.begun, [res.runId, again.runId]);
 });
 
+test('the scope handed to a topology carries the caller without its credential; the gate still gets it for a token', async () => {
+  const seen: (string | undefined)[] = [];
+  const h = recordingHost({ token: async (caller) => { seen.push(caller?.credential); return 'aud-token'; } });
+  const { system, probe } = await build({}, { host: h.host });
+  const res = await system.run('hi', { caller: { id: 'u1', kind: 'user', roles: [], scopes: [], credential: 'SECRET-CREDENTIAL' } });
+  assert.equal(res.status, 'completed');
+  assert.equal(probe.scopes[0]?.ctx.caller?.id, 'u1');
+  assert.equal(probe.scopes[0]?.ctx.caller?.credential, undefined);
+  assert.deepEqual(seen, ['SECRET-CREDENTIAL']);
+});
+
 test('a run past its deadline stops with timeout before calling anyone', async () => {
   const { system } = await build();
   const res = await system.run('hi', { bounds: { deadlineAt: new Date(Date.now() - 1000).toISOString(), hops: 0, maxHops: 3 } });
@@ -207,7 +219,7 @@ test('a topology that throws becomes a failed result in the topology layer', asy
 });
 
 test('score goes through the prototype host and reads stored member outputs', async () => {
-  const probe: Probe = { closed: 0, begun: [] };
+  const probe: Probe = { closed: 0, begun: [], scopes: [] };
   const all = descriptors(probe);
   const system = await assemble(resolveConfig(rawConfig(), { cwd: '.' }), { resolveAdapter: async (f, n) => all.find((d) => d.fills === f && d.name === n)! });
   const write = process.stderr.write;
@@ -285,7 +297,7 @@ test('a route that chose nobody writes a routing hop and does not count as a ste
 });
 
 test('${env:...} in adapter options is filled in; a missing variable names its path', async () => {
-  const probe: Probe = { closed: 0, begun: [] };
+  const probe: Probe = { closed: 0, begun: [], scopes: [] };
   const all = descriptors(probe);
   const make = (reply: string, env: Record<string, string>) => assemble(
     resolveConfig(rawConfig({ members: { triage: { adapter: 'fake-member', options: { reply } } }, topology: { kind: 'sequence', steps: ['triage'] } }), { cwd: '.' }),

@@ -91,16 +91,36 @@ test('hop_limit: topology, or routing when a router chose the call; no member; h
   assert.deepEqual([routed?.layer, routed?.member], ['routing', undefined]);
 });
 
-test('timeout and limit: topology when the system limit stopped it, else member; the slowest hop; medium', async () => {
+test('timeout and limit: the system limit is the topology, no member, high; otherwise the member that spent the most, medium', async () => {
   const slow = hop('slow', { durationMs: 900 });
   const fast = hop('fast', { durationMs: 5 });
-  const [sys] = await run([slow, fast, stopped('x', { code: 'timeout', layer: 'topology' }, { durationMs: 1 })]);
-  assert.deepEqual([sys?.layer, sys?.member, sys?.hopId, sys?.confidence], ['topology', 'slow', slow.hopId, CONFIDENCE.medium]);
+  const [sys] = await run([slow, fast, stopped('x', { code: 'timeout', layer: 'topology', by: 'limits.system.timeoutMs' }, { durationMs: 1 })]);
+  assert.deepEqual([sys?.layer, sys?.member, sys?.confidence], ['topology', undefined, CONFIDENCE.high]);
+  assert.ok(sys?.evidence.includes('code:timeout'));
+  assert.ok(sys?.evidence.includes('by:limits.system.timeoutMs'));
+  const [lim] = await run([slow, stopped('x', { code: 'limit', layer: 'topology' }, { durationMs: 1 })]);
+  assert.deepEqual([lim?.layer, lim?.member, lim?.confidence], ['topology', undefined, CONFIDENCE.high]);
   const own = stopped('x', { code: 'limit' }, { durationMs: 700 });
   const [mem] = await run([fast, own]);
   assert.deepEqual([mem?.layer, mem?.member, mem?.confidence], ['member', 'x', CONFIDENCE.medium]);
   const [mem2] = await run([slow, stopped('x', { code: 'timeout', layer: 'agent-loop' }, { durationMs: 1 })]);
   assert.deepEqual([mem2?.layer, mem2?.member], ['member', 'slow']);
+});
+
+test('limit blames the largest token usage, else the highest cost, else the longest duration; timeout the longest duration', async () => {
+  const stop = (code: string) => stopped('x', { code, layer: 'agent-loop' }, { durationMs: 1 });
+  const slow = hop('slow', { durationMs: 900, usage: { inputTokens: 1, outputTokens: 1 }, costUsd: 9 });
+  const heavy = hop('heavy', { durationMs: 5, usage: { inputTokens: 500, outputTokens: 100 }, costUsd: 0.1 });
+  assert.equal((await run([slow, heavy, stop('limit')]))[0]?.member, 'heavy');
+  assert.equal((await run([slow, heavy, stop('timeout')]))[0]?.member, 'slow');
+
+  const cheap = hop('cheap', { durationMs: 900, costUsd: 0.1 });
+  const pricey = hop('pricey', { durationMs: 5, costUsd: 3 });
+  assert.equal((await run([cheap, pricey, stop('limit')]))[0]?.member, 'pricey');
+
+  const quick = hop('quick', { durationMs: 5 });
+  const long = hop('long', { durationMs: 900 });
+  assert.equal((await run([quick, long, stop('limit')]))[0]?.member, 'long');
 });
 
 test('timeout ignores abandoned hops and route nodes when finding the slowest', async () => {

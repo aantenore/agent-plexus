@@ -19,6 +19,10 @@ test('${env:NAME} and ${env:NAME:-default} as whole strings', () => {
   assert.deepEqual([v.maxSteps, v.timeoutMs, v.stepTimeoutMs], [7, 1234, 'unbounded']);
 });
 
+test('an empty env value is a set value, not the default', () => {
+  assert.throws(() => resolveLimits({ system: { maxSteps: '${env:E:-7}' } }, { E: '' }), /limits.system.maxSteps: environment variable E is not a number/);
+});
+
 test('rejected values name their path, all at once', () => {
   assert.throws(
     () => resolveLimits({ system: { maxSteps: 0, maxParallel: 65, maxRepeats: 'unbounded', timeoutMs: '${env:MISSING}', maxIterations: 1.5, bogus: 1 }, registry: { maxCardBytes: 10 }, nope: {} }, {}),

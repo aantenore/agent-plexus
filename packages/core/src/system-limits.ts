@@ -47,7 +47,7 @@ function fromEnv(spec: LimitSpec, raw: unknown, env: Env, problems: string[]): u
   if (typeof raw !== 'string') return raw;
   const ref = ENV_REF.exec(raw);
   if (!ref) return raw;
-  const text = env[ref[1]!] || ref[2];
+  const text = env[ref[1]!] ?? ref[2];
   if (text === undefined) {
     problems.push(`${spec.path}: environment variable ${ref[1]} is not set`);
     return undefined;

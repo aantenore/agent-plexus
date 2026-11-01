@@ -48,11 +48,26 @@ const at = (hop: HopRecord): Pick<Finding, 'hopId' | 'member'> => ({ hopId: hop.
 /** The member hop before `index` in record order that completed: the one whose output fed this hop. */
 const previousCompleted = (hops: HopRecord[], index: number) => hops.slice(0, index).reverse().find((h) => h.status === 'completed' && h.member !== '');
 
-/** The member that spent the most time; the earliest wins a tie. */
-function slowest(hops: HopRecord[]): HopRecord | undefined {
+/** The member hop with the largest value of `measure`; the earliest wins a tie. Hops where it is undefined are not counted. */
+function largest(hops: HopRecord[], measure: (hop: HopRecord) => number | undefined): HopRecord | undefined {
   let best: HopRecord | undefined;
-  for (const hop of hops) if (hop.member && (!best || hop.durationMs > best.durationMs)) best = hop;
+  let bestValue = -Infinity;
+  for (const hop of hops) {
+    const value = hop.member ? measure(hop) : undefined;
+    if (value !== undefined && value > bestValue) [best, bestValue] = [hop, value];
+  }
   return best;
+}
+
+const tokens = (hop: HopRecord) => (hop.usage ? hop.usage.inputTokens + hop.usage.outputTokens : undefined);
+
+/** The member that spent the most: for `limit` the most tokens, else the highest cost, else the most time; for `timeout` the most time. */
+function biggestSpender(hops: HopRecord[], code: string): HopRecord | undefined {
+  if (code === 'limit') {
+    const measure = hops.some((h) => h.member && tokens(h) !== undefined) ? tokens : hops.some((h) => h.member && h.costUsd !== undefined) ? (h: HopRecord) => h.costUsd : undefined;
+    if (measure) return largest(hops, measure);
+  }
+  return largest(hops, (h) => h.durationMs);
 }
 
 function findCandidate(hops: HopRecord[], scores: AttributionInput['scores']): HopRecord | undefined {
@@ -91,13 +106,16 @@ function byStopCode(candidate: HopRecord, index: number, hops: HopRecord[]): Fin
   }
 
   if (code === 'timeout' || code === 'limit') {
-    const own = reason.layer === 'topology';
-    const spender = slowest(hops) ?? candidate;
+    // The system's own limit or deadline stopped the call: no member is to blame.
+    if (reason.layer === 'topology') {
+      return { layer: 'topology', hopId: candidate.hopId, confidence: CONFIDENCE.high, evidence: [...base, 'layer:topology', ...(reason.by ? [`by:${reason.by}`] : [])] };
+    }
+    const spender = biggestSpender(hops, code) ?? candidate;
     return {
-      layer: own ? 'topology' : 'member',
+      layer: 'member',
       ...at(spender),
       confidence: CONFIDENCE.medium,
-      evidence: [...base, ...(own ? ['layer:topology'] : []), ...(spender === candidate ? [] : [`spent:${spender.hopId}`])],
+      evidence: [...base, ...(spender === candidate ? [] : [`spent:${spender.hopId}`])],
       layerFrom: spender,
       ...(spender === candidate ? { reason } : {}),
     };

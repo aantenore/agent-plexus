@@ -21,7 +21,7 @@ function fakeScope(reply: Reply = echo, extra: { input?: RunInput; limits?: Part
   const scope: RunScope = {
     ctx: { runId: 'r1', system: 'test', ...(extra.signal ? { signal: extra.signal } : {}) },
     input: extra.input ?? 'original',
-    limits: { maxParallel: 4, maxIterations: 5, maxHandoffs: 10, maxRepeats: 3, ...extra.limits },
+    limits: { maxParallel: 4, maxIterations: 5, maxHandoffs: 10, ...extra.limits },
     async call(member, input, options) {
       const hopId = `h${calls.length + 1}`;
       calls.push({ member, input, options, hopId });
@@ -218,6 +218,25 @@ test('parallel join first returns the first completed, aborts and abandons the r
   const hop = (member: string) => calls.find((c) => c.member === member)!.hopId;
   assert.deepEqual([...abandoned].sort(), [hop('slow1'), hop('slow2')].sort());
   assert.equal(calls.find((c) => c.member === 'slow1')!.options.signal?.aborted, true);
+});
+
+test('parallel join all: a thrown branch aborts the siblings, waits for them and abandons their hops', async () => {
+  const started = Date.now();
+  const { scope, abandoned, calls } = fakeScope((member, _input, options) => {
+    if (member === 'bad') throw new Error('boom');
+    return new Promise<MemberResult>((resolve) => {
+      const timer = setTimeout(() => resolve(ok(member)), 5000);
+      options.signal?.addEventListener('abort', () => {
+        clearTimeout(timer);
+        resolve({ status: 'stopped', output: '', reason: { code: 'aborted' } });
+      });
+    });
+  });
+  await assert.rejects(run({ kind: 'parallel', branches: ['slow', 'bad'] }, scope), /boom/);
+  assert.ok(Date.now() - started < 2000);
+  const slow = calls.find((c) => c.member === 'slow')!;
+  assert.equal(slow.options.signal?.aborted, true);
+  assert.deepEqual(abandoned, [slow.hopId]);
 });
 
 test('parallel join first does not start branches after a winner', async () => {

@@ -10,6 +10,16 @@ export function deadlineMs(bounds: Bounds): number {
   return Number.isNaN(ms) ? 0 : ms;
 }
 
+/** Who set the run deadline, as the `by` of a timeout reason. */
+export type DeadlineBy = 'limits.system.timeoutMs' | 'host.bounds';
+
+const ownDeadline = (limits: SystemLimits, now: number): number => Math.min(now + limitNumber(limits.timeoutMs), MAX_DATE_MS);
+
+/** Whether `openBounds` took the deadline from the host's bounds (strictly earlier) or from the system's timeout. */
+export function deadlineBy(ctx: RunContext, limits: SystemLimits, now: number): DeadlineBy {
+  return ctx.bounds && deadlineMs(ctx.bounds) < ownDeadline(limits, now) ? 'host.bounds' : 'limits.system.timeoutMs';
+}
+
 /**
  * The bounds a run works within: what the host passed in, tightened by the system's limits. The deadline is the
  * earlier of the host's and `now + timeoutMs`; hops and the budget are the host's, and without `maxHops` the run may
@@ -17,7 +27,7 @@ export function deadlineMs(bounds: Bounds): number {
  */
 export function openBounds(ctx: RunContext, limits: SystemLimits, now: number): Bounds {
   const host = ctx.bounds;
-  const own = Math.min(now + limitNumber(limits.timeoutMs), MAX_DATE_MS);
+  const own = ownDeadline(limits, now);
   const hops = host?.hops ?? 0;
   const depth = limitNumber(limits.maxDepth);
   return {
@@ -49,13 +59,16 @@ const amount = (n: number | undefined): n is number => typeof n === 'number' && 
  */
 export class Ledger {
   readonly bounds: Bounds;
+  /** Who chose `bounds.deadlineAt`. */
+  readonly deadlineBy: DeadlineBy;
   readonly #now: () => number;
   readonly #open = new Set<Reservation>();
   #tokens: number | undefined;
   #costUsd: number | undefined;
 
-  constructor(bounds: Bounds, now: () => number = Date.now) {
+  constructor(bounds: Bounds, now: () => number = Date.now, by: DeadlineBy = 'limits.system.timeoutMs') {
     this.bounds = bounds;
+    this.deadlineBy = by;
     this.#now = now;
     this.#tokens = bounds.tokens;
     this.#costUsd = bounds.costUsd;

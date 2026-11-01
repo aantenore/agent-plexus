@@ -139,6 +139,23 @@ test('eval exits 0 when every case passes, and rejects a malformed cases file', 
   }
 });
 
+test('eval scores a member contains expectation against the stored output', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-cli-'));
+  try {
+    const member = (contains: string) => ({ id: contains, input: 'refund my invoice', expected: { members: { billing: { contains } } } });
+    await writeFile(join(dir, 'cases.json'), JSON.stringify([member('refunds are issued'), member('no such text')]));
+    const c = captureIo();
+    assert.equal(await main(['eval', '--json', join(dir, 'cases.json')], c.io), 1, c.err());
+    const [hit, miss] = JSON.parse(c.out()).cases;
+    assert.deepEqual(hit.scores.map((x: { value: number }) => x.value), [1]);
+    assert.equal(hit.passed, true);
+    assert.deepEqual(miss.scores.map((x: { value: number }) => x.value), [0]);
+    assert.match(miss.scores[0].reason, /contains/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('dev runs each line and stops at /exit', async () => {
   const c = captureIo(undefined, 'refund my invoice\n\nhow do I do the product setup\n/exit\nignored\n');
   assert.equal(await main(['dev'], c.io), 0, c.err());

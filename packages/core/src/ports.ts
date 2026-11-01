@@ -80,7 +80,6 @@ export interface TopologyLimits {
   maxParallel: number;
   maxIterations: number;
   maxHandoffs: number;
-  maxRepeats: number;
 }
 
 /**

@@ -28,6 +28,12 @@ test('interpolate: whole and embedded references, recursively, with the path of 
   assert.deepEqual(problems, ['$.o.c.d: environment variable NOPE is not set']);
 });
 
+test('an empty env value is a set value, for a reference with or without a default', () => {
+  const problems: string[] = [];
+  assert.deepEqual(interpolate({ a: '${env:E}', b: '${env:E:-d}' }, { E: '' }, problems, '$.o'), { a: '', b: '' });
+  assert.deepEqual(problems, []);
+});
+
 test('adapter limit values from env become numbers and are range-checked with the config path', async () => {
   const made = await createAdapter(load, 'ExecutionPort', { adapter: 'lim', options: { maxRuns: '${env:R}' } }, ctx({ R: '50' }), '$.ports.execution');
   assert.equal(made.options.maxRuns, 50);

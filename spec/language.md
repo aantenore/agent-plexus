@@ -230,7 +230,7 @@ The core names its spans, events and metrics `plexus.*` only, and sets `plexus.l
 | --- | --- |
 | span | `plexus.run`, `plexus.hop`, `plexus.route`; `plexus.node` is declared but not emitted yet |
 | attribute | `plexus.layer`, `plexus.system`, `plexus.member`, `plexus.hop`, `plexus.node.path`, `plexus.node.kind`, `plexus.route.choice`, `plexus.run.status`, `plexus.run.reason`, `plexus.parts.count`; `plexus.node.kind` is declared but not emitted yet |
-| event | `plexus.limit`, `plexus.parts.dropped` |
+| event | `plexus.limit`, `plexus.parts.dropped`, `plexus.member.resumed`, `plexus.checkpoint.ignored` |
 | metric | `plexus.hops`, `plexus.attributions` |
 
 Credentials never appear in attributes.

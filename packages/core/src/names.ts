@@ -14,6 +14,11 @@ export const ATTR = {
   partsCount: 'plexus.parts.count',
 } as const;
 
-export const EVENT = { limit: 'plexus.limit', partsDropped: 'plexus.parts.dropped' } as const;
+export const EVENT = {
+  limit: 'plexus.limit',
+  partsDropped: 'plexus.parts.dropped',
+  memberResumed: 'plexus.member.resumed',
+  checkpointIgnored: 'plexus.checkpoint.ignored',
+} as const;
 
 export const METRIC = { hops: 'plexus.hops', attributions: 'plexus.attributions' } as const;

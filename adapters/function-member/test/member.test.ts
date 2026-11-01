@@ -12,6 +12,7 @@ const callCtx = (extra: Partial<MemberCallContext> = {}): MemberCallContext => (
   system: 's',
   hopId: 'h1',
   outbound: { remainingMs: 1000, hops: 0, maxHops: 3, rootRunId: 'r1', parentRunId: 'r1' },
+  checkpoint: async () => {},
   ...extra,
 });
 

@@ -26,6 +26,8 @@ interface RunFile {
   steps: Record<string, Stored>;
   waits: Record<string, Stored>;
   signals: Record<string, Stored>;
+  /** Values kept with `remember`; absent in files written before it existed. */
+  kept?: Record<string, Stored>;
   texts: Record<string, string>;
   textCount: number;
 }
@@ -146,6 +148,15 @@ export function createFileExecution(options: FileExecutionOptions, ctx: Pick<Ada
       run.file.texts[key] = text;
       await persist(run);
       return key;
+    },
+    async remember(key, value) {
+      if (typeof key !== 'string' || !key) throw new TypeError(`${NAME}: remember needs a non-empty key`);
+      (run.file.kept ??= {})[key] = store(value);
+      await persist(run);
+    },
+    async recall(key) {
+      const kept = run.file.kept;
+      return kept && Object.hasOwn(kept, key) ? load(kept[key] as Stored) : undefined;
     },
     async end(status) {
       run.file.status = status;

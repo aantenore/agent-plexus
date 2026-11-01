@@ -185,3 +185,34 @@ test('invalid options and keys', async () => {
   const run = await make().begin('r');
   await assert.rejects(run.put(1 as never), TypeError);
 });
+
+test('remember and recall keep a JSON clone per run, across begin of the same run', async () => {
+  const port = make();
+  const run = await port.begin('r1');
+  assert.equal(await run.recall('task'), undefined);
+  const value = { id: 't-1', list: [1] };
+  await run.remember('task', value);
+  value.list.push(2);
+  const got = (await run.recall('task')) as typeof value;
+  assert.deepEqual(got, { id: 't-1', list: [1] });
+  got.list.push(3);
+  assert.deepEqual(await run.recall('task'), { id: 't-1', list: [1] });
+  assert.deepEqual(await (await port.begin('r1')).recall('task'), { id: 't-1', list: [1] });
+  assert.equal(await (await port.begin('r2')).recall('task'), undefined);
+  await run.remember('task', 'next');
+  assert.equal(await run.recall('task'), 'next');
+});
+
+test('remember rejects a value without a JSON form and an empty key; kept values go with the dropped run', async () => {
+  const port = make(1);
+  const run = await port.begin('a');
+  const loop: Record<string, unknown> = {};
+  loop.self = loop;
+  await assert.rejects(run.remember('k', loop));
+  await assert.rejects(run.remember('', 1), /key/);
+  await run.remember('k', 1);
+  await run.end('completed');
+  await port.begin('b');
+  assert.equal(await run.recall('k'), 1);
+  assert.equal(await (await port.begin('a')).recall('k'), undefined);
+});

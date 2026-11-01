@@ -168,6 +168,25 @@ test('file-execution: a signal reaches a wait, and a failed step stores nothing'
   }
 });
 
+test('file-execution: a remembered value survives a restart', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'swap-test-'));
+  try {
+    const first = createFileExecution({ dir }, { name: 'execution', cwd: dir });
+    const run = await first.begin('run-1');
+    assert.equal(await run.recall('call:root:0:task'), undefined);
+    await run.remember('call:root:0:task', 'task-9');
+    await first.close();
+
+    const restarted = createFileExecution({ dir }, { name: 'execution', cwd: dir });
+    const resumed = await restarted.begin('run-1');
+    assert.equal(await resumed.recall('call:root:0:task'), 'task-9');
+    assert.equal(await (await restarted.begin('run-2')).recall('call:root:0:task'), undefined);
+    await restarted.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('file-execution is a prototype-only adapter', () => {
   assert.deepEqual(fileExecution.map((d) => [d.name, d.fills, d.tiers]), [['file-execution', 'ExecutionPort', ['prototype']]]);
 });

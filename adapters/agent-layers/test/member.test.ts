@@ -9,7 +9,7 @@ import { alice, fixtures, plexusConfig } from './helpers.ts';
 const options: MemberOptions = { config: './layers.json', agent: 'helper', description: 'Answers briefly', tags: ['support'], audience: 'https://helper.example', attrs: { team: 'desk' } };
 
 const callCtx = (extra: Partial<MemberCallContext> = {}): MemberCallContext => ({
-  runId: 'r1', system: 's', hopId: 'h1', outbound: { remainingMs: 1000, hops: 0, maxHops: 3, rootRunId: 'r1', parentRunId: 'r1' }, ...extra,
+  runId: 'r1', system: 's', hopId: 'h1', outbound: { remainingMs: 1000, hops: 0, maxHops: 3, rootRunId: 'r1', parentRunId: 'r1' }, checkpoint: async () => {}, ...extra,
 });
 
 /** A stack whose one agent records the context of its run and answers with `result`. */

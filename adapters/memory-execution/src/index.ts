@@ -37,6 +37,8 @@ interface Run {
   pending: Map<string, ((value: Stored) => void)[]>;
   /** Signals that arrived before their wait. */
   signals: Map<string, Stored>;
+  /** Values kept with `remember`. */
+  kept: Map<string, Stored>;
   texts: Map<string, string>;
   textCount: number;
   endedSeq?: number;
@@ -129,6 +131,14 @@ export function createMemoryExecution(options: MemoryExecutionOptions = {}, ctx:
       run.texts.set(key, text);
       return key;
     },
+    async remember(key, value) {
+      if (typeof key !== 'string' || !key) throw new TypeError('memory-execution: remember needs a non-empty key');
+      run.kept.set(key, store(value));
+    },
+    async recall(key) {
+      const stored = run.kept.get(key);
+      return stored ? load(stored) : undefined;
+    },
     async end(status) {
       run.status = status;
       run.endedSeq = ++endSeq;
@@ -145,7 +155,7 @@ export function createMemoryExecution(options: MemoryExecutionOptions = {}, ctx:
         delete run.endedSeq;
         delete run.status;
       } else {
-        run = { key: runKey, steps: new Map(), inflight: new Map(), waits: new Map(), pending: new Map(), signals: new Map(), texts: new Map(), textCount: 0 };
+        run = { key: runKey, steps: new Map(), inflight: new Map(), waits: new Map(), pending: new Map(), signals: new Map(), kept: new Map(), texts: new Map(), textCount: 0 };
         runs.set(runKey, run);
         evict();
       }

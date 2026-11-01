@@ -13,6 +13,9 @@ import { errorMessage, withoutCredential } from './util.ts';
 /** Largest delay `setTimeout` accepts. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
+/** Longest task handle a member may checkpoint. */
+const MAX_TASK_REF = 1024;
+
 /** What stays the same across the runs of a system. */
 export interface MemberCallEnv {
   system: string;
@@ -110,9 +113,11 @@ interface Invocation {
   /** Who set the run deadline. */
   deadlineBy: DeadlineBy;
   timer: AbortController;
+  /** Handle of remote work journaled by an earlier attempt; the member continues it instead of being called again. */
+  taskRef?: string;
 }
 
-/** Calls the member; never rejects. A member that ignores its signal is still cut off at the deadline. */
+/** Calls the member (or continues its remote work); never rejects. A member that ignores its signal is still cut off at the deadline. */
 async function invoke(inv: Invocation): Promise<MemberResult> {
   const { signal } = inv.ctx as { signal: AbortSignal };
   const handle = Number.isFinite(inv.timeoutMs) && inv.timeoutMs <= MAX_TIMER_MS
@@ -125,7 +130,8 @@ async function invoke(inv: Invocation): Promise<MemberResult> {
     if (signal.aborted) done('aborted');
     else signal.addEventListener('abort', () => done('aborted'), { once: true });
   });
-  const call = Promise.resolve().then(() => inv.port.invoke(inv.input, inv.ctx));
+  const { taskRef } = inv;
+  const call = Promise.resolve().then(() => (taskRef !== undefined ? inv.port.resume!(taskRef, undefined, inv.ctx) : inv.port.invoke(inv.input, inv.ctx)));
   call.catch(() => {});
   try {
     const raced = await Promise.race([call.then((result) => ({ result })), aborted.then(() => undefined)]);
@@ -204,7 +210,7 @@ async function pipeline(
   // 5. Call, as a journal step, with outbound bounds and lineage.
   const inputRef = await safePut(run.execution, sent.text);
   const key = `call:${options.node}:${index}`;
-  const result = await callAsStep(env, run, hopId, port!, sentInput, credential, reservation, options, key, clock);
+  const result = await callAsStep(env, run, hopId, port!, sentInput, credential, reservation, options, key, clock, span);
 
   // 6. Check what comes back.
   const spent = { ...(result.usage ? { usage: result.usage } : {}), ...(result.costUsd !== undefined ? { costUsd: result.costUsd } : {}) };
@@ -224,11 +230,16 @@ async function pipeline(
 
 async function callAsStep(
   env: MemberCallEnv, run: RunState, hopId: string, port: MemberPort, input: RunInput, credential: string | undefined,
-  reservation: Reservation, options: CallOptions, key: string, clock: () => number,
+  reservation: Reservation, options: CallOptions, key: string, clock: () => number, span: SpanHandle,
 ): Promise<MemberResult> {
-  const { ctx, ledger } = run;
+  const { ctx, ledger, execution } = run;
+  const taskKey = `${key}:task`;
   try {
-    return await run.execution.step(key, async () => {
+    return await execution.step(key, async () => {
+      // A task handle journaled by an attempt that did not finish the step: continue that work, do not send again.
+      const prior = await execution.recall(taskKey);
+      const taskRef = typeof prior === 'string' && port.resume ? prior : undefined;
+      if (taskRef !== undefined) span.event(EVENT.memberResumed);
       const remaining = deadlineMs(ledger.bounds) - clock();
       const stepMs = limitNumber(env.limits.stepTimeoutMs);
       const timer = new AbortController();
@@ -240,9 +251,19 @@ async function callAsStep(
         signal,
         hopId,
         ...(credential ? { credential } : {}),
-        outbound: ledger.outbound(ctx.runId, run.rootRunId, reservation, limitNumber(env.limits.marginMs)),
+        outbound: ledger.outbound(ctx.runId, run.rootRunId, reservation, limitNumber(env.limits.marginMs), stepMs),
+        checkpoint: async (ref) => {
+          if (typeof ref !== 'string' || ref.length === 0 || ref.length > MAX_TASK_REF) {
+            span.event(EVENT.checkpointIgnored);
+            return;
+          }
+          await execution.remember(taskKey, ref);
+        },
       };
-      return invoke({ port, input, ctx: memberCtx, timeoutMs: Math.min(remaining, stepMs), stepBinding: stepMs <= remaining, deadlineBy: ledger.deadlineBy, timer });
+      return invoke({
+        port, input, ctx: memberCtx, timeoutMs: Math.min(remaining, stepMs), stepBinding: stepMs <= remaining, deadlineBy: ledger.deadlineBy, timer,
+        ...(taskRef !== undefined ? { taskRef } : {}),
+      });
     });
   } catch (err) {
     return stop('error', 'execution', undefined, errorMessage(err), 'failed');

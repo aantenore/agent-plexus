@@ -9,6 +9,8 @@ export const entry = (id: string, extra: Partial<AgentEntry> = {}): AgentEntry =
   id, name: id, description: `${id} member`, skills: [], endpoint: { protocol: 'function' }, trust: { signed: false, pinned: false }, ...extra,
 });
 
+export type Resume = (taskRef: string, input: unknown, ctx: MemberCallContext) => Promise<MemberResult> | MemberResult;
+
 export type Invoke = (input: unknown, ctx: MemberCallContext) => Promise<MemberResult> | MemberResult;
 
 export const completed = (output: string, extra: Partial<MemberResult> = {}): MemberResult => ({ status: 'completed', output, ...extra });
@@ -58,25 +60,54 @@ export function recordingHost(o: HostOptions = {}, log: string[] = []): Harness 
   return { host, log, spans, events };
 }
 
-export function memoryExecution(log: string[] = []): ExecutionPort & { texts: Map<string, string>; steps: string[] } {
+export interface FakeExecution extends ExecutionPort {
+  texts: Map<string, string>;
+  steps: string[];
+  /** Kept values per run key. */
+  kept: Map<string, Map<string, unknown>>;
+  /** Durable mode: stored step results survive `begin`; `crash` makes the next steps die after running, storing nothing. */
+  crash: boolean;
+}
+
+export function memoryExecution(log: string[] = [], durable = false): FakeExecution {
   const texts = new Map<string, string>();
   const steps: string[] = [];
-  return {
+  const kept = new Map<string, Map<string, unknown>>();
+  const done = new Map<string, Map<string, string>>();
+  const port: FakeExecution = {
     name: 'memory',
     texts,
     steps,
+    kept,
+    crash: false,
     async begin(runKey): Promise<Execution> {
+      const values = kept.get(runKey) ?? new Map<string, unknown>();
+      kept.set(runKey, values);
+      const stored = done.get(runKey) ?? new Map<string, string>();
+      done.set(runKey, stored);
       return {
         runKey,
-        async step(name, fn) { log.push('step'); steps.push(name); return fn(); },
+        async step(name, fn) {
+          log.push('step');
+          steps.push(name);
+          const had = durable ? stored.get(name) : undefined;
+          if (had !== undefined) return JSON.parse(had);
+          const value = await fn();
+          if (port.crash) throw new Error('crash');
+          if (durable) stored.set(name, JSON.stringify(value));
+          return value;
+        },
         async wait() { return undefined; },
         async put(text) { const key = `t${texts.size}`; texts.set(key, text); return key; },
+        async remember(key, value) { values.set(key, JSON.parse(JSON.stringify(value))); },
+        async recall(key) { return values.get(key); },
         async end() {},
       };
     },
     async signal() {},
     async read(key) { return texts.get(key); },
   };
+  return port;
 }
 
 export interface SetupOptions {
@@ -89,21 +120,30 @@ export interface SetupOptions {
   sessionId?: string;
   signal?: AbortSignal;
   now?: () => number;
+  /** Resume functions, by member id; a member without one cannot continue remote work. */
+  resumes?: Record<string, Resume>;
+  /** A journal shared with an earlier setup, as a durable adapter would be after a restart. */
+  execution?: FakeExecution;
 }
 
 export interface Setup extends Harness {
   env: MemberCallEnv;
   run: RunState;
-  execution: ReturnType<typeof memoryExecution>;
+  execution: FakeExecution;
 }
 
 /** A member-call environment over fake members, a recording host and an in-memory journal. */
 export async function setup(o: SetupOptions = {}): Promise<Setup> {
   const harness = recordingHost(o.host);
-  const execution = memoryExecution(harness.log);
+  const execution = o.execution ?? memoryExecution(harness.log);
   const values = resolveLimits(undefined);
   const limits = { ...values, ...o.limits } as SystemLimits;
-  const members = new Map(Object.entries(o.members ?? { m: () => completed('ok') }).map(([id, fn]) => [id, member(id, (i, c) => { harness.log.push('invoke'); return fn(i, c); }, o.entries?.[id])]));
+  const members = new Map(Object.entries(o.members ?? { m: () => completed('ok') }).map(([id, fn]) => {
+    const port = member(id, (i, c) => { harness.log.push('invoke'); return fn(i, c); }, o.entries?.[id]);
+    const resume = o.resumes?.[id];
+    if (resume) port.resume = async (ref, input, c) => { harness.log.push('resume'); return resume(ref, input, c); };
+    return [id, port] as const;
+  }));
   const ctx: RunContext = {
     runId: 'run-1', system: 'sys', ...(o.sessionId ? { sessionId: o.sessionId } : {}), ...(o.caller ? { caller: o.caller } : {}), ...(o.signal ? { signal: o.signal } : {}),
     ...(o.bounds ? { bounds: { deadlineAt: new Date(Date.now() + 60_000).toISOString(), hops: 0, maxHops: 3, ...o.bounds } } : {}),

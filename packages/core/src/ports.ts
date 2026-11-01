@@ -23,6 +23,11 @@ export interface MemberCallContext extends RunContext {
   /** From the host's gate, for the member's audience. Never the caller's own credential. */
   credential?: string;
   outbound: OutboundBounds;
+  /**
+   * Journals the handle of remote work (a task id) as soon as the member has one, so a restart resumes that work
+   * through `resume` instead of sending the request again.
+   */
+  checkpoint(taskRef: string): Promise<void>;
 }
 
 /** One configured member: how to describe it and how to call it. */
@@ -30,6 +35,7 @@ export interface MemberPort {
   name: string;
   describe(): Promise<AgentEntry>;
   invoke(input: RunInput, ctx: MemberCallContext): Promise<MemberResult>;
+  /** Continues remote work: waits for it when `input` is undefined, or sends the input a waiting member asked for. */
   resume?(taskRef: string, input: RunInput | undefined, ctx: MemberCallContext): Promise<MemberResult>;
   cancel?(taskRef: string, ctx: MemberCallContext): Promise<void>;
   native?(): unknown;
@@ -123,6 +129,10 @@ export interface Execution {
   wait(name: string, untilAt: string): Promise<unknown>;
   /** Stores a text and returns its key, so records reference texts instead of carrying them. */
   put(text: string): Promise<string>;
+  /** Keeps a small JSON value under a key for this run (a remote task handle), surviving a restart when durable. */
+  remember(key: string, value: unknown): Promise<void>;
+  /** The value kept under a key, or undefined. */
+  recall(key: string): Promise<unknown>;
   end(status: MemberResult['status']): Promise<void>;
 }
 

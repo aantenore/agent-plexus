@@ -91,6 +91,8 @@ test('outbound carries one more hop, the reserved budget and the time left minus
   now += 10_000;
   assert.equal(l.outbound('run', 'root', r, 1000).remainingMs, 49_000);
   assert.equal(l.outbound('run', 'root', r, 0).remainingMs, 50_000);
+  assert.equal(l.outbound('run', 'root', r, 1000, 20_000).remainingMs, 19_000);
+  assert.equal(l.outbound('run', 'root', r, 1000, 500).remainingMs, 0);
   now += 100_000;
   assert.equal(l.outbound('run', 'root', r, 1000).remainingMs, 0);
 });

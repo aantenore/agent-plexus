@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { memberCall } from '../src/member-call.ts';
 import type { MemberCallContext } from '../src/ports.ts';
-import { caller, completed, setup, type SetupOptions } from './fakes.ts';
+import { caller, completed, memoryExecution, setup, type SetupOptions } from './fakes.ts';
 
 const call = async (o: SetupOptions, member = 'm', input = 'hello', node = 'root') => {
   const s = await setup(o);
@@ -327,4 +327,89 @@ test('limits.system.marginMs is the time kept back on the outbound bounds', asyn
   const margin = await remaining(20_000);
   assert.ok(none > 55_000 && none <= 60_000);
   assert.ok(margin > 35_000 && margin <= 40_000);
+});
+
+test('outbound time never exceeds the step limit minus the margin, and follows a shorter run deadline', async () => {
+  const remaining = async (deadlineMs: number) => {
+    let seen: MemberCallContext | undefined;
+    await call({
+      limits: { marginMs: 1000, stepTimeoutMs: 60_000 }, bounds: { deadlineAt: new Date(Date.now() + deadlineMs).toISOString() },
+      members: { m: (_i, ctx) => { seen = ctx; return completed('ok'); } },
+    });
+    return seen!.outbound.remainingMs;
+  };
+  assert.equal(await remaining(600_000), 59_000);
+  const short = await remaining(30_000);
+  assert.ok(short > 28_000 && short <= 29_000);
+});
+
+test('a crash after the checkpoint resumes the remote work on the next run and never sends again', async () => {
+  const journal = memoryExecution([], true);
+  const sent: string[] = [];
+  const resumed: Array<[string, unknown]> = [];
+  const members = {
+    m: async (_i: unknown, ctx: MemberCallContext) => { sent.push('invoke'); await ctx.checkpoint('task-7'); return completed('never stored'); },
+  };
+  const resumes = { m: (ref: string, input: unknown) => { resumed.push([ref, input]); return completed('from task'); } };
+
+  journal.crash = true;
+  const first = await setup({ members, resumes, execution: journal });
+  const crashed = await memberCall(first.env, first.run, 'm', 'hello', { node: 'root' });
+  assert.equal(crashed.result.status, 'failed');
+  assert.equal(crashed.result.reason?.layer, 'execution');
+  assert.equal(journal.kept.get('run-1')?.get('call:root:0:task'), 'task-7');
+
+  journal.crash = false;
+  const second = await setup({ members, resumes, execution: journal });
+  const out = await memberCall(second.env, second.run, 'm', 'hello', { node: 'root' });
+  assert.equal(out.result.output, 'from task');
+  assert.deepEqual(sent, ['invoke']);
+  assert.deepEqual(resumed, [['task-7', undefined]]);
+  assert.deepEqual(second.events.map((e) => e.name), ['plexus.member.resumed']);
+  assert.ok(!JSON.stringify(second.events).includes('task-7'));
+
+  const third = await setup({ members, resumes, execution: journal });
+  const replay = await memberCall(third.env, third.run, 'm', 'hello', { node: 'root' });
+  assert.equal(replay.result.output, 'from task');
+  assert.deepEqual(sent, ['invoke']);
+  assert.equal(resumed.length, 1);
+});
+
+test('a member without resume is invoked again even when a task handle was journaled', async () => {
+  const journal = memoryExecution([], true);
+  let invoked = 0;
+  const members = { m: async (_i: unknown, ctx: MemberCallContext) => { invoked++; await ctx.checkpoint('task-1'); return completed('ok'); } };
+  journal.crash = true;
+  const first = await setup({ members, execution: journal });
+  await memberCall(first.env, first.run, 'm', 'hello', { node: 'root' });
+  journal.crash = false;
+  const second = await setup({ members, execution: journal });
+  const out = await memberCall(second.env, second.run, 'm', 'hello', { node: 'root' });
+  assert.equal(out.result.output, 'ok');
+  assert.equal(invoked, 2);
+  assert.ok(!second.events.some((e) => e.name === 'plexus.member.resumed'));
+});
+
+test('without a journaled handle the member is invoked, not resumed', async () => {
+  const calls: string[] = [];
+  const { out } = await call({
+    members: { m: () => { calls.push('invoke'); return completed('fresh'); } },
+    resumes: { m: () => { calls.push('resume'); return completed('resumed'); } },
+  });
+  assert.equal(out.result.output, 'fresh');
+  assert.deepEqual(calls, ['invoke']);
+});
+
+test('checkpoint ignores an empty, oversized or non-string handle with an event', async () => {
+  const { s } = await call({
+    members: { m: async (_i, ctx) => {
+      await ctx.checkpoint('');
+      await ctx.checkpoint('x'.repeat(1025));
+      await ctx.checkpoint(42 as never);
+      await ctx.checkpoint('x'.repeat(1024));
+      return completed('ok');
+    } },
+  });
+  assert.equal(s.events.filter((e) => e.name === 'plexus.checkpoint.ignored').length, 3);
+  assert.equal((s.execution.kept.get('run-1')?.get('call:root:0:task') as string).length, 1024);
 });

@@ -1,0 +1,125 @@
+# Topology
+
+Layer id `topology` (L3), Flow plane. *In what order and shape does work flow between agents?*
+
+## Responsibility
+
+Run a topology: a description, as data, of how members are called. The adapter walks the nodes; the core gives it a
+scope whose `call` is the `memberCall` pipeline, so a topology cannot reach a member any other way.
+
+## Ports
+
+| Port | What it does |
+|---|---|
+| [TopologyPort](../../spec/ports/TopologyPort.md) | Declare the `kinds` it runs; `bind` a `TopologySpec` into a `BoundTopology`; `run` it with a `RunScope` |
+
+Data shapes: `TopologySpec`, `Condition`, `MemberResult` and `HopRecord` in [spec/language.md](../../spec/language.md).
+
+The scope of one run has `ctx`, `input`, the topology `limits` (`maxParallel`, `maxIterations`, `maxHandoffs`), and four
+functions: `call` (the pipeline), `route` (the AgentRouterPort over registry candidates), `matches` (evaluates a
+`Condition`) and `abandon` (marks the hops of a cancelled branch). The core enforces `maxSteps`, time, hops and
+`maxRepeats` itself, inside `call`, and wraps the result into a `SystemResult` with the hop record.
+
+### Where it sits
+
+```mermaid
+flowchart LR
+  host["Host<br/>system.run"]:::experience --> sys["core<br/>assemble, run"]:::external
+  sys --> bt
+  subgraph sg["L3 topology"]
+    bt["TopologyPort<br/>bind, run"]:::agent
+  end
+  bt -->|"scope.route"| routing["L2 routing"]:::model
+  bt -->|"scope.call"| mc["memberCall"]:::external
+  mc --> member["L0 member"]:::foundation
+  sys -.->|"plexus.run span"| telemetry["host telemetry"]:::insight
+  classDef foundation fill:#d9dde3,stroke:#57606a,color:#1f2328
+  classDef model fill:#ffd8a8,stroke:#a85400,color:#1f2328
+  classDef agent fill:#a5d8ff,stroke:#1864ab,color:#1f2328
+  classDef experience fill:#b2f2bb,stroke:#2a7a38,color:#1f2328
+  classDef insight fill:#d0bfff,stroke:#5f3dc4,color:#1f2328
+  classDef external fill:#ffffff,stroke:#57606a,color:#1f2328,stroke-dasharray:4 3
+```
+
+## Kinds
+
+A node is a member id or a nested `TopologySpec`. Every kind takes `name?`, `input?` (`"output"`, the previous output, by
+default; `"original"`, the system's input) and `ext?`.
+
+| Kind | Meaning | `basic-topology` |
+|---|---|---|
+| `sequence` | Each step gets the previous step's output; stops at the first step that is not `completed` | implemented |
+| `route` | The router picks one candidate; none chosen runs `fallback` or stops with `rejected` (layer `routing`) | implemented |
+| `loop` | `body` runs until `until` holds; bounded by `maxIterations`, else `limits.system.maxIterations`; never holding stops with `limit` | implemented |
+| `parallel` | Fan out and join (`all` or `first`), with an optional `merge` node; branches share the budget evenly | implemented |
+| `handoff` | After each answer the router picks the next member or ends | planned |
+| `supervise` | A supervisor chooses whom to call, through the system | planned |
+| `graph` | Explicit state machine with conditional edges | planned |
+
+`check` refuses a topology that uses a kind the adapter does not run, an unknown member or router, a graph node that
+does not exist and a graph end that no edge reaches.
+
+## Standards
+
+None. The topology language is agent-plexus' own; other formats (framework graph definitions) would be import adapters.
+
+## Boundaries
+
+- Which agent runs is [routing](routing.md); whether a call may happen is the host's `gate`; surviving restarts is
+  [execution](execution.md).
+- A topology adapter does not read the registry or the host. It receives everything through the scope.
+- Node paths identify where a hop was made: `root`, `root.steps[i]`, `root.branches[i]`, `root.merge`, `root.fallback`,
+  `root.body#<iteration>`.
+- Usage and `costUsd` of every call under a node are summed into its result.
+- With `join: "first"` the other branches are aborted and their hops marked `abandoned`; attribution skips them.
+
+## Configuration
+
+```json
+{
+  "topology": {
+    "kind": "sequence",
+    "steps": [
+      "triage",
+      { "kind": "route", "candidates": ["billing", "manuals"], "fallback": "triage" }
+    ]
+  },
+  "limits": { "system": { "maxSteps": 20, "maxParallel": 4, "maxIterations": 5 } }
+}
+```
+
+A `Condition` is data: `{ status?, code?, ext?, matches? }`, or `fn: "<module>#<export>"`, a synchronous pure function
+loaded relative to the config file. Limits: [limits.md](../limits.md).
+
+## Telemetry
+
+| Kind | Name |
+|---|---|
+| span | `plexus.run`, with `plexus.layer` = `topology`, `plexus.system`, then `plexus.run.status` and `plexus.run.reason` |
+| event | `plexus.limit` when a system limit or a received bound refuses a call |
+| attribute | `plexus.node.path` on hop and route spans |
+
+`plexus.node` and `plexus.node.kind` are declared in the names list but not emitted yet.
+
+## Evaluation
+
+Check the shape of a run through the hop record: `record.map((h) => h.node)` and `record.map((h) => h.member)`. A
+system limit that stops a run is attributed to layer `topology` with no member.
+
+## How to swap
+
+Change `ports.topology.adapter`. The topology spec stays as long as the new adapter runs its kinds. LangGraph.js,
+ADK-TS and Strands TS are candidates when a team already runs that engine.
+
+## Reference adapters
+
+| Adapter | Maps | Status |
+|---|---|---|
+| [`basic-topology`](../../adapters/basic-topology) | An in-process executor: `sequence`, `route`, `loop`, `parallel` (prototype, production) | implemented |
+| `basic-topology`: `handoff`, `supervise`, `graph` | The same executor | planned |
+
+Full list: [adapters.md](../adapters.md).
+
+## Reference setup
+
+[`examples/offline`](../../examples/offline/README.md): `sequence [triage, route{candidates: [billing, manuals], fallback: triage}]`.

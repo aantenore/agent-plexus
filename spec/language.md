@@ -1,0 +1,236 @@
+# The language
+
+Version 0.1.
+
+The data that crosses a port or a hook is written in one small language owned by this project: fixed and minimal at
+the core, extensible through declared extensions. Frameworks and protocols appear only inside adapters, which
+translate at the edges. Where a concept is the host's (a caller, a run status, a stop code), the values are equal to
+those of agent-layers by choice, so an adapter maps them one to one. The reasoning is in
+[ADR 0001](../docs/decisions/0001-own-ports-agent-layers-as-adapter.md); this page is the reference.
+
+Four rules carry the rest:
+
+1. A field enters a shape only when the core reads it, or when two or more adapters of different protocols need it.
+   Everything else goes in `ext`.
+2. Shapes and field names are fixed. Extra data goes in namespaced `ext` keys.
+3. Protocols live in adapters. N protocols need N translations to the language, not N×M between them.
+4. A concept the host owns (the caller, a verdict, a score) is carried without being interpreted.
+
+JSON Schemas for these shapes are planned. Until then the definition is the tables below and
+`packages/core/src/shapes.ts`.
+
+## Naming rules
+
+| Rule | Example |
+| --- | --- |
+| Short plain-English names, camelCase fields | `inputTokens`, `hopId` |
+| `type` only discriminates a union; `kind` classifies | `{ "type": "text" }`, `caller.kind`, `topology.kind` |
+| Times are ISO 8601 strings named `at` or `<x>At`, or durations in `…Ms` | `deadlineAt`, `startedAt`, `durationMs` |
+| Identifiers are `id` or `<x>Id` | `runId`, `hopId`, `rootRunId` |
+| Telemetry names start with `plexus.` | `plexus.hop` |
+| No name that belongs to one protocol | `taskRef`, not a wire-format field name |
+
+## Shapes
+
+Every shape has an optional `ext` unless noted. Required fields are marked; the others are optional.
+
+| Shape | Used by |
+| --- | --- |
+| `RunInput` | [MemberPort](ports/MemberPort.md), [AgentRouterPort](ports/AgentRouterPort.md), [TopologyPort](ports/TopologyPort.md) |
+| `Caller` | the run context, [`gate`](hooks.md#gate) |
+| `Bounds`, `OutboundBounds`, `Lineage` | the run context, [MemberPort](ports/MemberPort.md) |
+| `RunContext` | every port that acts inside a run |
+| `MemberResult`, `StopReason`, `Usage` | [MemberPort](ports/MemberPort.md), [TopologyPort](ports/TopologyPort.md) |
+| `AgentEntry`, `Skill`, `CandidateFilter` | [RegistryPort](ports/RegistryPort.md), [MemberPort](ports/MemberPort.md) |
+| `RouteQuestion`, `RouteDecision` | [AgentRouterPort](ports/AgentRouterPort.md) |
+| `TopologySpec`, `Condition` | [TopologyPort](ports/TopologyPort.md) |
+| `HopRecord` | [AttributionPort](ports/AttributionPort.md), `SystemResult` |
+| `Score`, `EvalCase` | [`score`](hooks.md#score), [AttributionPort](ports/AttributionPort.md) |
+| `Attribution` | [AttributionPort](ports/AttributionPort.md) |
+| `SystemResult` | `System.run` |
+
+### RunInput
+
+A string, or `{ text, parts? }`. A string is shorthand for `{ text }`. A part is `{ type: "text", text }` or
+`{ type: "media", mediaType, url?, data? }`. Only `text` crosses to a member: the gate checks text alone, so `parts`
+are dropped by the pipeline and a `plexus.parts.dropped` event is emitted.
+
+### Caller
+
+The host's verified caller, carried through. The core reads only `id`, `kind` and `actors`.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | String, required | Caller identifier. |
+| `kind` | `user` or `agent`, required | |
+| `roles`, `scopes` | [String], required | As the host verified them. |
+| `name?` | String | |
+| `actors?` | [`{id, kind, name?}`] | Agents that acted for the caller, first delegate first, as the host verified them. |
+| `credential?` | String | In memory only: never serialised, logged or traced. The pipeline strips it before any port sees the caller. |
+
+### Bounds, lineage and the run context
+
+| Shape | Fields | Notes |
+| --- | --- | --- |
+| `Bounds` | `deadlineAt` (ISO 8601, local clock), `hops`, `maxHops`, `tokens?`, `costUsd?` | What a run works within. Same fields and rules as the [agent-layers proposal](../docs/proposals/agent-layers-delegation-bounds.md). |
+| `Lineage` | `rootRunId`, `parentRunId` | |
+| `OutboundBounds` | `remainingMs`, `hops`, `maxHops`, `tokens?`, `costUsd?`, `rootRunId`, `parentRunId` | What crosses to the next agent: time as remaining milliseconds, never as a clock time. |
+| `RunContext` | `runId`, `system`, `caller?`, `bounds?`, `lineage?`, `sessionId?`, `signal?`, `trace?` | `bounds` are the host's; the core tightens them with the system's limits. `trace` is `{parent, state?}`, opaque to the core and owned by the telemetry hook. |
+
+The deadline of a run is the earlier of the host's `deadlineAt` and now plus `limits.system.timeoutMs`. Hops and budget
+are the host's; without `maxHops` the run may add `limits.system.maxDepth` hops. Bounds can be tightened, never raised.
+
+### MemberResult
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `status` | `completed`, `failed`, `stopped` or `waiting`, required | |
+| `output` | String, required | Final text. Empty when there is none. |
+| `reason?` | [StopReason](#stop-reasons) | Required when `status` is not `completed`; the pipeline adds `{code: "error", layer: "member"}` when a member omits it. |
+| `runId?` | String | The member's own run id. |
+| `taskRef?` | String | Opaque handle to resume or cancel the member's work (an A2A task and context). |
+| `usage?` | `{inputTokens, outputTokens}` | |
+| `costUsd?` | Number, >= 0 | Present when the member reports it; absent means unknown, and the budget treats it as fully spent. |
+| `ext?` | Ext | |
+
+A `SystemResult` is a `MemberResult` plus `runId` and `record: [HopRecord]`, so a system can be a member of another.
+
+### AgentEntry
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id`, `name`, `description` | String, required | The id is the member id in the config; the core sets it. |
+| `skills` | [`{id, name, description, tags}`], required | |
+| `endpoint` | `{protocol, url?, ref?}`, required | `protocol` is a vocabulary: `function`, `a2a`; adapters add values. |
+| `audience?` | String | Credential audience. From config, never from a card. |
+| `attrs?` | Attrs | Plain attributes a filter may read. |
+| `trust` | `{signed, keyId?, pinned}`, required | |
+| `version?` | String | |
+
+`CandidateFilter` is `{skills?, tags?, attrs?}`. `Attrs` is `{String: String | Number | Boolean | [String]}`.
+
+### Routing
+
+`RouteQuestion` is `{input, candidates: [AgentEntry], caller?, bounds?}`. `RouteDecision` is
+`{member?, ranked?: [{member, score}], reason?}`. No `member` means no candidate fits. `reason` is internal text,
+never parsed.
+
+### HopRecord
+
+One per member call, written for every call including refusals, and one for a route that chose nobody (no `member`).
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `hopId`, `member`, `node`, `rootRunId`, `hops`, `startedAt`, `durationMs`, `status` | required | `member` is empty for a route that chose nobody. `node` is the topology path, such as `root.steps[1]`. |
+| `parentHopId?`, `runId?`, `reason?`, `usage?`, `costUsd?` | | |
+| `route?` | `{member?, ranked?}` | The router's decision that chose this member. |
+| `inputRef?`, `outputRef?` | String | Keys of the texts in the execution journal. Records never carry the texts. |
+| `abandoned?` | Boolean | The topology abandoned the branch (a `parallel` with `join: "first"`). |
+
+### Score, EvalCase, Attribution
+
+| Shape | Fields |
+| --- | --- |
+| `Score` | `metric`, `value` in [0, 1], `member?` (set when the case expected something of one member), `reason?` |
+| `EvalCase` | `id`, `input`, `expected?: {output?: {equals?, contains?, matches?}, members?: {<id>: {contains?, matches?, status?}}}`, `tags?` |
+| `Attribution` | `layer` (a plexus layer id or `host`), `member?`, `memberLayer?`, `hopId?`, `confidence` in [0, 1], `evidence` [String], `by` |
+
+## Vocabularies
+
+A vocabulary is a set of values defined by the project. The core branches only on core values.
+
+| Vocabulary | Core values | Extensible | Used by |
+| --- | --- | --- | --- |
+| `layer` | `member`, `registry`, `routing`, `topology`, `execution`, `attribution` | no | everything; `Attribution.layer` also allows `host` |
+| `runStatus` | `completed`, `failed`, `stopped`, `waiting` | no | `MemberResult.status` |
+| `stopCode` | `guard_block`, `denied`, `aborted`, `timeout`, `limit`, `hop_limit`, `needs_input`, `needs_auth`, `rejected`, `error` | other strings pass through; `like` values planned | `StopReason.code` |
+| `callerKind` | `user`, `agent` | no | `Caller.kind` |
+| `protocol` | `function`, `a2a` | adapters add values | `AgentEntry.endpoint.protocol` |
+| `gateEffect` | `allow`, `deny`, `ask` | no | [`gate.allow`](hooks.md#gate) |
+| `gateStage` | `send`, `receive` | no | [`gate.check`](hooks.md#gate) |
+| `gateAction` | `allow`, `block`, `redact` | no | [`gate.check`](hooks.md#gate) |
+| `kind` | `sequence`, `parallel`, `route`, `loop`, `handoff`, `supervise`, `graph` | no | `TopologySpec.kind` |
+
+Vocabulary extension through config (`vocabularies`, with `like` values) is planned; the config schema does not accept
+the block yet.
+
+## Stop reasons
+
+`StopReason` is `{code, layer?, by?, stage?, detail?}`. Consumers branch on `code` only.
+
+| Field | Meaning |
+| --- | --- |
+| `code` | One of the stop codes below. |
+| `layer?` | Where it stopped: a plexus layer, `host`, or the member's own name for its layer. |
+| `by?` | The instance that stopped it: a host name, a limit path such as `limits.system.maxSteps`. For people and telemetry. |
+| `stage?` | `send` or `receive`, for a gate check. |
+| `detail?` | Internal text. Never parsed, never shown to a caller. |
+
+| Code | Meaning | Where it comes from |
+| --- | --- | --- |
+| `guard_block` | The host's check blocked the text | `gate.check`, layer `host`, with `stage`; or a member |
+| `denied` | The host refused the call | `gate.allow`, layer `host` |
+| `aborted` | The run was cancelled | the signal of the run or of a branch |
+| `timeout` | A deadline passed | layer `topology` (run deadline, `by` names who set it) or `member` (`limits.system.stepTimeoutMs`) |
+| `limit` | A system limit stopped the call | layer `topology`, `by` names the limit; or a member's own limit |
+| `hop_limit` | The chain is too deep | layer `topology` |
+| `needs_input` | The run waits for a person | `gate.allow` returned `ask`, or a member |
+| `needs_auth` | No credential for the member's audience | `gate.token`, layer `host`; or a member |
+| `rejected` | A remote member declined or stopped | a member; over A2A today every remote stop except a cancellation |
+| `error` | Something failed | a member that threw or answered an unknown status; the topology; the journal |
+
+## Extensions (`ext`)
+
+`ext` is the one escape hatch for data. The operation escape hatch, `native()`, stays where a port offers it.
+
+| Rule | Detail |
+| --- | --- |
+| Shape | `ext?: { [key]: JSON value }`. JSON values only. |
+| Keys | `<adapter>.<name>`; the namespace is the adapter name. |
+| Who writes | The adapter that produces the shape, only keys in its own namespace. |
+| Core | Copies `ext` unchanged wherever a shape passes through. Never reads, branches on, logs or traces an adapter key. A `Condition` may test an `ext` value. |
+
+Declaration of `produces` / `reads` in the adapter descriptor, and a conformance check of the keys, are planned.
+
+## Condition
+
+A condition is data. A result satisfies it when it satisfies every field set.
+
+| Field | Meaning |
+| --- | --- |
+| `status?` | A run status or a list of them |
+| `code?` | A stop code or a list; compared with `reason.code` |
+| `ext?` | `{key: value}`; each key of the result's `ext` must be deeply equal |
+| `matches?` | Regular expression on the output; an invalid pattern never matches |
+| `fn?` | `"<module>#<export>"`: a synchronous pure function `(result) => boolean`, loaded relative to the config file |
+
+## TopologySpec
+
+A node is a member id or a nested `TopologySpec`; every kind is bounded. Every kind takes `name?`, `input?`
+(`"output"`, the default, or `"original"`) and `ext?`.
+
+| `kind` | Fields | Meaning |
+| --- | --- | --- |
+| `sequence` | `steps: [Node]` | Each step gets the previous step's output. Must not be empty. |
+| `parallel` | `branches: [Node]`, `join?: "all" \| "first"`, `merge?: Node` | Fan out and join; with `first`, the other branches are cancelled. |
+| `route` | `candidates: [String] \| {skills?, tags?, attrs?}`, `router?: String`, `fallback?: Node` | The AgentRouterPort picks one; none chosen runs `fallback` or stops with `rejected`. |
+| `loop` | `body: Node`, `until: Condition`, `maxIterations?: N` | Bounded by `limits.system.maxIterations` by default. |
+| `handoff` | `start: String`, `members: [String]`, `router?: String`, `maxHandoffs?: N` | After each answer the router picks the next member or ends. |
+| `supervise` | `supervisor: String`, `members: [String]` | The supervisor chooses whom to call, through the system. |
+| `graph` | `nodes: {id: Node}`, `start`, `edges: [{from, to, when?: Condition}]`, `end: [String]` | Explicit state machine. |
+
+The config schema checks the shape of every kind; whether members and routers exist, and whether the topology adapter
+runs the kind, is checked by `agent-plexus check`. A router name defaults to `router`.
+
+## Telemetry names
+
+The core names its spans, events and metrics `plexus.*` only, and sets `plexus.layer` on every span.
+
+| Kind | Name |
+| --- | --- |
+| span | `plexus.run`, `plexus.hop`, `plexus.route`; `plexus.node` is declared but not emitted yet |
+| attribute | `plexus.layer`, `plexus.system`, `plexus.member`, `plexus.hop`, `plexus.node.path`, `plexus.node.kind`, `plexus.route.choice`, `plexus.run.status`, `plexus.run.reason`, `plexus.parts.count`; `plexus.node.kind` is declared but not emitted yet |
+| event | `plexus.limit`, `plexus.parts.dropped` |
+| metric | `plexus.hops`, `plexus.attributions` |
+
+Credentials never appear in attributes.

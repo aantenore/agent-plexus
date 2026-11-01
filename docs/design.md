@@ -109,13 +109,30 @@ ports, and nothing in agent-layers changes for them:
 | Adapter | agent-layers port | What it does |
 |---|---|---|
 | `system-runtime` | RuntimePort (`runtime` slot) | Binds a system as the host stack's runtime. A run of the host's agent is a system run. The gateway then exposes the system over A2A, OpenAI-compatible (`agent:<name>`) and MCP like any agent. |
-| `members` | ToolPort (`tools` slot) | One tool per member, `members__<name>`. A call runs the member: in process through its `RunnableAgent`, remote through agent-layers' `a2a` runtime adapter (endpoint pinning, token per audience, polling). It sends the remaining bounds, and returns the member's answer, usage, cost and stop code. |
+| `members` | ToolPort (`tools` slot) | One tool per member, `members__<name>`. A call runs the member: in process through its `RunnableAgent`, remote through the A2A client of agent-layers' `a2a` adapter (endpoint pinning, polling). It sends the remaining bounds, and returns the member's answer as `text` and the member's `RunResult` without `output` as `data` (run id, status, reason, usage, cost). |
 
-So every member call, whether the topology makes it or a supervisor member's model chooses it, passes through
-`governedTools` of the host stack: local policy, approval for `ask`, authorization (`AccessQuestion` with
-`target.kind: "agent"`, a value the shape already allows), `tool_args` guards on what is sent to the member,
+**Wiring.** `system-runtime` owns the `System` (members, registry, router, execution journal, limits). Both adapters
+name the same system file in `options.system`; `assemble` builds one `System` per file and process, and both adapters
+get it by that key. A ToolPort call receives only a `CallContext`, so `members` mints the member's token through
+`ctx.credentials` and writes spans through `ctx.telemetry`, and reaches remote members through the A2A client that
+agent-layers' `a2a` adapter would export as a helper (an export, not a contract change), not through
+`RuntimePort.bind`.
+
+So every member call, whether the topology makes it or the host agent's model chooses it, passes through
+`governedTools` of the host stack: local policy, approval for `ask`, authorization (an `AccessQuestion` for the tool
+`members__<name>`; the member's id, endpoint and audience are in `ToolSpec.attrs`, which the core copies to
+`target.attrs`, and `ToolSpec.layer` is `harness`; `target.kind` stays `tool`, which the core sets),
+`tool_args` guards on what is sent to the member,
 `tool_result` guards on what comes back, a credential minted for the member's audience on behalf of the caller, and an
 `agent.tool.call` span. A member's output is untrusted data for the next member, as retrieved text is for a model.
+The `tool_args` and `tool_result` stages fit: a member call is a call with side effects whose arguments come from the
+system (the caller's input, another member's output) and whose result is read by the next step.
+
+**The host agent.** The host stack's agent file is the system's front: its name and description are what the
+gateway's agent card shows. Its instructions and model are used only where the system needs a model of its own: a
+`supervise` node (run by an ordinary agent-layers runtime that `system-runtime` wraps, `options.runtime`, with
+`tools: ["members__*"]`) and the `model-router`. Members receive the input as text: the `a2a` adapter sends the text
+parts of a `RunInput`, so files and media do not reach remote members in the first version.
 
 The host stack's own model, knowledge and state are available to the ports: the model router uses its governed
 model, the knowledge router its knowledge sources, the reference execution journal its StatePort.
@@ -134,15 +151,15 @@ A node is a member name or a nested `TopologySpec`. Every kind is bounded.
 | `kind` | Fields | Meaning |
 |---|---|---|
 | `sequence` | `steps: [Node]` | Each step gets the previous step's output as input. |
-| `parallel` | `branches: [Node]`, `join: "all" \| "first" \| "quorum"`, `quorum?: N`, `merge?: Node` | Fan out, then join; `merge` turns the branch outputs into one answer, else they are concatenated with their member names. |
+| `parallel` | `branches: [Node]`, `join: "all" \| "first"`, `merge?: Node` | Fan out, then join; `merge` turns the branch outputs into one answer, else they are concatenated with their member names. With `first`, the other branches are cancelled. |
 | `route` | `candidates: [S] \| {skills?, tags?, attrs?}`, `router?: S`, `fallback?: Node` | The AgentRouterPort picks one candidate; none chosen runs `fallback` or stops with `rejected`. |
-| `loop` | `body: Node`, `until: Condition`, `maxIterations: N` | Repeat until the condition holds or the bound is reached (`limit`). |
-| `handoff` | `start: S`, `members: [S]`, `maxHandoffs: N` | A member passes control by answering with a handoff (`ext["agent-plexus.handoff"]`, set by the `members` tool when it calls `handoff__<name>`); the conversation moves with it. |
-| `supervise` | `supervisor: S`, `members: [S]` | The supervisor's model gets `members__*` tools for the listed members: call and return, chosen by the model, governed by the host. |
+| `loop` | `body: Node`, `until: Condition`, `maxIterations?: N` | Repeat until the condition holds or the bound is reached (`limit`). Default bound `limits.system.maxIterations`. |
+| `handoff` | `start: S`, `members: [S]`, `router?: S`, `maxHandoffs?: N` | After each member answers, the router picks the next member among `members`, or ends. The next member receives the original input followed by the outputs so far, each labelled with its member. Works for remote members because nothing runs inside them. Default bound `limits.system.maxHandoffs`. |
+| `supervise` | `members: [S]`, `instructions?: S` | The host agent's model gets `members__*` tools for the listed members: call and return, chosen by the model, governed by the host. |
 | `graph` | `nodes: {S: Node}`, `start: S`, `edges: [{from, to, when?: Condition}]`, `end: [S]` | Explicit state machine; edges are tried in order. |
 
-Every kind also takes `name?`, `input?` (`"output"` default, `"original"`, `"conversation"`: what the next node
-receives) and `ext?`.
+Every kind also takes `name?`, `input?` (`"output"` default, or `"original"`: what the next node receives) and
+`ext?`.
 
 `Condition` is declarative, so a topology is data and can be validated, diffed and drawn:
 `{status?: RunStatus | [RunStatus], code?: StopCode | [StopCode], ext?: {key: value}, matches?: S}` (`matches` is a
@@ -176,13 +193,24 @@ The system keeps one record per member call; it is what attribution reads.
 |---|---|---|
 | `hopId`, `parentHopId?` | S | Tree of calls; a member that delegates further reports its own hops when it is an agent-plexus system or an in-process stack. |
 | `member`, `node` | S, S | Member id; topology path of the node (`root.steps[1].branches[0]`). |
-| `runId`, `rootRunId` | S, S | The member's run id and the system run's. |
+| `runId`, `rootRunId` | S, S | The member's run id (absent when the call was refused before the member ran) and the system run's. |
 | `hops` | N | Hop count of the member run. |
 | `startedAt`, `durationMs` | S, N | |
 | `status`, `reason?` | `RunStatus`, `{code, layer?, by?}` | `layer` and `by` only when the member is in process or chose to report them. |
 | `usage?`, `costUsd?` | | As reported by the member. |
 | `route?` | `RouteDecision` without `reason` | When a router chose this member. |
 | `inputRef?`, `outputRef?` | S | Keys of the texts in the execution journal, so attribution and replay can read them without copying them into telemetry. |
+
+From a governed member call to a hop record:
+
+| What happened | `status`, `reason` |
+|---|---|
+| The host refused the call (policy, authorization, approval): `ext["sdk.outcome"]` | `stopped`, `{code: "denied", layer: "identity"}` |
+| A host guard blocked what was sent or what came back | `stopped`, `{code: "guard_block", layer: "guardrail"}`, stage unknown to the record |
+| An in-process member ran | Its `RunResult` from `ToolResult.data`, all fields |
+| A remote member ran | Its task state as the `a2a` adapter maps it: today every stop except a cancellation is `rejected` with no layer, until the stop code crosses the boundary (open question 1 of the proposal) |
+| The call itself failed (network, timeout of the call) | `failed`, `{code: "error"}` or `{code: "timeout"}` |
+| A route node chose no member | No member hop; the node's record has `route` without `member` |
 
 `SystemResult` is the agent-layers `RunResult` of the system run plus `record: [HopRecord]`. Through
 `system-runtime` the host sees a plain `RunResult` (status, reason, usage and cost summed); the record stays in the
@@ -214,8 +242,12 @@ checkpointing); the reference stays the default on every profile.
 
 Durable steps for long system runs and for waiting on people. `begin(runKey) → Execution`; `Execution.step(name, fn)`
 runs `fn` once and replays its stored result on resume; `Execution.wait(name, until)` suspends until a signal or the
-deadline; `signal(runKey, name, value)`; `end()`. Member calls are steps, so a restart does not call a member twice
-for the same step (members should still treat retries as possible: A2A calls are not idempotent by protocol).
+deadline; `signal(runKey, name, value)`; `end()`. Member calls are steps, so a finished step is never repeated. A remote
+call is two steps: the first journals the A2A task id as soon as the member returns it, the second polls the task
+(`GetTask`) to its end; a restart between them resumes polling instead of sending again. Only a crash between
+sending and journalling the task id can send twice, so members should still tolerate a repeated request. This needs
+the `a2a` adapter to resume a known task, which it does not do today. When the deadline passes or the run is
+cancelled, the `members` tool cancels the remote task (`CancelTask`).
 
 | Implementation | License | Notes |
 |---|---|---|
@@ -225,8 +257,9 @@ for the same step (members should still treat retries as possible: A2A calls are
 | DBOS | MIT | Candidate for production without a server: Postgres or SQLite. |
 | Hatchet | MIT | Alternative candidate. |
 
-A run waiting for a person ends the host run with status `waiting`, as agent-layers runs do; a later run with the same
-session resumes the execution.
+A run waiting for a person ends the host run with status `waiting`, as agent-layers runs do. The journal keeps which
+member and which A2A task and `contextId` asked; a later run with the same session and caller resumes the execution
+and sends the new input to that task.
 
 ### RegistryPort
 
@@ -273,21 +306,26 @@ run on the system as one agent: agent-plexus adds attribution, not another score
 Rules of `rule-attribution`, in order:
 
 1. The earliest hop in causal order with a status other than `completed`, or with a failing per-member score when the
-   case sets expectations per member, is the candidate.
-2. Its stop code decides:
+   case sets expectations per member, is the candidate. Branches the topology abandoned (`join: "first"`) are skipped.
+2. A route node whose decision has no member is blamed first: category `specification`, high confidence.
+3. Otherwise the stop code decides. The rule branches on `code` only, as the agent-layers language requires; `layer`
+   is used as the reported layer, never to choose a row.
 
    | Stop code | Blamed | Category | Confidence |
    |---|---|---|---|
    | `hop_limit` | The node that delegated (or its router) | `specification` | high |
-   | `timeout`, `limit` with `by` `sdk.deadline` / `sdk.budget` | The hop that spent the most of its share; its parent when the hop started with less than the minimum | `bounds` | medium |
-   | `guard_block` at `input` | The upstream member whose output was this hop's input, if any; else the hop | `coordination` | medium |
-   | `guard_block` at `output`, `denied`, `failed` | The hop, with `reason.layer` as the layer | `execution` | high when the layer is known |
-   | `rejected` by a router (no candidate) | The route node | `specification` | high |
+   | `timeout`, `limit` | The hop that spent the most of its share; its parent when the hop started with less than `minRemainingMs` | `bounds` | medium |
+   | `guard_block` on a hop whose input was another member's output | That upstream member | `coordination` | medium |
+   | `guard_block` otherwise, `denied`, `failed`, `error` | The hop, with `reason.layer` as the layer when known | `execution` | high when the layer is known, else medium |
+   | `rejected` (a remote member's stop, cause unknown) | The hop | `execution` | low |
    | `needs_input`, `needs_auth` | Nobody: waiting is not a failure | | |
 
-3. Every hop completed but the system's score fails: the member that produced the final output, category
+   Until the stop code crosses A2A, the specific rows apply to in-process members; remote members fall in the
+   `rejected` row.
+
+4. Every hop completed but the system's score fails: the member that produced the final output, category
    `verification`, low confidence; the report suggests `judge-attribution` or `replay-attribution`.
-4. Inside an in-process member, the layer comes from agent-layers' `layer-signals` on the member's run events.
+5. Inside an in-process member, the layer comes from agent-layers' `layer-signals` on the member's run events.
 
 ## System config
 
@@ -378,10 +416,11 @@ check read the same values. Run deadline, budget and hop limit are the host stac
 | `limits.registry.maxCardBytes` | `65536` bytes | 1024–1048576 | — | — | Largest card read. |
 | `limits.registry.maxEntries` | `1000` | 1–100000 | — | — | Entries a registry adapter keeps. |
 | `limits.router.maxCandidates` | `20` | 1–200 | 1–50 | warn outside safe range | Candidates sent to a model or knowledge router. |
-| `limits.attribution.maxHops` | `500` | 1–100000 | — | — | Hop records read by one attribution. |
+| `limits.attribution.maxRecords` | `500` | 1–100000 | — | — | Hop records read by one attribution. |
 
-Bounds across `parallel` branches: each branch gets the run's remaining deadline; the token and cost budget is one
-pool that all branches debit (open decision 5).
+Bounds across `parallel` branches: each branch gets the run's remaining deadline. Budget is reserved, never shared
+blindly: a `parallel` node gives each branch an even share of what is left, the call reserves it from the run's
+ledger, and what the member does not spend is released when it returns (open decision 5).
 
 ## Security
 
@@ -429,8 +468,8 @@ for the system run), which are still in development status.
 | Slice | Content | Depends on |
 |---|---|---|
 | 1 | `spec/`, core, `members`, `system-runtime`, `basic-topology` (`sequence`, `route`), `memory-execution`, `static-registry` (in-process members), `skill-router`, `rule-attribution`, `check`; example runs offline | agent-layers as published; bounds enforced at system level only until the primitives land |
-| 2 | Remote members over A2A, system exposed through the gateway, a system as a member of another; `parallel`, `loop`, `supervise` | The agent-layers primitives (bounds, actors, `hop_limit`) |
-| 3 | `state-execution`, `waiting` and resume; card signatures; `handoff`, `graph` | |
+| 2 | Remote members over A2A, system exposed through the gateway, a system as a member of another; `parallel`, `loop`, `supervise` | The agent-layers primitives (bounds, actors, `hop_limit`); the A2A client exported by the `a2a` adapter |
+| 3 | `state-execution`, `waiting` and resume; card signatures; `handoff`, `graph` | The `a2a` adapter resuming a known task |
 | 4 | `model-router`, `knowledge-router`, `judge-attribution`, `replay-attribution`; first production ExecutionPort adapter | Decision 4 |
 
 Until slice 2, a member reached by the system does not see the system's remaining bounds; the system still enforces
@@ -444,7 +483,7 @@ its own deadline, steps and hops before each call.
 | 2 | Create `aantenore/agent-plexus` on GitHub and push; public or private until slice 1. | Private until slice 1 runs |
 | 3 | Every member call is a governed tool call of the host stack (one enforcement path), rather than a separate call path with its own checks. | Accept |
 | 4 | Production ExecutionPort reference: Temporal (server to run) or DBOS (library on Postgres or SQLite). | DBOS first, Temporal second |
-| 5 | Budget across `parallel` branches: one shared pool, or an even split per branch. | Shared pool, each branch also capped by `stepTimeoutMs` |
+| 5 | Budget across `parallel` branches: even shares reserved per branch and released on return (no overspend), or a first-come pool (some branches may starve). | Even reserved shares |
 | 6 | Own topology language, with Oracle Agent Spec or a framework format only as an import adapter later. | Own |
-| 7 | The agent-layers primitives: hand the [proposal](proposals/agent-layers-delegation-bounds.md) to the agent-layers repository as an ADR, including its four open questions (stop code across the boundary, cost source, default `maxHops` and repeated agents, `actor_token` default). | Hand it over as written |
+| 7 | The agent-layers changes: hand the [proposal](proposals/agent-layers-delegation-bounds.md) to the agent-layers repository as an ADR, with its open questions (stop code across the boundary, cost source, default `maxHops` and repeated agents, `actor_token` default), plus two smaller requests: export the A2A client of the `a2a` adapter, and let it resume a known task. | Hand it over as written |
 | 8 | Production registry candidate after `static-registry`: AGNTCY directory or Kubernetes CRDs. | Decide when the first production deployment is known |

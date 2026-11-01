@@ -44,7 +44,7 @@ appear only in adapters; every limit is configurable, has a safe range and is ch
 2. **Every run has bounds.** `CallContext.bounds` holds the deadline, the remaining budget and the hop count of the
    run. The host computes them when a run starts, from the stack's limits and from what the caller sent.
 3. **Tighten only.** Bounds sent by a caller can lower the stack's own limits, never raise them. A caller that lies
-   can only stop its own work sooner.
+   can only stop its own work sooner. (Trust model below.)
 4. **The core enforces them, not the runtime.** The host, `guardedModel` and `governedTools` check the bounds, so a
    swapped runtime keeps them.
 5. **Delegation passes on what is left.** An adapter that calls another agent sends the remaining bounds through a
@@ -61,11 +61,12 @@ appear only in adapters; every limit is configurable, has a safe range and is ch
 | | `kind` | `callerKind` | yes | `agent` in practice; `user` when a person acts for another (support staff). |
 | | `name` | S | | Display name. |
 | | `issuer` | S | | Who vouches for this entry, when it differs from the credential's issuer. |
-| `CallContext` | `bounds` | `Bounds` | | Filled by the host for every run; partial in calls made outside a run. |
+| `CallContext` | `bounds` | `Bounds` | | Always present inside a run, filled by the host. A read view of the run's ledger (below); absent in calls made outside a run. |
 | | `lineage` | `Lineage` | | Present when the run was started by another agent's run. |
 | `Lineage` | `rootRunId`, `parentRunId` | S, S | yes | Correlation across stacks without a trace backend. |
 | | `path` | [S] | | Agent names the request went through, as the callers asserted them, oldest first; at most `maxHops` entries. Informational, for loop detection and audit; `Caller.actors` is the verified counterpart. |
 | `Bounds` | `deadlineAt` | S | yes | ISO 8601 time, local clock, by which the run must end. |
+| | `reserved` | {`tokens`?: N, `costUsd`?: N} | | What calls in flight have reserved and not yet settled. |
 | | `hops` | N | yes | Agent-to-agent calls before this run: 0 for a run a person or an event started. |
 | | `maxHops` | N | yes | Largest `hops` this chain accepts. |
 | | `tokens` | N | | Tokens (input plus output) the run may still spend, delegated runs included. Absent: no token budget. |
@@ -81,10 +82,11 @@ Vocabulary change: `stopCode` gains the core value `hop_limit`.
 |---|---|
 | Deadline reached | `stopped`, `{code: "timeout", layer: "harness", by: "sdk.deadline"}` |
 | Token or cost budget spent | `stopped`, `{code: "limit", layer: "harness", by: "sdk.budget"}` |
-| Too many hops, refused before the run starts | `stopped`, `{code: "hop_limit", layer: "interface", by: "sdk.hops"}` |
-| Too little time left to start | `stopped`, `{code: "timeout", layer: "interface", by: "sdk.deadline"}` |
+| Too many hops, refused before the run starts | `stopped`, `{code: "hop_limit", layer: "harness", by: "sdk.hops"}` |
+| Too little time left to start | `stopped`, `{code: "timeout", layer: "harness", by: "sdk.deadline"}` |
 
-`sdk.*` names in `by` are the core's own, like `sdk.approval` in `ext`.
+`sdk.*` names in `by` are the core's own, like `sdk.approval` in `ext`. They are for people and telemetry; consumers
+branch on `code` only, as the language requires.
 
 ### Computing the bounds of a run
 
@@ -93,7 +95,8 @@ now            = local clock when the run starts
 deadlineAt     = now + min(limits.run.timeoutMs, inbound.remainingMs)          inbound part only when sent
 tokens         = min(limits.run.maxTokens, inbound.tokens)                    absent when both are absent
 costUsd        = min(limits.run.maxCostUsd, inbound.costUsd)                  absent when both are absent
-hops           = max(inbound.hops, length(caller.actors))                     0 when neither is known
+verifiedHops   = length(caller.actors) + (caller.kind == "agent" ? 1 : 0)     an agent principal is one hop itself
+hops           = max(inbound.hops, verifiedHops)                              0 when neither is known
 maxHops        = min(limits.delegation.maxHops, inbound.maxHops)
 refuse         when hops > maxHops                                            → hop_limit
 refuse         when deadlineAt - now < limits.delegation.minRemainingMs      → timeout
@@ -102,6 +105,16 @@ refuse         when deadlineAt - now < limits.delegation.minRemainingMs      →
 The wire carries time as remaining milliseconds, never as a clock time, so clock skew between hosts cannot extend a
 deadline. Network latency only shortens it. `hops` takes the larger of the asserted count and the verified actor
 chain, so a caller cannot reset it by sending 0 when its credential says otherwise.
+
+### Trust model
+
+Bounds stop bugs everywhere: a loop, a runaway fan-out, a delegate that forgets the caller's deadline. They stop an
+adversary only as far as they are verified. Without delegation tokens, `hops`, `remainingMs` and the budget are
+asserted by the caller: a hostile intermediate can send `hops=0` and receive this stack's full `limits.run.timeoutMs`,
+so a chain of such intermediates is bounded per hop by each stack's own limits, not end to end. With the `oidc`
+adapter reading `act`, `hops` comes from the issuer and cannot be reset. On a production-tier profile,
+`agent-layers check` warns when the stack accepts agent callers without a verified actor chain and without
+`limits.delegation.trustedCallers` (caller ids whose asserted bounds are accepted as they come).
 
 ### Enforcement points
 
@@ -112,11 +125,25 @@ chain, so a caller cannot reset it by sending 0 when its credential says otherwi
 | `guardedModel`, after each reply | Debits `usage` from `tokens`; debits cost when the reply reports one | The next call stops |
 | `governedTools`, before each tool call | Deadline not passed; passes `ctx.bounds` to the tool | Error result the model can read (`ok: false`), as for a denial |
 | `governedTools`, after each tool call | Debits `ext["sdk.usage"]` and `ext["sdk.costUsd"]` when a tool result reports what a delegated agent spent | |
-| Outbound adapters that call an agent | Send `outboundBounds(ctx)`; set their own timeout to `min(options.timeoutMs, remaining)`; debit the remote run's reported usage and cost | |
+| Outbound adapters that call an agent | Refuse locally, without a network call, when `hops + 1 > maxHops` or too little time is left; send `outboundBounds(ctx)`; set their own timeout to `min(options.timeoutMs, remaining)`; settle the reservation with the remote run's reported usage and cost | An error result (`ok: false`) or a `stopped` run with the same codes |
 | Retries, in any adapter | A retry consumes the same deadline and budget as the first attempt; it never gets a fresh one | |
 
 The runtime still owns its loop and may enforce its own, tighter budgets. What changes is that a runtime without
 budgets is no longer unbounded.
+
+### The ledger
+
+Pipelines copy `CallContext` (`{...ctx}`), so a value in it cannot be debited. The host keeps one ledger per run;
+`ctx.bounds` reads it, and every copy of the context points to the same ledger. A debit is a single synchronous update
+of the ledger, so concurrent calls in one process cannot lose one; a remote agent has its own ledger and reports what
+it spent.
+
+Concurrent delegation (parallel branches, a runtime that calls several tools at once) must not let each call see the
+whole budget. `outboundBounds(ctx, share?)` therefore **reserves** what it sends: by default everything not yet spent
+or reserved, or the `share` (a fraction) the caller asks for, as an orchestrator does for parallel branches. The sum of
+reservations never exceeds what is left, so the run cannot overspend. When the call returns, the reservation is
+settled: the reported usage and cost are debited and the rest is released. A call whose remote side reports nothing
+keeps its whole reservation spent, the safe side.
 
 ### Passing bounds on
 
@@ -125,7 +152,7 @@ budgets is no longer unbounded.
 | Field | Value |
 |---|---|
 | `remainingMs` | `deadlineAt - now - limits.delegation.marginMs`; the call is not made when this is below `minRemainingMs` |
-| `tokens`, `costUsd` | What is left, when the run has a budget |
+| `tokens`, `costUsd` | The reservation: what is left after other reservations, or the requested share of it |
 | `hops` | `bounds.hops + 1` |
 | `maxHops` | `bounds.maxHops` |
 | `rootRunId` | `lineage.rootRunId`, or this run's id when it is the root |
@@ -159,6 +186,8 @@ Declared in `STACK_LIMITS`, documented in [limits.md](../limits.md), checked by 
 
 `limits.delegation.inbound` is a setting next to these, not a number: `"tighten"` (default) applies the caller's
 bounds when they are tighter; `"ignore"` drops them, and `hops` then comes from the verified actor chain only.
+`limits.delegation.trustedCallers` lists caller ids (services in the same trust domain) whose asserted bounds and hop
+count are taken as they come; it silences the production warning of the trust model.
 
 ### Telemetry
 
@@ -202,9 +231,11 @@ sequenceDiagram
 
 - Language 1.0 → 1.1, additive: optional fields on `Caller` and `CallContext`, three shapes (`Actor`, `Bounds`,
   `Lineage`), one core `stopCode` value. Ports whose
-  shapes gain fields take a minor version (`IdentityPort`, `RuntimePort`, `ChannelPort`, `AuthorizationPort`).
-- `packages/core`: bounds computation in the host, checks in `guardedModel` and `governedTools`, `outboundBounds`,
-  six limits in `STACK_LIMITS`.
+  shapes gain fields take a minor version: every port that receives `CallContext` or `Caller` (the common types), so
+`ModelPort`, `RouterPort`, `ToolPort`, `KnowledgePort` as well as `IdentityPort`, `RuntimePort`, `ChannelPort`,
+`AuthorizationPort`.
+- `packages/core`: bounds computation and the run ledger in the host, checks in `guardedModel` and `governedTools`,
+  `outboundBounds` with reservations, six limits and two settings in `STACK_LIMITS`.
 - Adapters: `a2a` (both directions), `oidc` (`act` in, `actor_token` out), `openai-compatible` inbound, `mcp`,
   `cloudevents`, `rules-authorization` (actor rules), `otlp` (attribute mapping). Runtimes need no change beyond
   honouring `ctx.signal` and passing `ctx` on, which they already do.

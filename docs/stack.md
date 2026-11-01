@@ -8,7 +8,7 @@ each can be swapped by changing one line of config. The design is in [architectu
 
 | Plane | L | Layer (id) | The question it answers | Port | Reference adapters |
 |---|---|---|---|---|---|
-| Member | L0 | [Members](layers/member.md) (`member`) | Who does the work, and how is it called? | MemberPort | `function-member`; `a2a-member` and an `agent-layers` adapter planned |
+| Member | L0 | [Members](layers/member.md) (`member`) | Who does the work, and how is it called? | MemberPort | `function-member`, `agent-layers`; `a2a-member` planned |
 | Discovery | L1 | [Registry](layers/registry.md) (`registry`) | Which agents exist, what can they do, can their cards be trusted? | RegistryPort | `static-registry`; AGNTCY Agent Directory and Kubernetes CRDs are candidates |
 | Discovery | L2 | [Routing](layers/routing.md) (`routing`) | Which agent should handle this request? | AgentRouterPort | `skill-router`; `model-router` and `knowledge-router` planned |
 | Flow | L3 | [Topology](layers/topology.md) (`topology`) | In what order and shape does work flow between agents? | TopologyPort | `basic-topology` (`sequence`, `route`, `loop`, `parallel`); `handoff`, `supervise`, `graph` planned |
@@ -30,7 +30,7 @@ plane explains failures. The host brings control and exposure.
 ```mermaid
 flowchart TB
   subgraph hostp["Host: control, exposure and insight hooks"]
-    expose["exposure<br/>gateway, planned"]:::experience
+    expose["exposure<br/>gateway"]:::experience
     gate["gate hook<br/>allow, token, check"]:::control
     tel["telemetry, score, state hooks"]:::insight
   end
@@ -66,24 +66,18 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-  client([Person, app, agent, event]) --> host[host<br/>verify the caller, expose]
-  host --> topology[topology]
-  topology --> routing[routing]
-  routing --> registry[registry]
-  topology --> mc[memberCall]
-  mc --> gate[host gate<br/>allow, check, token]
-  mc --> execution[execution<br/>journal step]
-  execution --> member[member]
-  mc -.-> telemetry[host telemetry]
+  client([Person, app, agent, event]):::external --> host[host<br/>verify the caller, expose]:::control
+  host --> topology[L3 topology]:::agent
+  topology --> routing[L2 routing]:::model
+  routing --> registry[L1 registry]:::model
+  topology --> mc[memberCall]:::external
+  mc --> gate[host gate<br/>allow, check, token]:::control
+  mc --> execution[L4 execution<br/>journal step]:::agent
+  execution --> member[L0 member]:::foundation
+  mc -.-> telemetry[host telemetry]:::insight
   member -.-> telemetry
-  telemetry --> attribution[attribution]
-  score[host score] -.-> attribution
-  class client external
-  class host,gate control
-  class topology,execution agent
-  class routing,registry model
-  class member,mc foundation
-  class telemetry,score,attribution insight
+  telemetry --> attribution[L5 attribution]:::insight
+  score[host score]:::insight -.-> attribution
   classDef foundation fill:#d9dde3,stroke:#57606a,color:#1f2328
   classDef model fill:#ffd8a8,stroke:#a85400,color:#1f2328
   classDef agent fill:#a5d8ff,stroke:#1864ab,color:#1f2328
@@ -114,8 +108,9 @@ flowchart LR
     ep["ExecutionPort"]:::agent
     atp["AttributionPort"]:::insight
   end
-  subgraph impl["Reference adapters (implemented)"]
+  subgraph impl["Implemented"]
     fm["function-member<br/>in-process function"]:::external
+    al["agent-layers<br/>stack in process"]:::external
     sr["static-registry<br/>member list"]:::external
     sk["skill-router<br/>rules"]:::external
     bt["basic-topology<br/>in-process executor"]:::external
@@ -125,10 +120,13 @@ flowchart LR
   subgraph planned["Planned"]
     a2a["a2a-member<br/>A2A protocol"]:::external
     sq["sqlite-execution<br/>SQLite"]:::external
+  end
+  subgraph cand["Candidates"]
     db["DBOS, Temporal<br/>durable engines"]:::external
   end
   config -.-> core
   fm --- mp
+  al --- mp
   sr --- rp
   sk --- ap
   bt --- tp
@@ -158,12 +156,21 @@ agent-layers layer, agent-plexus calls a host hook instead of implementing it.
 | Spans, events, metrics | L9 `telemetry` | Emits `plexus.*` names through the host's telemetry hook |
 | Scoring a run | L10 `eval` | Calls the host's `score` hook; adds attribution across hops |
 | Network exposure | L8 `interface`, gateway | None: the host serves the system |
-| Durable state of one agent | L3 `harness` StatePort | Its own journal across member calls; may store it in the host's `state` hook (planned) |
+| Durable state of one agent | L3 `harness` StatePort | Its own journal across member calls; may store it in the host's `state` hook (planned `host-execution`) |
 | How an agent is called, discovery, routing between agents, topology, cross-agent attribution | none | The six layers |
 
-The agent-layers adapter (planned) is the only package that depends on agent-layers. It builds the four hooks from a
-stack, offers a stack as a member, and runs a system as a stack's runtime so the gateway exposes it. The core never
-names it.
+The `agent-layers` adapter is the only package that depends on agent-layers; the core never names it. It has three
+descriptors:
+
+- the `agent-layers` host: `gate` from the stack's authorization, approval, credentials and guards, `telemetry`, and
+  `score`. It provides no `state`: agent-layers' StatePort is an append-only event log per session, not a key/value
+  store;
+- the `agent-layers` member: an agent of a stack, in process. Deadline, hops and budget are not passed on yet, because
+  agent-layers has no bounds;
+- the runtime plugin `agent-plexus`: an agent-layers RuntimePort that runs a system, loaded through the `plugins` of the
+  agent-layers config (`@agent-plexus/adapter-agent-layers/runtime`), so the gateway exposes the system.
+
+The stack's tools as the tool source of a `supervise` topology are planned.
 
 ## Cross-cutting concerns
 

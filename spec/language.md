@@ -164,7 +164,7 @@ the block yet.
 | `layer?` | Where it stopped: a plexus layer, `host`, or the member's own name for its layer. |
 | `by?` | The instance that stopped it: a host name, a limit path such as `limits.system.maxSteps`. For people and telemetry. |
 | `stage?` | `send` or `receive`, for a gate check. |
-| `detail?` | Internal text. Never parsed, never shown to a caller. |
+| `detail?` | Internal text. Never parsed, never shown to a caller: the CLI leaves it out of its JSON output, in the `reason` of the result and in every `reason` of the record. |
 
 | Code | Meaning | Where it comes from |
 | --- | --- | --- |

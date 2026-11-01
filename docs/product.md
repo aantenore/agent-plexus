@@ -23,15 +23,17 @@ production breaks:
   for the hooks.
 - **No second control plane.** Authorization, credentials, content checks, telemetry and scoring are host hooks.
   agent-plexus calls them and implements none. In production they must come from a real host.
-- **Any agent is a member.** A function today; an agent served over A2A, an agent-layers stack or another
-  agent-plexus system are planned adapters.
+- **Any agent is a member.** A function, and an agent-layers stack in process, today. Another agent-plexus system works
+  in process through the `fn` option of `function-member` (a `SystemResult` extends `MemberResult`); over the network
+  it is planned, with an agent served over A2A, through `a2a-member`.
 - **One call path.** Every member call goes through `memberCall`; topologies cannot reach a member any other way.
 - **Bounded.** System limits (steps, depth, parallelism, loops, handoffs, time) are enforced by the core. Deadline,
   budget and hops received from the host are honoured and passed on.
 - **Failures land on an agent.** Each run keeps a hop record; attribution names a layer, a member and, when the member
   reports one, the member's own layer.
 - **A system is an agent.** A result carries its hop record, so a system can be a member of another one. Exposure over
-  the network is the host's (planned adapter).
+  the network is the host's: the agent-layers gateway serves a system through the runtime plugin of the `agent-layers`
+  adapter.
 
 ## The developer journey
 
@@ -55,7 +57,7 @@ flowchart LR
 ## Profile ladder
 
 Profiles are overlays on the base config: objects merge, arrays replace, `null` removes a key. The readiness gate
-applies when the profile's `tier` is `production`. Planned adapters are named but not installed yet.
+applies when the profile's `tier` is `production`. Planned adapters and candidates are named but not installed yet.
 
 ```mermaid
 flowchart TB
@@ -63,10 +65,10 @@ flowchart TB
     base["All six layers<br/>function-member, static-registry, skill-router,<br/>basic-topology, memory-execution, rule-attribution"]:::external
   end
   subgraph prod["production: a real host"]
-    xhost["host<br/>agent-layers stack (planned)"]:::control
+    xhost["host<br/>agent-layers stack"]:::control
     xmem["L0 member<br/>a2a-member (planned)"]:::foundation
     xreg["L1 registry<br/>signed cards or pinned endpoints"]:::model
-    xexe["L4 execution<br/>sqlite or host journal, DBOS (planned)"]:::agent
+    xexe["L4 execution<br/>sqlite or host journal (planned),<br/>DBOS (candidate)"]:::agent
     xatt["L5 attribution<br/>rule-attribution, judge (planned)"]:::insight
   end
   proto -->|"edit the profile"| prod

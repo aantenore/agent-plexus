@@ -32,7 +32,7 @@ flowchart LR
   subgraph sg["L0 member"]
     mp["MemberPort<br/>describe, invoke"]:::foundation
   end
-  mp --> back["function, A2A agent (planned),<br/>agent-layers stack (planned)"]:::external
+  mp --> back["function, agent-layers stack,<br/>A2A agent (planned)"]:::external
   mc -.->|"plexus.hop span"| telemetry["host telemetry"]:::insight
   classDef foundation fill:#d9dde3,stroke:#57606a,color:#1f2328
   classDef agent fill:#a5d8ff,stroke:#1864ab,color:#1f2328
@@ -46,7 +46,7 @@ flowchart LR
 Mapped by adapters, not by the port:
 
 - A2A 1.0 for agents in any framework (planned `a2a-member`).
-- The agent-layers stack, in process (planned `agent-layers` adapter).
+- The agent-layers stack, in process (adapter `agent-layers`).
 
 ## Boundaries
 
@@ -100,7 +100,12 @@ A2A needs no adapter of its own.
 |---|---|---|
 | [`function-member`](../../adapters/function-member) | An in-process function (prototype, production) | implemented |
 | `a2a-member` | An agent served over A2A 1.0, on the official JavaScript SDK | planned |
-| `agent-layers` | An agent-layers stack in process; offers the `supervise` tool source | planned |
+| [`agent-layers`](../../adapters/agent-layers) | An agent of an agent-layers stack, in process (prototype, production); deadline, hops and budget are not passed on yet, because agent-layers has no bounds | implemented |
+| `agent-layers`: tool source of `supervise` | The stack's tools as what a supervisor can call | planned |
+
+Another agent-plexus system as a member works today in process: the `fn` option of `function-member` (code only, not JSON
+config) takes a function that runs the other system and returns its `SystemResult`, which extends `MemberResult`. Over
+the network it is planned, through `a2a-member`.
 
 Full list: [adapters.md](../adapters.md).
 

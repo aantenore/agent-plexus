@@ -6,12 +6,13 @@ caused a failure.
 
 It does not implement what an agent stack already has. Identity, policy, content checks, telemetry, scoring and
 network exposure come from a host through four hooks; [agent-layers](https://github.com/aantenore/agent-layers) is the
-reference host, through one adapter (planned). The core defines a port for each layer; adapters map a framework, a
+reference host, through one adapter. The core defines a port for each layer; adapters map a framework, a
 protocol or a technology onto a port; a system config picks one adapter per port, per profile. The core depends on
 nothing and runs offline with prototype defaults for the hooks.
 
-Status: slice 1 is implemented (core, CLI, six reference adapters, an offline example). Everything else is marked
-planned where it appears.
+Status: implemented are the core, the CLI, six reference adapters, the `agent-layers` adapter and two examples
+(`offline`, `swap`). Planned work is listed in [docs/adapters.md](docs/adapters.md#planned); technologies without
+scheduled work are marked candidate.
 
 - **Why it exists and how it compares:** [docs/product.md](docs/product.md)
 - **How it works:** [docs/architecture.md](docs/architecture.md)
@@ -57,13 +58,13 @@ host, journaled, bounded and recorded. A failed run is attributed to a layer and
 ```mermaid
 flowchart TB
   caller(["Person, app, agent, event"]):::external
-  expose["Host exposure<br/>gateway: A2A, OpenAI-compatible, MCP (planned adapter)"]:::experience
+  expose["Host exposure<br/>gateway: A2A, OpenAI-compatible, MCP"]:::experience
   gate["Host gate<br/>allow, token, check"]:::control
   subgraph run["One run"]
     topology["L3 topology<br/>walks the nodes"]:::agent
     routing["L2 routing"]:::model
     registry["L1 registry"]:::model
-    member["L0 member<br/>function, A2A agent, stack"]:::foundation
+    member["L0 member<br/>function, agent-layers stack,<br/>A2A agent (planned)"]:::foundation
     execution["L4 execution<br/>journal, bounds ledger"]:::agent
   end
   tel["Host telemetry<br/>plexus.* spans"]:::insight
@@ -110,6 +111,15 @@ node --conditions=@agent-plexus/source packages/cli/src/cli.ts eval --config exa
 `dev` runs each typed line as one run. The commands, options and exit codes are in [docs/guide.md](docs/guide.md#cli).
 The example is described in [examples/offline](examples/offline/README.md).
 
+[examples/swap](examples/swap/README.md) runs the same system with each layer replaced by one config value: one profile
+per layer, loaded by path, with the same routes, the same answers and the same layer and member for the crash case. Its README has the table of
+profiles. One profile, with all six layers swapped (two cases pass; the crash case fails and is attributed to member
+`billing`, exit 1):
+
+```bash
+node --conditions=@agent-plexus/source packages/cli/src/cli.ts eval --config examples/swap/plexus.json --profile swap-all examples/swap/cases.json
+```
+
 ## Layout
 
 ```
@@ -117,7 +127,7 @@ spec/            language-neutral contracts: language.md, hooks.md, ports/ (JSON
 packages/core    @agent-plexus/core: ports, host hooks, memberCall, assemble, system config, limits (zero dependencies)
 packages/cli     @agent-plexus/cli: check, run, dev, eval
 adapters/<name>  @agent-plexus/adapter-<name>: one package per framework, protocol or technology
-examples/        sample systems (offline)
+examples/        sample systems: offline (reference adapters), swap (each layer replaced by one config value)
 docs/            product, architecture, stack, guide, adapters, limits, layers/<id>.md, cross-cutting/, decisions/, research/, proposals/
 ```
 
@@ -135,16 +145,16 @@ privately, see [SECURITY.md](SECURITY.md).
 
 ## Licenses of the reference technologies
 
-This repository is MIT. Reference technologies are used through adapters, never vendored. Nothing below is a
-dependency yet: slice 1 has none.
+This repository is MIT. Reference technologies are used through adapters, never vendored. A technology is a dependency
+only of the adapter that maps it: the core and the other adapters have none.
 
 | Component | License | Layer (id) |
 |---|---|---|
-| A2A SDK (JavaScript) | Apache-2.0 | member (planned) |
-| agent-layers | MIT | host, member, runtime (planned adapter) |
-| DBOS | MIT | execution (planned) |
-| Temporal | MIT | execution (planned) |
-| AGNTCY Agent Directory | Apache-2.0 | registry (planned) |
+| A2A SDK (JavaScript) | Apache-2.0 | member (planned: `a2a-member`) |
+| agent-layers | MIT | host, member, runtime plugin (adapter `agent-layers`, depends on `@agent-layers/core`) |
+| DBOS | MIT | execution (candidate) |
+| Temporal | MIT | execution (candidate) |
+| AGNTCY Agent Directory | Apache-2.0 | registry (candidate) |
 
 All of the above are OSI-approved licenses. Technologies with licenses that are not OSI-approved are not used as
 references; see [docs/research/landscape.md](docs/research/landscape.md).

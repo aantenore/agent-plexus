@@ -52,7 +52,7 @@ records beat log text. See [research/protocols.md](../research/protocols.md).
 - The upstream rule is an approximation: the record does not say which hop's output fed which, so the upstream hop is
   the previous completed hop in record order.
 - `system.attribute` reads at most `limits.attribution.maxRecords` records and gives the adapter an in-memory record
-  source, `memory`, of the last 100 runs. It has records only; member spans need a trace-backed source (planned).
+  source, `memory`, of the last `limits.attribution.historyRuns` runs (default 100). It has records only; member spans need a trace-backed source (planned).
 
 ## Rules of `rule-attribution`
 
@@ -66,6 +66,7 @@ records beat log text. See [research/protocols.md](../research/protocols.md).
 | 3 | `timeout`, `limit` otherwise | `member` | `limit`: the hop with the most tokens, else the highest cost, else the longest duration. `timeout`: the longest duration | medium |
 | 3 | `denied`, `needs_auth` from the host | `host` | none | high |
 | 3 | `guard_block` from the host | `host` | `receive`: the hop's own member; `send`: the previous completed hop's member | high |
+| 3 | Any other code with `reason.layer` `topology` | `topology` | none | medium |
 | 3 | `guard_block` from a member, with an earlier completed hop | `member` | That upstream hop's member | medium |
 | 3 | `guard_block` otherwise, `failed`, `error`, other codes | `member` | The hop | high with a member layer, else medium |
 | 3 | `rejected` | `member` | The hop | low |
@@ -77,7 +78,7 @@ Confidence values: high 0.9, medium 0.6, low 0.3. Over A2A today every remote st
 ## Configuration
 
 ```json
-{ "ports": { "attribution": { "adapter": "rule-attribution" } }, "limits": { "attribution": { "maxRecords": 500 } } }
+{ "ports": { "attribution": { "adapter": "rule-attribution" } }, "limits": { "attribution": { "maxRecords": 500, "historyRuns": 100 } } }
 ```
 
 ## Telemetry
@@ -107,7 +108,7 @@ Change `ports.attribution.adapter`. Records and scores stay the same.
 | `judge-attribution` | A model reads the record, all at once or by binary search over hops; agent level only | planned |
 | `replay-attribution` | Offline counterfactual replay: one member's output replaced, or one member swapped | planned |
 
-Record sources: `memory` (implemented, inside the core); `journal`, `jsonl` (planned); Langfuse and Jaeger (candidates).
+Record sources: `memory` (implemented, inside the core); `journal`, `jsonl`, Langfuse and Jaeger (candidates).
 
 Full list: [adapters.md](../adapters.md).
 

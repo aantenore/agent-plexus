@@ -48,6 +48,8 @@ setting is absent. **Accepted** is the validated range. **Safe range** is what p
 | `limits.system.maxHandoffs` | `10` | 1–100 | 1–20 | warn outside safe range | Default bound of a `handoff` node (planned: the kind is not run yet). |
 | `limits.system.maxRepeats` | `3` | 1–100 | 1–10 | warn outside safe range | Back-and-forth round trips between the same two members before the next call stops with `limit`. |
 | `limits.system.stepTimeoutMs` | `300000` ms | 1–∞ or unbounded | 1–3600000 | fail if unbounded; warn outside safe range | One member call, capped by the time left in the run. |
+| `limits.system.minRemainingMs` | `1000` ms | 0–60000 | — | — | A member call does not start with less time left in the run than this; the call stops with `timeout`. |
+| `limits.system.marginMs` | `1000` ms | 0–60000 | — | — | Time kept back from the deadline on each outbound call: the member is told the time left minus the margin (never below 0), so it can end before the caller does. |
 
 ### `limits.registry`
 
@@ -66,6 +68,7 @@ setting is absent. **Accepted** is the validated range. **Safe range** is what p
 
 | Setting | Default | Accepted | Safe range | On production | Why |
 |---|---|---|---|---|---|
+| `limits.attribution.historyRuns` | `100` | 1–10000 | — | — | Past runs kept in memory as the record source `memory` of `system.attribute`; the oldest is dropped first. |
 | `limits.attribution.maxRecords` | `500` | 1–100000 | — | — | Hop records read by one attribution. |
 
 ## Adapters

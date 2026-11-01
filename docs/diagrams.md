@@ -12,11 +12,12 @@ way. agent-plexus adds no plane colours of its own: it maps its planes onto the 
   backend, an adapter, a step of a process, the core's own functions) use the neutral `external` class, dashed.
 - **Labels carry the layer.** A layer node reads `L3 topology` plus a short role. Ports use their exact names from
   [spec/ports](../spec/ports/README.md); adapters use their names from [adapters.md](adapters.md). Planned adapters
-  say so in the label.
+  and candidates say so in the label.
 - **Small.** About fifteen nodes at most; split a diagram instead of growing it.
 - **Arrows.** A solid arrow is a call or a flow of data. A dotted arrow is observation (telemetry, hop records),
   governance or an optional or planned path. A plain line joins an adapter to the port it fills.
-- **Sequence diagrams** take no plane colours. Participants are named `layer (Ln)`, or `host` for the host's hooks.
+- **Sequence diagrams** take no plane colours. Participants are named `layer (Ln)`, `host` for the host and its hooks,
+  and `core` for the core's own functions (`assemble`, `memberCall`).
 - **Accuracy.** A diagram must match `LAYERS` in `packages/core/src/layers.ts`, the port pages and the adapter
   catalog. Nothing checks inside diagram blocks, so check them by hand when the system changes.
 
@@ -35,8 +36,10 @@ Paste only the lines for the classes a diagram uses, unchanged, at the end of th
 | Host exposure | `experience` | `#b2f2bb` | `#2a7a38` | the host's gateway |
 | Not a layer | `external` | `#ffffff` | `#57606a` | callers, backends, adapters, steps, the core's functions |
 
-Red, green and the host's purple are the host's planes in agent-layers; agent-plexus uses them only for the hooks and
-the exposure it receives, never for a layer of its own.
+Red and green are the host's planes in agent-layers; agent-plexus uses them only for the `gate` hook and the exposure
+it receives, never for a layer of its own. Purple is the insight plane in both projects: in agent-plexus it colours the
+layer `attribution` (L5), and the host's insight hooks (`telemetry`, `score`, `state`) share it, so a purple node is
+either that layer or one of those hooks, and its label says which.
 
 ```text
 classDef foundation fill:#d9dde3,stroke:#57606a,color:#1f2328
@@ -67,7 +70,7 @@ The command renders every Mermaid block of a Markdown file and fails on a syntax
 | Request through the system | [README](../README.md#request-through-the-system) | A run across the layers, with the host's gate, telemetry and score around it |
 | Planes at a glance | [stack.md](stack.md#planes-at-a-glance) | How the member, discovery, flow and insight planes relate to the host |
 | Request flow | [stack.md](stack.md#request-flow) | Which layer calls which, in more detail |
-| Ports and adapters | [stack.md](stack.md#ports-and-adapters) | Core ports, implemented adapters, planned adapters |
+| Ports and adapters | [stack.md](stack.md#ports-and-adapters) | Core ports, implemented adapters, planned adapters, candidates |
 | Developer journey | [product.md](product.md#the-developer-journey) | Members, config, `check`, `run`, `eval`, production check |
 | Profile ladder | [product.md](product.md#profile-ladder) | What changes from the prototype to the production profile |
 | Hexagonal model | [architecture.md](architecture.md#hexagonal-model) | Inbound, core, outbound adapters and host hooks |

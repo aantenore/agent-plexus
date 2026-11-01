@@ -50,8 +50,9 @@ secrets in errors, logs or telemetry. Framework and protocol names appear only i
 
 ## Documentation
 
-- Layer pages follow one pattern: question, ports, where it sits, standards, boundaries, configuration, telemetry,
-  evaluation, how to swap, reference adapters, reference setup.
+- Layer pages follow one pattern: question, responsibility, ports, where it sits, standards, boundaries, configuration,
+  telemetry, evaluation, how to swap, reference adapters, reference setup.
 - Diagrams use the palette in [docs/diagrams.md](docs/diagrams.md) and are listed in its index.
-- Describe what exists as implemented and mark everything else as planned.
+- Describe what exists as implemented. Mark scheduled work as planned and any other technology as a candidate; the
+  words are defined in [docs/adapters.md](docs/adapters.md#catalog).
 - Check relative links by hand; check Mermaid blocks with the command in [docs/diagrams.md](docs/diagrams.md#checking-a-diagram).

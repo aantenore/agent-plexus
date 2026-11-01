@@ -35,7 +35,7 @@ flowchart LR
 
 ## Standards
 
-None. Durable engines (DBOS, Temporal, Hatchet) are adapters on this port.
+None. Durable engines (DBOS, Temporal, Hatchet) are candidates for adapters on this port.
 
 ## Boundaries
 
@@ -78,7 +78,7 @@ Change `ports.execution.adapter`. Members and topology stay. A production profil
 | [`memory-execution`](../../adapters/memory-execution) | An in-process journal; lost on restart (prototype only) | implemented |
 | `sqlite-execution` | SQLite through `node:sqlite` | planned |
 | `host-execution` | The journal in the host's `state` hook | planned |
-| DBOS, Temporal, Hatchet | MIT | candidates |
+| DBOS, Temporal, Hatchet | MIT | candidate |
 
 Full list: [adapters.md](../adapters.md).
 

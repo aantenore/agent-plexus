@@ -28,7 +28,7 @@ What the core gives the adapter for one run.
 | --- | --- | --- |
 | `ctx` | RunContext | The run context, caller without credential. |
 | `input` | RunInput | The system's original input. |
-| `limits` | `{maxParallel, maxIterations, maxHandoffs}` | Numbers; `Infinity` when a limit is unbounded. |
+| `limits` | `{maxParallel, maxIterations, maxHandoffs}` | Numbers: none of the three accepts `unbounded`. |
 | `call(member, input, options) → CallOutcome` | | The `memberCall` pipeline. The only way to a member. |
 | `route(request) → RouteDecision` | | The AgentRouterPort over registry candidates. |
 | `matches(condition, result) → Boolean` | | Evaluates a `Condition`. |

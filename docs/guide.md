@@ -17,7 +17,10 @@ node --conditions=@agent-plexus/source packages/cli/src/cli.ts eval --config exa
 ```
 
 To start your own system, copy `examples/offline` to a new folder in the repository, edit `plexus.json` and the
-modules in `members/`, and point `--config` at it. Adapters named in the config are found as
+modules in `members/`, and point `--config` at it. Rename the package in the copy's `package.json`: the example is the
+workspace `@agent-plexus/example-offline`, and two workspaces with one name make `npm install` fail. Or copy it outside
+`examples/` (still inside the repository, so Node finds `node_modules`) and leave `package.json` and `tsconfig.json`
+behind. Adapters named in the config are found as
 `@agent-plexus/adapter-<name>` from the repository's `node_modules`; module paths in options are relative to the
 config file. The `--conditions=@agent-plexus/source` flag makes Node load the TypeScript sources of the workspace
 packages; the sections below write the command as `agent-plexus`.
@@ -31,6 +34,16 @@ packages; the sections below write the command as `agent-plexus`.
 | `topology` | `sequence [triage, route{candidates: [billing, manuals], fallback: triage}]` |
 | `limits.system.maxSteps` | `10` |
 | `profiles` | `prototype` (`host: null`) and `production` (`tier: "production"`, which `check` refuses) |
+
+`examples/swap` is the same system with each layer replaced by one config value: one `swap-*` profile per layer, and
+`swap-all` with the swaps together. Each swap is a single value in `plexus.json`, and the system keeps its routes and
+the attribution of the crash case. The profiles table is in its [README](../examples/swap/README.md). Evaluating one:
+
+```bash
+node --conditions=@agent-plexus/source packages/cli/src/cli.ts eval --config examples/swap/plexus.json --profile swap-all examples/swap/cases.json
+```
+
+Two cases pass; the crash case fails and is attributed to member `billing`, so the exit code is 1.
 
 ## Concepts in one paragraph each
 
@@ -258,7 +271,50 @@ Rules:
 - `token(caller, audience)` returns a credential for the member's audience, on behalf of the caller. Never return the
   caller's own credential.
 - Set `tier: 'production'` only for a host backed by real identity, policy and observability; the readiness gate reads it.
-- The reference for the hooks is [spec/hooks.md](../spec/hooks.md). The agent-layers host adapter is planned.
+- The reference for the hooks is [spec/hooks.md](../spec/hooks.md).
+
+### A real host: agent-layers
+
+[`@agent-plexus/adapter-agent-layers`](../adapters/agent-layers) builds the four hooks from an agent-layers stack, so
+the control and insight you already configured there govern the system. Install it next to the config of a stack and
+point the host at that config:
+
+```json
+{
+  "host": {
+    "adapter": "agent-layers",
+    "options": { "config": "../agent-layers/agent-layers.json", "profile": "production", "risk": { "billing": "write" }, "approve": ["billing"] }
+  }
+}
+```
+
+| Hook | Comes from the stack's |
+|---|---|
+| `gate.allow` | AuthorizationPort: each member call is the question `{ caller, action: "call", target: { kind: "agent", id: <member>, layer: "harness", risk } }`; members in `approve` also go through the ApprovalPort and the run is `waiting` until a person decides |
+| `gate.token` | CredentialPort, for the member's `audience` |
+| `gate.check` | GuardPorts: `send` runs the `tool_args` guards, `receive` the `tool_result` guards |
+| `telemetry` | TelemetryPort; every `plexus.*` record gains `agent.layer: "harness"` |
+| `score` | EvaluatorPorts |
+| `state` | none: agent-layers' StatePort is an append-only event log per session, not a key/value store |
+
+An authorization rule that allows the members and denies the rest is then written in the stack, where the rules for its
+tools already live:
+
+```json
+{ "layers": { "authorization": { "adapter": "rules-authorization", "options": { "rules": [
+  { "effect": "allow", "tools": ["triage", "billing"] }, { "effect": "deny", "tools": ["admin"] }
+], "default": "deny" } } } }
+```
+
+The host is `production`-tier when the stack's profile is, and a production tier without an authorization adapter
+denies every call.
+
+The same package has two more descriptors. The member `agent-layers` (`"adapter": "agent-layers"` under `members`) is an
+agent of a stack, in process; deadline, hops and budget are not passed on yet, because agent-layers has no bounds. The
+runtime plugin `agent-plexus`, loaded through the `plugins` of the agent-layers config
+(`"plugins": ["@agent-plexus/adapter-agent-layers/runtime"]`), runs a system as the runtime of a stack, so the
+agent-layers gateway can serve it. The stack's tools as the tool source of `supervise` are planned. The options,
+mappings and limits are in the [adapter README](../adapters/agent-layers/README.md).
 
 ## Stack config reference
 
@@ -312,12 +368,12 @@ check failed: 2 FAIL, 0 WARN
 
 | Finding | Fix | Status |
 |---|---|---|
-| `$.host` | A host adapter backed by real identity, policy and telemetry; the agent-layers adapter | Planned |
-| `$.ports.execution` | A durable ExecutionPort: `sqlite-execution`, `host-execution`, DBOS | Planned |
+| `$.host` | A host adapter backed by real identity, policy and telemetry; the agent-layers adapter | Available: [`agent-layers`](#a-real-host-agent-layers) |
+| `$.ports.execution` | A durable ExecutionPort: `sqlite-execution`, `host-execution` (planned); DBOS, Temporal, Hatchet (candidates) | Planned or candidate |
 | `$.members.<id>` | Members behind `a2a-member` with signed cards or pinned endpoints | Planned |
 | limits | Set `limits.system.*` explicitly and keep them in the safe range | Implemented |
 
-No execution adapter is tiered for production in slice 1, so the production profile of the offline example fails by
+No execution adapter is tiered for production yet, so the production profile of the offline example fails by
 design. A custom adapter can fill the gap today.
 
 ## Eval and attribution

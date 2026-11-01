@@ -34,7 +34,7 @@ Boundary rules:
 flowchart LR
   subgraph inbound[Inbound]
     cli[CLI<br/>check, run, dev, eval]:::external
-    exp[Host exposure<br/>gateway: A2A, OpenAI-compatible, MCP, planned]:::experience
+    exp[Host exposure<br/>gateway: A2A, OpenAI-compatible, MCP]:::experience
   end
   subgraph core[Core: ports + memberCall + config]
     sys[System<br/>assemble, run, check, attribute]:::external
@@ -82,9 +82,11 @@ flowchart LR
 - **Escape hatches.** Data a shape does not cover goes in `ext`, namespaced keys that the core copies and never reads.
   Operations a port does not cover stay reachable through `native()` where a port offers it (MemberPort).
 - **Outbound adapters** consume something as a port: a function as a MemberPort, a rule list as an AgentRouterPort.
-  Planned: an A2A agent as a MemberPort, a database as an ExecutionPort.
-- **Inbound** is the CLI today. Network exposure is the host's: the agent-layers gateway would serve a system over A2A,
-  OpenAI-compatible and MCP through the planned `runtime` descriptor of the agent-layers adapter.
+  An agent-layers stack is also a MemberPort (adapter `agent-layers`). Planned: an A2A agent as a MemberPort, a database
+  as an ExecutionPort.
+- **Inbound** is the CLI. Network exposure is the host's: the agent-layers gateway serves a system over A2A,
+  OpenAI-compatible and MCP when the runtime plugin `agent-plexus` of the agent-layers adapter is loaded through the
+  `plugins` of the agent-layers config (`@agent-plexus/adapter-agent-layers/runtime`).
 - An adapter package is named after what it maps (`@agent-plexus/adapter-function-member`) and exports an `adapters`
   array of descriptors; one package may fill several ports.
 
@@ -94,11 +96,11 @@ The core's own logic, and the only way to reach a member. A topology receives it
 
 | # | Step | Who decides | On failure |
 |---|---|---|---|
-| 1 | System limits and received bounds: abort, less than 1 s left, hops, steps, back-and-forth; reserve budget | core | `stopped`: `aborted`, `timeout`, `hop_limit`, `limit` |
+| 1 | System limits and received bounds: abort, less than `limits.system.minRemainingMs` left, hops, steps, back-and-forth; reserve budget | core | `stopped`: `aborted`, `timeout`, `hop_limit`, `limit` |
 | 2 | May this caller invoke this member | host `gate.allow` | `stopped`, `denied`; `ask` gives `waiting`, `needs_input`; a throwing hook is a `denied` |
 | 3 | Check what is sent (text only; `parts` are dropped and `plexus.parts.dropped` is emitted) | host `gate.check`, `send` | `stopped`, `guard_block`, layer `host`, stage `send`; `redact` replaces the text |
-| 4 | Credential for the member's audience, on behalf of the caller | host `gate.token` | `stopped`, `needs_auth`; none from a production host is `needs_auth`; the caller's own credential is never forwarded |
-| 5 | Call, as a journal step, with outbound bounds and lineage, capped by `stepTimeoutMs` and the time left | MemberPort `invoke` inside ExecutionPort `step` | The member's result, or `failed` / `timeout` / `aborted` from the call |
+| 4 | Credential for the member's audience, on behalf of the caller | host `gate.token` | `stopped`, `needs_auth`; asked only for a member with an `audience`, and a production host that returns none is `needs_auth`; the caller's own credential is never forwarded |
+| 5 | Call, as a journal step, with outbound bounds (time left minus `limits.system.marginMs`) and lineage, capped by `stepTimeoutMs` and the time left | MemberPort `invoke` inside ExecutionPort `step` | The member's result, or `failed` / `timeout` / `aborted` from the call |
 | 6 | Check what comes back, on completed results only: data for the next member, never instructions | host `gate.check`, `receive` | `stopped`, `guard_block`, layer `host`, stage `receive` |
 | 7 | Settle the reservation; write the hop record; span `plexus.hop`, metric `plexus.hops` | core, host `telemetry` | |
 
@@ -115,10 +117,12 @@ each with a prototype default that the readiness gate refuses on a production ti
 | `gate` | `allow`, `token`, `check` | Allow every call, no token, no check | Required; errors are a deny |
 | `telemetry` | `span`, `event`, `metric` | One line per hop on stderr | Required |
 | `score` | `score(case, result)` | `expected` checks only | Optional |
-| `state` | `get`, `set`, `delete` | None | Optional; for the planned `host-execution` adapter |
+| `state` | `get`, `set`, `delete` | None | Optional; for the planned `host-execution` adapter. The `agent-layers` host provides none |
 
-The reference is [spec/hooks.md](../spec/hooks.md). The agent-layers adapter (planned) builds a host from a stack;
-another host is another adapter of the same four hooks.
+The reference is [spec/hooks.md](../spec/hooks.md). The `agent-layers` adapter builds a host from a stack: `gate` from
+its AuthorizationPort, ApprovalPort, CredentialPort and GuardPorts, `telemetry` from its TelemetryPort, `score` from its
+EvaluatorPorts. It provides no `state`: agent-layers' StatePort is an append-only event log per session, not a key/value
+store. Another host is another adapter of the same four hooks.
 
 ## Prototype defaults and readiness
 
@@ -159,31 +163,30 @@ Members, topology and tests do not change between profiles; the host and the ada
 
 ```mermaid
 sequenceDiagram
-  participant H as host
-  participant S as system (core)
-  participant T as topology (L3)
-  participant R as routing (L2)
-  participant G as host gate
-  participant E as execution (L4)
-  participant M as member (L0)
-  participant A as attribution (L5)
-  H->>S: run(input, caller, bounds)
-  S->>E: begin(runId)
-  S->>T: run(input, scope)
-  T->>R: scope.route(candidates)
-  R-->>T: RouteDecision
-  T->>S: scope.call(member, input)
-  S->>G: allow, check send, token
-  S->>E: step(call)
-  E->>M: invoke(input, ctx with bounds)
-  M-->>E: MemberResult
-  S->>G: check receive
-  S-->>T: result, hop record written
-  T-->>S: MemberResult
-  S->>E: end(status)
-  S-->>H: SystemResult with record
-  H->>A: attribute(record, result, scores)
-  Note over S,G: every call is a plexus.hop span with plexus.layer
+  participant host
+  participant core
+  participant topology as topology (L3)
+  participant routing as routing (L2)
+  participant execution as execution (L4)
+  participant member as member (L0)
+  participant attribution as attribution (L5)
+  host->>core: run(input, caller, bounds)
+  core->>execution: begin(runId)
+  core->>topology: run(input, scope)
+  topology->>routing: scope.route(candidates)
+  routing-->>topology: RouteDecision
+  topology->>core: scope.call(member, input)
+  core->>host: gate: allow, check send, token
+  core->>execution: step(call)
+  execution->>member: invoke(input, ctx with bounds)
+  member-->>execution: MemberResult
+  core->>host: gate: check receive
+  core-->>topology: result, hop record written
+  topology-->>core: MemberResult
+  core->>execution: end(status)
+  core-->>host: SystemResult with record
+  host->>attribution: attribute(record, result, scores)
+  Note over core,host: every call is a plexus.hop span with plexus.layer
 ```
 
 ## Extension rules
@@ -191,8 +194,8 @@ sequenceDiagram
 1. A new technology is an adapter plus its tests, never a core change.
 2. A core change starts with a spec change: the port page in `spec/ports/` and the version in `PORT_VERSIONS`.
 3. Adapters depend only on `@agent-plexus/core` (peer). Conformance suites per port are planned.
-4. Framework and protocol names appear only in adapter packages. The core speaks one language and never names
-   agent-layers.
+4. Framework and protocol names appear only in adapter packages. The core speaks one language and names no framework or
+   protocol, not even in comments.
 5. Extra data goes in `ext`, never in a new field: keys are `<adapter>.<name>`; the core never reads an adapter key.
 6. Limits are declared once with `defineLimits` and set by configuration, never a literal in the code.
 

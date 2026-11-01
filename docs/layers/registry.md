@@ -86,7 +86,7 @@ Change `ports.registry.adapter`. Members, rules and topology stay. Adapters that
 | Adapter | Maps | Status |
 |---|---|---|
 | [`static-registry`](../../adapters/static-registry) | The members configured in the system, with overrides from config; fetches nothing (prototype, production) | implemented |
-| Card-fetching registry | Cards listed in config, fetched, pinned, signatures checked | planned |
+| Card-fetching registry | Cards listed in config, fetched, pinned, signatures checked | candidate |
 | AGNTCY Agent Directory + OASF | Apache-2.0 | candidate |
 | Kubernetes CRDs | Apache-2.0 | candidate |
 

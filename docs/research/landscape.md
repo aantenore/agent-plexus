@@ -6,11 +6,11 @@ prior art, multi-agent evaluation). Items marked "unverified" there were not con
 
 ## Conclusion first
 
-agent-plexus is mostly adapters. Every framework below can be a member of a system without an adapter here, because
-it can serve A2A. agent-layers, durable engines, policy engines, directories and telemetry backends enter as adapters
-of agent-plexus' own ports; the core depends on none of them. What nobody provides, and what agent-plexus has to own,
-is the part between agents: a topology described in a neutral language, discovery and routing on that language, one
-pipeline that gates every member call, bounds that shrink across hops, and fault attribution across agents.
+agent-plexus is mostly adapters, and it owns less than an agent stack does. Every framework below can be a member
+without an adapter here, because it can serve A2A. Control and insight (identity, policy, content checks, telemetry,
+scoring, exposure) are not rebuilt: they come from a host, agent-layers being the reference one. What nobody
+provides, and agent-plexus has to own, is the space between agents: how an agent is called, discovery, routing
+between agents, a topology described as data, durable runs across member calls, and fault attribution across agents.
 
 ## Frameworks
 
@@ -49,10 +49,10 @@ that delegates dynamically), graph with conditional edges, checkpoint and resume
 
 | Standard | Status | What agent-plexus does with it |
 |---|---|---|
-| A2A 1.0.1 (Linux Foundation, Apache-2.0) | Stable; SDKs in TS, Python, Java, Go | The wire between agents, through the `a2a-member` and `a2a-entry` adapters. Agent cards (skills, security schemes, JWS signatures) feed the registry. Extensions (`capabilities.extensions`, `A2A-Extensions`, metadata keyed by extension URI) carry bounds and lineage. A2A defines no registry API, no deadline, budget, hop limit or delegation chain. |
+| A2A 1.0.1 (Linux Foundation, Apache-2.0) | Stable; SDKs in TS, Python, Java, Go | The wire between agents, through the `a2a-member` adapter and the host's exposure. Agent cards (skills, security schemes, JWS signatures) feed the registry. Extensions (`capabilities.extensions`, `A2A-Extensions`, metadata keyed by extension URI) carry bounds and lineage. A2A defines no registry API, no deadline, budget, hop limit or delegation chain. |
 | MCP 2026-07-28 | Stable; stateless; Tasks is an extension; sampling deprecated | Tools and knowledge of the members themselves. An agent behind MCP is a member only as a tool. `_meta` carries bounds. Token passthrough is forbidden, so every hop exchanges a token for the next audience. |
-| RFC 8693 token exchange, `act` | RFC | The verified delegation chain, read by GatePort adapters. Outermost `act` is the current actor; prior actors are informational for access control. Gives an audit trail, not depth enforcement. |
-| RFC 8707, RFC 9728, RFC 9449 (DPoP) | RFCs | Audience binding and sender-constrained tokens per hop, in GatePort adapters. |
+| RFC 8693 token exchange, `act` | RFC | The verified delegation chain, read by the host's gate. Outermost `act` is the current actor; prior actors are informational for access control. Gives an audit trail, not depth enforcement. |
+| RFC 8707, RFC 9728, RFC 9449 (DPoP) | RFCs | Audience binding and sender-constrained tokens per hop, in the host's gate. |
 | Transaction tokens (draft -11), identity chaining (draft -17, RFC Editor queue), WIMSE | Drafts | Track; adapters later. No agent delegation draft is adopted by a working group; one individual draft has a signed hop limit (`del_max_depth`). |
 | gRPC `grpc-timeout`, SIP `Max-Forwards`, Envoy expected timeout | Established practice | The model for bounds: send remaining time, decrement hops, typed refusal, retries share the deadline. |
 | W3C Trace Context | Recommendation | Correlation across agents, carried by the telemetry adapters. |
@@ -81,20 +81,20 @@ carried in the registry entry and, on the wire, in an A2A extension of the card.
 | Who&When (ICML 2025) | Best automated method finds the failing agent 53.5% of the time and the failing step 14.2% | Attribute to an agent first; a step is a hint |
 | MAST | 14 failure modes in three groups: specification, inter-agent misalignment, verification and termination | Attribution categories |
 | AgenTracer (ICLR 2026) | Counterfactual replay and fault injection beat reading logs | A replay harness is worth owning; structured hop records beat log text |
-| Tools | promptfoo, Inspect AI (MIT); DeepEval, OpenLLMetry (Apache-2.0); Langfuse (MIT core); Phoenix (Elastic-2.0, excluded) | Scoring through EvaluatorPort adapters; none attributes across A2A or MCP hops |
+| Tools | promptfoo, Inspect AI (MIT); DeepEval, OpenLLMetry (Apache-2.0); Langfuse (MIT core); Phoenix (Elastic-2.0, excluded) | Scoring through the host's score hook; none attributes across A2A or MCP hops |
 
 ## Adopt or own
 
-| Concern | Layer | Adopt (as adapters) | Own |
+| Concern | Where | Adopt | Own |
 |---|---|---|---|
-| Running one agent | `member` | Any framework over A2A; agent-layers stacks; functions | MemberPort, `MemberResult` |
-| Wire between agents | `member`, `entry` | A2A 1.0 (official SDKs) | The bounds and lineage extension URI and its fields |
-| Discovery | `registry` | Agent cards, AGNTCY directory, Kubernetes CRDs | RegistryPort, `AgentEntry` |
-| Routing | `routing` | Models over OpenAI-compatible endpoints, search backends, agent-layers models and knowledge | AgentRouterPort and its rules |
-| Topology | `topology` | LangGraph.js, ADK-TS, Strands TS as engines | `TopologySpec` and the reference executor |
-| Durable execution | `execution` | DBOS, Temporal, Hatchet; agent-layers StatePort | ExecutionPort and the reference journals |
-| Identity, policy, content checks | `gate` | OIDC with RFC 8693, OPA, AuthZEN; agent-layers controls | GatePort and the `gatedCall` pipeline |
-| Deadline, budget, hops | `bounds` | Practice from gRPC and SIP; agent-layers primitives once they land | `Bounds`, the rules, LedgerPort |
-| Exposure | `entry` | A2A server SDK; agent-layers gateway | EntryPort |
-| Telemetry | `telemetry` | OpenTelemetry; agent-layers telemetry | `plexus.*` names, `plexus.layer` |
-| Scoring and attribution | `eval` | promptfoo, Inspect AI, DeepEval; agent-layers evaluators | `HopRecord`, AttributionPort and its reference rules |
+| Running one agent | L0 `member` | Any framework over A2A; agent-layers stacks; functions | MemberPort, `MemberResult` |
+| Wire between agents | L0 `member` | A2A 1.0 through the official JS SDK | Nothing: the bounds extension is the agent-layers proposal's |
+| Discovery | L1 `registry` | Agent cards, AGNTCY directory, Kubernetes CRDs | RegistryPort, `AgentEntry` |
+| Routing | L2 `routing` | Models over OpenAI-compatible endpoints, search backends, agent-layers models and knowledge | AgentRouterPort and its rules |
+| Topology | L3 `topology` | LangGraph.js, ADK-TS, Strands TS as engines | `TopologySpec`, the reference executor, `memberCall` |
+| Durable execution | L4 `execution` | DBOS, Temporal, Hatchet; a host's state | ExecutionPort and the reference journals |
+| Cross-agent attribution | L5 `attribution` | Research methods (Who&When, AgenTracer) | `HopRecord`, AttributionPort, reference rules |
+| Identity, policy, content checks | host `gate` | agent-layers (OIDC, RFC 8693, OPA, AuthZEN, Presidio, LLM Guard) | The hook, nothing more |
+| Telemetry, scoring | host `telemetry`, `score` | agent-layers telemetry and evaluators; OpenTelemetry, promptfoo | `plexus.*` names |
+| Exposure | host | The agent-layers gateway | Nothing |
+| Deadline, budget, hops | host + core | The agent-layers proposal; practice from gRPC and SIP | System limits only |

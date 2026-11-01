@@ -6,4 +6,4 @@ NNNN · Date · Decided by`, sections Context, Decision, Consequences; an accept
 
 | # | Decision | Status | Date |
 |---|---|---|---|
-| [0001](0001-own-ports-agent-layers-as-adapter.md) | Ten own layers and ports, a core with no dependencies, agent-layers as one adapter | Proposed | 2026-11-01 |
+| [0001](0001-own-ports-agent-layers-as-adapter.md) | Six layers between agents; control and insight from a host, agent-layers as the reference host adapter | Proposed | 2026-11-01 |

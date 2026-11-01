@@ -1,12 +1,11 @@
 # agent-plexus
 
-agent-plexus composes agents into a multi-agent system: which agents exist, which one handles a request, how work
-flows between them, what each call may do and spend, and, when the system fails, which agent and which layer caused
-it.
-
-It names ten layers, gives each its ports, and composes adapters for them from a config, per profile (prototype,
-pilot, production). It implements none of them. The core depends on nothing; agents built with any framework join
-over A2A, and [agent-layers](https://github.com/aantenore/agent-layers) is one adapter among others.
+agent-plexus composes agents into a multi-agent system. It owns only what lies between agents: how an agent is
+called, which agents exist, which one handles a request, how work flows, how a long run survives, and which agent
+caused a failure. Control and insight (identity, policy, content checks, telemetry, scoring, network exposure) come
+from a host through a few hooks; [agent-layers](https://github.com/aantenore/agent-layers) is the reference host,
+through one adapter. The core depends on nothing and runs offline alone; agents built with any framework join over
+A2A.
 
 | Plane | L | Layer (id) | The question it answers |
 |---|---|---|---|
@@ -15,11 +14,7 @@ over A2A, and [agent-layers](https://github.com/aantenore/agent-layers) is one a
 | Discovery | L2 | Routing (`routing`) | Which agent should handle this request? |
 | Flow | L3 | Topology (`topology`) | In what order and shape does work flow between agents? |
 | Flow | L4 | Execution (`execution`) | Does a long run survive a restart, and wait for a person? |
-| Control | L5 | Gate (`gate`) | May this call happen, with which credential, is what crosses acceptable? |
-| Control | L6 | Bounds (`bounds`) | How long, how much and how deep may the work go? |
-| Experience | L7 | Entries (`entry`) | Who reaches the system, and how? |
-| Insight | L8 | Telemetry (`telemetry`) | What happened? |
-| Insight | L9 | Evaluation & attribution (`eval`) | Was it good, and if not, which agent and which layer failed? |
+| Insight | L5 | Attribution (`attribution`) | When the system fails, which agent and which layer caused it? |
 
 Status: design. No code yet.
 

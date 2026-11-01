@@ -1,45 +1,45 @@
-# 0001. Ten own layers; agent-layers is an adapter, not a foundation
+# 0001. Six layers between agents; control and insight come from a host
 
 Status: Proposed · Date: 2026-11-01 · Decided by: project owner · Supersedes: none
 
 ## Context
 
 Multi-agent orchestration was kept out of agent-layers on purpose. The frameworks that orchestrate agents
-([research/landscape.md](../research/landscape.md)) each own the loop, the state and the integrations, in one or two
-languages, and none carries a deadline, a budget, a hop limit or a delegation chain across processes, or attributes a
-failure to an agent across stacks. All the maintained ones can serve or call A2A.
+([research/landscape.md](../research/landscape.md)) each own the loop, the state and the integrations, and none
+carries a deadline, a budget, a hop limit or a delegation chain across processes, or attributes a failure to an
+agent across stacks. All the maintained ones can serve or call A2A.
 
-A first draft hosted every system inside an agent-layers stack. That made agent-plexus a part of agent-layers in all
-but name: it could not run, be tested or be adopted without it. agent-layers itself does not work that way: reinloop
-is one adapter of its RuntimePort, and its core never names reinloop.
+Two drafts were discarded. The first hosted every system inside an agent-layers stack: agent-plexus could not run
+without it. The second made agent-plexus self-sufficient with ten layers, and in doing so rebuilt agent-layers'
+control and insight planes (identity, guardrails, telemetry, evaluation, interfaces) under other names: two control
+planes, two languages to keep in step. agent-layers itself shows the right shape: reinloop is independent of it
+because it does one thing, the loop, and receives governed tools from its host instead of implementing identity or
+guardrails.
 
 ## Decision
 
-1. **Ten layers, one question each, own ports.** `member`, `registry`, `routing`, `topology`, `execution`, `gate`,
-   `bounds`, `entry`, `telemetry`, `eval`, in six planes, with MemberPort, RegistryPort, AgentRouterPort,
-   TopologyPort, ExecutionPort, GatePort, LedgerPort, EntryPort, TelemetryPort, EvaluatorPort and AttributionPort.
-2. **One owned language.** `Caller`, `Bounds`, `MemberResult`, `TopologySpec`, `AgentEntry`, `HopRecord`,
-   `Attribution`, written under the same rules as the agent-layers language, defined here. Standards appear only in
-   adapters.
-3. **The core depends on nothing.** Every port has a zero-dependency reference implementation; a system runs offline
-   with them.
-4. **agent-layers is an adapter.** `@agent-plexus/adapter-agent-layers` maps a stack onto MemberPort, GatePort,
-   TelemetryPort, ExecutionPort, EvaluatorPort and EntryPort, and is the only package that depends on agent-layers.
-   The core never names it.
-5. **One enforcement path.** Every member call goes through the core's `gatedCall` pipeline (bounds, authorization,
-   approval, send check, credential, call, receive check, hop record). Adapters give decisions; they cannot skip it.
-6. **Frameworks join as members over A2A.** No adapter per framework unless A2A is not an option.
+1. **Six layers, all between agents.** `member`, `registry`, `routing`, `topology`, `execution`, `attribution`, each
+   with one port and a zero-dependency reference implementation.
+2. **Control and insight are host hooks.** `gate` (allow, token, check), `telemetry`, `score`, `state`, passed to
+   `assemble(config, host)`. Prototype defaults exist so the core runs alone; the readiness gate refuses them on a
+   production tier.
+3. **One call path.** Every member call goes through the core's `memberCall` pipeline, which asks the host's gate
+   before and after the call.
+4. **agent-layers is the reference host, through one adapter.** `@agent-plexus/adapter-agent-layers` builds the
+   hooks from a stack, offers stacks as members, and runs a system as a stack's runtime so the gateway exposes it. It
+   is the only package that depends on agent-layers; the core never names it.
+5. **Minimal own language.** `TopologySpec`, `AgentEntry`, `HopRecord`, `Attribution`, `RouteDecision`, plus a
+   `RunContext` and `MemberResult` whose values equal agent-layers' by choice. The host's caller is carried, not
+   interpreted.
+6. **Bounds defined once.** The rules and the A2A extension are those of the agent-layers proposal
+   ([proposal](../proposals/agent-layers-delegation-bounds.md)); agent-plexus honours them and adds only system
+   limits.
+7. **Frameworks join as members over A2A.**
 
 ## Consequences
 
-- agent-plexus can be built, tested and adopted without agent-layers; with it, a deployment gets OIDC, OPA, AuthZEN,
-  Presidio and the rest of the agent-layers controls through one adapter.
-- The two projects share a pattern (ports, one language, profiles, readiness gate), not code. Shapes that mean the
-  same (caller, run status, stop codes) are kept mappable one to one, by choice.
-- Bounds are enforced by agent-plexus for its own calls now; members that are agent-layers stacks enforce them
-  themselves once the agent-layers primitives land ([proposal](../proposals/agent-layers-delegation-bounds.md)).
-- GatePort is one port with four operations (verify, allow, token, check); it may split later if an adapter needs one
-  operation alone.
-- Alternatives rejected: hosting inside agent-layers (dependency in the core); wrapping one framework as the
-  orchestrator (it would own the loop, the state and the language); putting orchestration in agent-layers (it would
-  widen a core meant to stay minimal).
+- agent-plexus runs offline alone, and in production with any host that fills four hooks; nothing in agent-layers is
+  duplicated.
+- No network server of its own: exposure is the host's.
+- Alternatives rejected: hosting inside agent-layers (dependency in the core); own control and insight layers
+  (duplication); wrapping one framework as the orchestrator; putting orchestration in agent-layers.

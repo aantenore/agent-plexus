@@ -23,9 +23,9 @@ production breaks:
   for the hooks.
 - **No second control plane.** Authorization, credentials, content checks, telemetry and scoring are host hooks.
   agent-plexus calls them and implements none. In production they must come from a real host.
-- **Any agent is a member.** A function, and an agent-layers stack in process, today. Another agent-plexus system works
-  in process through the `fn` option of `function-member` (a `SystemResult` extends `MemberResult`); over the network
-  it is planned, with an agent served over A2A, through `a2a-member`.
+- **Any agent is a member.** A function, an agent-layers stack in process, and an agent served over A2A (any
+  framework or language) through `a2a-member`. Another agent-plexus system works in process through the `fn` option of
+  `function-member` (a `SystemResult` extends `MemberResult`), and over the network when it is served over A2A.
 - **One call path.** Every member call goes through `memberCall`; topologies cannot reach a member any other way.
 - **Bounded.** System limits (steps, depth, parallelism, loops, handoffs, time) are enforced by the core. Deadline,
   budget and hops received from the host are honoured and passed on.
@@ -66,7 +66,7 @@ flowchart TB
   end
   subgraph prod["production: a real host"]
     xhost["host<br/>agent-layers stack"]:::control
-    xmem["L0 member<br/>a2a-member (planned)"]:::foundation
+    xmem["L0 member<br/>a2a-member"]:::foundation
     xreg["L1 registry<br/>signed cards or pinned endpoints"]:::model
     xexe["L4 execution<br/>sqlite or host journal (planned),<br/>DBOS (candidate)"]:::agent
     xatt["L5 attribution<br/>rule-attribution, judge (planned)"]:::insight

@@ -14,14 +14,15 @@ journal also holds the texts that hop records refer to, so records stay small an
 | [ExecutionPort](../../spec/ports/ExecutionPort.md) | `begin` a run by key and get an `Execution`; `signal` a waiting run; `read` a stored text by key |
 
 An `Execution` has `step(name, fn)` (runs once, replays on resume; results must be JSON-serialisable),
-`wait(name, untilAt)` (suspends until a `signal` or the deadline), `put(text)` (stores a text and returns its key) and
+`wait(name, untilAt)` (suspends until a `signal` or the deadline), `put(text)` (stores a text and returns its key),
+`remember(key, value)` and `recall(key)` (a small JSON value kept for the run, such as a remote task handle) and
 `end(status)`.
 
 ### Where it sits
 
 ```mermaid
 flowchart LR
-  mc["memberCall"]:::external -->|"step, put"| ep
+  mc["memberCall"]:::external -->|"step, put, remember, recall"| ep
   sys["core<br/>assemble"]:::external -->|"begin, end"| ep
   subgraph sg["L4 execution"]
     ep["ExecutionPort<br/>begin, signal, read"]:::agent
@@ -42,6 +43,12 @@ None. Durable engines (DBOS, Temporal, Hatchet) are candidates for adapters on t
 - The run key is the run id. A durable adapter resumes an existing run with the same key.
 - Each member call is one step named `call:<node path>:<index>`; the member is not called again on replay.
 - Step results and signal values are cloned through JSON, so a replay returns exactly what a resume would.
+- Next to each step the core keeps the remote task handle a member checkpointed, with `remember` under
+  `call:<node path>:<index>:task`, and reads it with `recall` before calling. If the step has no stored result but a
+  handle exists (the run stopped in between), the member continues that task through `resume` instead of being sent
+  the request again. The handle lives and dies with the run's journal, like the steps: `memory-execution` and the
+  example `file-execution` keep it, and it survives a restart only where the journal does. A crash before the handle is
+  kept can still send the request twice; see [members](member.md).
 - Texts sent to and received from a member are stored with `put`; hop records carry the keys (`inputRef`,
   `outputRef`), never the texts. The host's `score` hook reads member outputs through `read`.
 - A host verdict `ask` ends the call as `waiting` with code `needs_input`. Resuming a waiting run is planned; today

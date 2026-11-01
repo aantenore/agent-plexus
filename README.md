@@ -10,7 +10,7 @@ reference host, through one adapter. The core defines a port for each layer; ada
 protocol or a technology onto a port; a system config picks one adapter per port, per profile. The core depends on
 nothing and runs offline with prototype defaults for the hooks.
 
-Status: implemented are the core, the CLI, six reference adapters, the `agent-layers` adapter and two examples
+Status: implemented are the core, the CLI, seven reference adapters (including `a2a-member`), the `agent-layers` adapter and two examples
 (`offline`, `swap`). Planned work is listed in [docs/adapters.md](docs/adapters.md#planned); technologies without
 scheduled work are marked candidate.
 
@@ -64,7 +64,7 @@ flowchart TB
     topology["L3 topology<br/>walks the nodes"]:::agent
     routing["L2 routing"]:::model
     registry["L1 registry"]:::model
-    member["L0 member<br/>function, agent-layers stack,<br/>A2A agent (planned)"]:::foundation
+    member["L0 member<br/>function, agent-layers stack,<br/>A2A agent"]:::foundation
     execution["L4 execution<br/>journal, bounds ledger"]:::agent
   end
   tel["Host telemetry<br/>plexus.* spans"]:::insight
@@ -150,7 +150,9 @@ only of the adapter that maps it: the core and the other adapters have none.
 
 | Component | License | Layer (id) |
 |---|---|---|
-| A2A SDK (JavaScript) | Apache-2.0 | member (planned: `a2a-member`) |
+| A2A SDK for JavaScript (`@a2a-js/sdk`) | Apache-2.0 | member (adapter `a2a-member`, client side) |
+| jose | MIT | member (`a2a-member`, through the SDK: card signature check) |
+| A2A protocol 1.0 and 0.3 | Apache-2.0 | member (`a2a-member`, JSON-RPC binding) |
 | agent-layers | MIT | host, member, runtime plugin (adapter `agent-layers`, depends on `@agent-layers/core`) |
 | DBOS | MIT | execution (candidate) |
 | Temporal | MIT | execution (candidate) |

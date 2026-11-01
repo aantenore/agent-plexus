@@ -76,6 +76,17 @@ setting is absent. **Accepted** is the validated range. **Safe range** is what p
 Ordered by layer. Set them under the adapter's `options`; an adapter not listed here has no limits
 (`function-member`, `static-registry`, `basic-topology` and `rule-attribution` have none).
 
+### `a2a-member` · MemberPort
+
+| Setting | Default | Accepted | Safe range | On production | Why |
+|---|---|---|---|---|---|
+| `options.timeoutMs` | `300000` ms | 1–∞ or unbounded | 1–3600000 | fail if unbounded; warn outside safe range | Time of one call, polling included. The time left of the run caps it further. |
+| `options.pollMs` | `500` ms | 10–∞ | 100–10000 | warn outside safe range | Interval between reads of the remote task while it works. |
+| `options.maxCardBytes` | `65536` bytes | 1024–1048576 | — | — | Largest agent card or key set read. |
+| `options.maxResponseBytes` | `4194304` bytes | ≥ 1024 | — | — | Largest JSON-RPC answer read from the remote agent. |
+| `options.cardTtlMs` | `300000` ms | 0–86400000 | — | — | How long a fetched card and its endpoint are trusted. |
+| `options.cancelTimeoutMs` | `5000` ms | 100–60000 | — | — | Time limit of the cancel request sent after an abort or a deadline. |
+
 ### `skill-router` · AgentRouterPort
 
 | Setting | Default | Accepted | Safe range | On production | Why |

@@ -72,8 +72,8 @@ records beat log text. See [research/protocols.md](../research/protocols.md).
 | 3 | `rejected` | `member` | The hop | low |
 | 4 | Every hop completed and a score is below 1 | `member` | The last completed hop | low |
 
-Confidence values: high 0.9, medium 0.6, low 0.3. Over A2A today every remote stop except a cancellation arrives as
-`rejected`, until the stop code crosses the boundary ([proposal](../proposals/agent-layers-delegation-bounds.md)).
+Confidence values: high 0.9, medium 0.6, low 0.3. Over A2A the layer that stopped a remote run is unknown (`reason.layer` is absent) and the stop code does not cross the
+boundary yet ([proposal](../proposals/agent-layers-delegation-bounds.md)).
 
 ## Configuration
 

@@ -40,7 +40,8 @@ flowchart LR
 
 Mapped by adapters, not by the port:
 
-- A2A agent cards (`/.well-known/agent-card.json`): skills, security schemes, JWS signatures (planned).
+- A2A agent cards (`/.well-known/agent-card.json`): skills, security schemes, JWS signatures. `a2a-member` reads and
+  verifies the card of its own member; a registry source that lists cards is planned.
 - AGNTCY Agent Directory with OASF skills, and Kubernetes CRDs: candidates.
 
 ## Boundaries

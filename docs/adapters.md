@@ -32,6 +32,7 @@ Every package has its own README with options, behaviour and limits.
 |---|---|---|---|---|---|---|
 | `member` | [`function-member`](../adapters/function-member) | MemberPort | technology: in-process function | prototype, production | implemented | experimental |
 | `member` | [`agent-layers`](../adapters/agent-layers) | MemberPort | technology: agent-layers stack | prototype, production | implemented | experimental |
+| `member` | [`a2a-member`](../adapters/a2a-member) | MemberPort | standard: Agent2Agent (A2A) 1.0 and 0.3, JSON-RPC binding (official JavaScript SDK) | prototype, production | implemented | experimental |
 
 #### Discovery plane
 
@@ -77,7 +78,6 @@ three descriptors:
 
 | Adapter | Fills | Layer | Maps | Status | Notes |
 |---|---|---|---|---|---|
-| `a2a-member` | MemberPort | member | standard: A2A 1.0 (official JavaScript SDK) | planned | Card pinned, endpoint rules, bounds and lineage through the A2A extension, polling, resume and cancel |
 | `model-router` | AgentRouterPort | routing | technology: a model chooses among names and descriptions | planned | Any OpenAI-compatible endpoint, or a stack's governed model through `agent-layers` |
 | `knowledge-router` | AgentRouterPort | routing | technology: a search backend ranks entries | planned | Any agent-layers knowledge source through `agent-layers` |
 | `sqlite-execution` | ExecutionPort | execution | technology: SQLite through `node:sqlite` | planned | |
@@ -101,4 +101,5 @@ No work is scheduled for these.
 Sources and licenses: [research/landscape.md](research/landscape.md).
 
 Frameworks that serve A2A (LangGraph, CrewAI, ADK, Microsoft Agent Framework, Strands, Pydantic AI) need no adapter of
-their own: they join as members through `a2a-member`.
+their own: they join as members through `a2a-member`, which is tested against a real agent-layers stack served by its
+gateway.

@@ -8,7 +8,7 @@ each can be swapped by changing one line of config. The design is in [architectu
 
 | Plane | L | Layer (id) | The question it answers | Port | Reference adapters |
 |---|---|---|---|---|---|
-| Member | L0 | [Members](layers/member.md) (`member`) | Who does the work, and how is it called? | MemberPort | `function-member`, `agent-layers`; `a2a-member` planned |
+| Member | L0 | [Members](layers/member.md) (`member`) | Who does the work, and how is it called? | MemberPort | `function-member`, `agent-layers`, `a2a-member` |
 | Discovery | L1 | [Registry](layers/registry.md) (`registry`) | Which agents exist, what can they do, can their cards be trusted? | RegistryPort | `static-registry`; AGNTCY Agent Directory and Kubernetes CRDs are candidates |
 | Discovery | L2 | [Routing](layers/routing.md) (`routing`) | Which agent should handle this request? | AgentRouterPort | `skill-router`; `model-router` and `knowledge-router` planned |
 | Flow | L3 | [Topology](layers/topology.md) (`topology`) | In what order and shape does work flow between agents? | TopologyPort | `basic-topology` (`sequence`, `route`, `loop`, `parallel`); `handoff`, `supervise`, `graph` planned |
@@ -111,6 +111,7 @@ flowchart LR
   subgraph impl["Implemented"]
     fm["function-member<br/>in-process function"]:::external
     al["agent-layers<br/>stack in process"]:::external
+    a2a["a2a-member<br/>A2A protocol"]:::external
     sr["static-registry<br/>member list"]:::external
     sk["skill-router<br/>rules"]:::external
     bt["basic-topology<br/>in-process executor"]:::external
@@ -118,7 +119,6 @@ flowchart LR
     ra["rule-attribution<br/>deterministic rules"]:::external
   end
   subgraph planned["Planned"]
-    a2a["a2a-member<br/>A2A protocol"]:::external
     sq["sqlite-execution<br/>SQLite"]:::external
   end
   subgraph cand["Candidates"]
@@ -127,12 +127,12 @@ flowchart LR
   config -.-> core
   fm --- mp
   al --- mp
+  a2a --- mp
   sr --- rp
   sk --- ap
   bt --- tp
   me --- ep
   ra --- atp
-  a2a -.- mp
   sq -.- ep
   db -.- ep
   classDef foundation fill:#d9dde3,stroke:#57606a,color:#1f2328

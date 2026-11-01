@@ -82,8 +82,8 @@ flowchart LR
 - **Escape hatches.** Data a shape does not cover goes in `ext`, namespaced keys that the core copies and never reads.
   Operations a port does not cover stay reachable through `native()` where a port offers it (MemberPort).
 - **Outbound adapters** consume something as a port: a function as a MemberPort, a rule list as an AgentRouterPort.
-  An agent-layers stack is also a MemberPort (adapter `agent-layers`). Planned: an A2A agent as a MemberPort, a database
-  as an ExecutionPort.
+  An agent-layers stack is also a MemberPort (adapter `agent-layers`), and so is an agent served over A2A (adapter
+  `a2a-member`). Planned: a database as an ExecutionPort.
 - **Inbound** is the CLI. Network exposure is the host's: the agent-layers gateway serves a system over A2A,
   OpenAI-compatible and MCP when the runtime plugin `agent-plexus` of the agent-layers adapter is loaded through the
   `plugins` of the agent-layers config (`@agent-plexus/adapter-agent-layers/runtime`).

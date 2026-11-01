@@ -91,6 +91,45 @@ Rules:
 - Honour `ctx.signal`. The adapter returns `stopped` / `aborted` when it fires, but it cannot interrupt the function.
 - Never put a credential in an output. `ctx.credential` is the token for the member's audience, from the host.
 
+## Call a remote agent
+
+An agent served over A2A, in any language or framework, is a member through `a2a-member`. The member id is a key under
+`members`; the topology names it like any other member.
+
+```json
+{
+  "members": {
+    "billing": {
+      "adapter": "a2a-member",
+      "options": {
+        "url": "https://agents.example.com/billing/.well-known/agent-card.json",
+        "audience": "https://agents.example.com",
+        "keys": "https://agents.example.com/.well-known/jwks.json",
+        "requireSigned": true,
+        "timeoutMs": 120000
+      }
+    }
+  },
+  "topology": { "kind": "sequence", "steps": ["billing"] }
+}
+```
+
+- The card is fetched without a credential and checked against `keys`; with `requireSigned` an unsigned card is
+  refused. The endpoint of the card is used only when it has the origin of `url` or is in `allowedEndpoints`.
+- The credential is not an option: the host's gate mints a token for `audience`, and the member sends it to the checked
+  endpoint only. Without `audience` the agent is called without a credential.
+- https is required except on loopback; private addresses are refused unless that origin is configured; redirects are
+  never followed. The rules are listed in [security](cross-cutting/security.md#remote-agents-over-a2a).
+- A call returns once the remote side has a task. The task id is journaled, the task is polled every `pollMs`, and a
+  restart of the same run resumes that task instead of sending the request again. On abort or deadline the member
+  cancels the remote task.
+- The remaining time, hops, budget and lineage go along in the [bounds extension](../spec/extensions/bounds-v1.md).
+  A remote task that waits for input ends the call as `waiting` with code `needs_input` (or `needs_auth`).
+- Limits (`timeoutMs`, `pollMs`, `maxCardBytes`, `cardTtlMs`, `cancelTimeoutMs`) are in [limits](limits.md#a2a-member--memberport).
+
+All options, the state mapping and what is not done are in the
+[adapter README](../adapters/a2a-member/README.md).
+
 ## Write an adapter
 
 An adapter is a package `@agent-plexus/adapter-<name>` with a factory and a descriptor. A router that picks the
@@ -370,7 +409,7 @@ check failed: 2 FAIL, 0 WARN
 |---|---|---|
 | `$.host` | A host adapter backed by real identity, policy and telemetry; the agent-layers adapter | Available: [`agent-layers`](#a-real-host-agent-layers) |
 | `$.ports.execution` | A durable ExecutionPort: `sqlite-execution`, `host-execution` (planned); DBOS, Temporal, Hatchet (candidates) | Planned or candidate |
-| `$.members.<id>` | Members behind `a2a-member` with signed cards or pinned endpoints | Planned |
+| `$.members.<id>` | Members behind `a2a-member` with signed cards (`keys`, `requireSigned`) or pinned endpoints | Available: [`a2a-member`](#call-a-remote-agent) |
 | limits | Set `limits.system.*` explicitly and keep them in the safe range | Implemented |
 
 No execution adapter is tiered for production yet, so the production profile of the offline example fails by

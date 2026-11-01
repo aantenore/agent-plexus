@@ -1,0 +1,52 @@
+{
+  "name": "@agent-plexus/adapter-agent-layers",
+  "version": "0.1.0",
+  "description": "Builds an agent-plexus host from an agent-layers stack, offers a stack as a member and runs a system as a stack's runtime",
+  "keywords": ["agent-plexus", "agent-plexus-adapter", "agent-layers"],
+  "repository": { "type": "git", "url": "git+https://github.com/aantenore/agent-plexus.git", "directory": "adapters/agent-layers" },
+  "license": "MIT",
+  "author": "Antonio Antenore",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "exports": {
+    ".": {
+      "@agent-plexus/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./runtime": {
+      "@agent-plexus/source": "./src/runtime.ts",
+      "types": "./dist/runtime.d.ts",
+      "default": "./dist/runtime.js"
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@agent-layers/core": "^0.2.0"
+  },
+  "peerDependencies": {
+    "@agent-plexus/core": "^0.1.0"
+  },
+  "devDependencies": {
+    "@agent-layers/adapter-basic-runtime": "0.2.0",
+    "@agent-layers/adapter-expected-eval": "0.2.0",
+    "@agent-layers/adapter-memory-approval": "0.2.0",
+    "@agent-layers/adapter-mock-model": "0.2.0",
+    "@agent-layers/adapter-regex-guard": "0.2.0",
+    "@agent-layers/adapter-rules-authorization": "0.2.0",
+    "@agent-layers/adapter-static-identity": "0.2.0",
+    "@agent-plexus/adapter-basic-topology": "0.1.0",
+    "@agent-plexus/adapter-function-member": "0.1.0",
+    "@agent-plexus/adapter-memory-execution": "0.1.0",
+    "@agent-plexus/adapter-rule-attribution": "0.1.0",
+    "@agent-plexus/core": "0.1.0",
+    "@types/node": "^24.19.0",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "spy",
+  "plugins": ["./spy-guard.ts"],
+  "agents": {
+    "helper": { "model": "mock", "instructions": "Answer briefly." }
+  },
+  "layers": {
+    "model": { "adapter": "mock-model" },
+    "runtime": { "adapter": "basic-runtime" },
+    "guardrails": [{ "adapter": "spy-guard" }]
+  }
+}

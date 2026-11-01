@@ -1,0 +1,19 @@
+{
+  "system": { "name": "desk" },
+  "members": {
+    "billing": { "adapter": "function-member", "options": { "module": "./members.ts#echo" } },
+    "admin": { "adapter": "function-member", "options": { "module": "./members.ts#echo" } },
+    "other": { "adapter": "function-member", "options": { "module": "./members.ts#echo" } },
+    "audited": { "adapter": "function-member", "options": { "module": "./members.ts#echo" } },
+    "tokened": { "adapter": "function-member", "options": { "module": "./members.ts#probe", "audience": "https://billing.example" } },
+    "mailer": { "adapter": "function-member", "options": { "module": "./members.ts#mail" } },
+    "leaky": { "adapter": "function-member", "options": { "module": "./members.ts#leak" } },
+    "assistant": { "adapter": "agent-layers", "options": { "config": "./layers.json", "agent": "helper", "description": "Answers briefly" } }
+  },
+  "ports": {
+    "topology": { "adapter": "basic-topology" },
+    "execution": { "adapter": "memory-execution" },
+    "attribution": { "adapter": "rule-attribution" }
+  },
+  "topology": { "kind": "sequence", "steps": ["billing"] }
+}

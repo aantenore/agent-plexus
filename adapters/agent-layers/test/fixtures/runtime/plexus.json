@@ -1,0 +1,75 @@
+{
+  "system": {
+    "name": "desk-system"
+  },
+  "members": {
+    "billing": {
+      "adapter": "function-member",
+      "options": {
+        "module": "../members.ts#echo"
+      }
+    },
+    "admin": {
+      "adapter": "function-member",
+      "options": {
+        "module": "../members.ts#echo"
+      }
+    },
+    "mailer": {
+      "adapter": "function-member",
+      "options": {
+        "module": "../members.ts#mail"
+      }
+    },
+    "tokened": {
+      "adapter": "function-member",
+      "options": {
+        "module": "../members.ts#probe",
+        "audience": "https://billing.example"
+      }
+    }
+  },
+  "ports": {
+    "topology": {
+      "adapter": "basic-topology"
+    },
+    "execution": {
+      "adapter": "memory-execution"
+    },
+    "attribution": {
+      "adapter": "rule-attribution"
+    }
+  },
+  "topology": {
+    "kind": "sequence",
+    "steps": [
+      "billing"
+    ]
+  },
+  "profiles": {
+    "admin": {
+      "topology": {
+        "kind": "sequence",
+        "steps": [
+          "admin"
+        ]
+      }
+    },
+    "mail": {
+      "topology": {
+        "kind": "sequence",
+        "steps": [
+          "mailer"
+        ]
+      }
+    },
+    "token": {
+      "topology": {
+        "kind": "sequence",
+        "steps": [
+          "tokened"
+        ]
+      }
+    }
+  }
+}

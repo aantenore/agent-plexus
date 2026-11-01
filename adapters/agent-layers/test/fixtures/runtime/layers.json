@@ -1,0 +1,110 @@
+{
+  "name": "desk-stack",
+  "plugins": [
+    "@agent-plexus/adapter-agent-layers/runtime"
+  ],
+  "agents": {
+    "desk": {
+      "model": "mock",
+      "instructions": "Hand the request to the desk system."
+    }
+  },
+  "layers": {
+    "runtime": {
+      "adapter": "agent-plexus",
+      "options": {
+        "system": "./plexus.json"
+      }
+    },
+    "authorization": {
+      "adapter": "rules-authorization",
+      "options": {
+        "rules": [
+          {
+            "effect": "allow",
+            "tools": [
+              "billing",
+              "mailer",
+              "tokened"
+            ]
+          }
+        ],
+        "default": "deny"
+      }
+    },
+    "credentials": {
+      "adapter": "static-identity",
+      "options": {
+        "tokens": {
+          "https://billing.example": "tok-billing"
+        }
+      }
+    },
+    "guardrails": [
+      {
+        "adapter": "regex-guard",
+        "name": "pii",
+        "options": {
+          "detect": [
+            "email"
+          ]
+        }
+      }
+    ],
+    "approval": {
+      "adapter": "memory-approval"
+    }
+  },
+  "profiles": {
+    "admin": {
+      "layers": {
+        "runtime": {
+          "options": {
+            "profile": "admin"
+          }
+        }
+      }
+    },
+    "mail": {
+      "layers": {
+        "runtime": {
+          "options": {
+            "profile": "mail"
+          }
+        }
+      }
+    },
+    "token": {
+      "layers": {
+        "runtime": {
+          "options": {
+            "profile": "token"
+          }
+        }
+      }
+    },
+    "broken": {
+      "layers": {
+        "runtime": {
+          "options": {
+            "system": "./nope.json"
+          }
+        }
+      }
+    },
+    "approve": {
+      "layers": {
+        "runtime": {
+          "options": {
+            "approve": [
+              "billing"
+            ],
+            "risk": {
+              "billing": "write"
+            }
+          }
+        }
+      }
+    }
+  }
+}

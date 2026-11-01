@@ -1,0 +1,46 @@
+{
+  "name": "governed",
+  "profile": "prototype",
+  "agents": {
+    "helper": { "model": "mock", "instructions": "Answer briefly." }
+  },
+  "profiles": {
+    "prototype": {
+      "tier": "prototype",
+      "layers": {
+        "model": { "adapter": "mock-model", "options": { "rules": [{ "match": "^ping", "reply": "pong" }] } },
+        "runtime": { "adapter": "basic-runtime" },
+        "identity": {
+          "adapter": "static-identity",
+          "options": { "tokens": { "dev-token": { "subject": "alice", "roles": ["staff"] } } }
+        },
+        "credentials": {
+          "adapter": "static-identity",
+          "options": { "tokens": { "https://billing.example": "tok-billing" } }
+        },
+        "authorization": {
+          "adapter": "rules-authorization",
+          "options": {
+            "rules": [
+              { "effect": "deny", "tools": ["admin"] },
+              { "effect": "allow", "tools": ["billing", "audited", "tokened", "mailer", "leaky", "assistant"] }
+            ],
+            "default": "deny"
+          }
+        },
+        "approval": { "adapter": "memory-approval" },
+        "guardrails": [
+          { "adapter": "regex-guard", "name": "pii" },
+          { "adapter": "regex-guard", "name": "no-send", "options": { "detect": ["email"], "stages": ["tool_args"], "custom": [{ "name": "nosend", "pattern": "NOSEND", "action": "block" }] } },
+          { "adapter": "regex-guard", "name": "no-receive", "options": { "detect": ["email"], "stages": ["tool_result"], "custom": [{ "name": "noreceive", "pattern": "NORECEIVE", "action": "block" }] } }
+        ],
+        "eval": [{ "adapter": "expected-eval", "options": { "mode": "equals" } }]
+      }
+    },
+    "production": {
+      "extends": "prototype",
+      "tier": "production",
+      "layers": { "authorization": null }
+    }
+  }
+}

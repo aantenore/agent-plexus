@@ -1,0 +1,71 @@
+{
+  "system": { "name": "support" },
+  "members": {
+    "triage": {
+      "adapter": "function-member",
+      "options": { "module": "./members/triage.ts#answer", "description": "First line of support: restates the request" }
+    },
+    "billing": {
+      "adapter": "function-member",
+      "options": { "module": "./members/billing.ts#answer", "description": "Answers invoice, refund and charge questions" }
+    },
+    "manuals": {
+      "adapter": "function-member",
+      "options": { "module": "./members/manuals.ts#answer", "description": "Answers product questions" }
+    }
+  },
+  "ports": {
+    "registry": {
+      "adapter": "static-registry",
+      "options": { "entries": { "billing": { "tags": ["billing"] }, "manuals": { "tags": ["product"] } } }
+    },
+    "router": {
+      "adapter": "skill-router",
+      "options": {
+        "rules": [
+          { "member": "billing", "matches": "(?i)invoice|refund|charge" },
+          { "member": "manuals", "matches": "(?i)manual|setup|product" }
+        ]
+      }
+    },
+    "topology": { "adapter": "basic-topology" },
+    "execution": { "adapter": "memory-execution" },
+    "attribution": { "adapter": "rule-attribution" }
+  },
+  "topology": {
+    "kind": "sequence",
+    "steps": ["triage", { "kind": "route", "candidates": ["billing", "manuals"], "fallback": "triage" }]
+  },
+  "limits": { "system": { "maxSteps": 10 } },
+  "profiles": {
+    "swap-registry": { "ports": { "registry": { "adapter": "./adapters/file-registry.ts" } } },
+    "swap-routing": { "ports": { "router": { "adapter": "./adapters/keyword-router.ts" } } },
+    "swap-topology": { "ports": { "topology": { "adapter": "./adapters/linear-topology.ts" } } },
+    "swap-execution": { "ports": { "execution": { "adapter": "./adapters/file-execution.ts" } } },
+    "swap-attribution": { "ports": { "attribution": { "adapter": "./adapters/last-failure-attribution.ts" } } },
+    "swap-member": { "members": { "billing": { "options": { "module": "./members/billing-v2.ts#answer" } } } },
+    "swap-member-agent-layers": {
+      "members": {
+        "billing": {
+          "adapter": "agent-layers",
+          "options": { "config": "./agent-layers/billing.json", "agent": "billing", "description": "Answers invoice, refund and charge questions" }
+        }
+      }
+    },
+    "swap-host": { "host": { "adapter": "agent-layers", "options": { "config": "./agent-layers/host.json" } } },
+    "swap-all": {
+      "members": { "billing": { "options": { "module": "./members/billing-v2.ts#answer" } } },
+      "ports": {
+        "registry": { "adapter": "./adapters/file-registry.ts" },
+        "router": { "adapter": "./adapters/keyword-router.ts" },
+        "topology": { "adapter": "./adapters/linear-topology.ts" },
+        "execution": { "adapter": "./adapters/file-execution.ts" },
+        "attribution": { "adapter": "./adapters/last-failure-attribution.ts" }
+      }
+    },
+    "unsupported-kind": {
+      "ports": { "topology": { "adapter": "./adapters/linear-topology.ts" } },
+      "topology": { "kind": "loop", "body": "triage", "until": { "matches": "done" }, "maxIterations": 2 }
+    }
+  }
+}

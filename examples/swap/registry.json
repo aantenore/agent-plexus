@@ -1,0 +1,14 @@
+{
+  "agents": [
+    {
+      "id": "billing",
+      "description": "Answers invoice, refund and charge questions",
+      "skills": [{ "id": "payments", "name": "Payments", "description": "Invoices, refunds and charges", "tags": ["billing", "payment"] }]
+    },
+    {
+      "id": "manuals",
+      "description": "Answers product questions",
+      "skills": [{ "id": "guides", "name": "Guides", "description": "Product manuals and setup", "tags": ["product", "manual", "setup"] }]
+    }
+  ]
+}

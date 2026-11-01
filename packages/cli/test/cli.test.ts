@@ -3,6 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import type { SystemResult } from '@agent-plexus/core';
+import { publicResult } from '../src/format.ts';
 import { main } from '../src/main.ts';
 import { captureIo, CASES, CONFIG, EXAMPLE } from './helpers.ts';
 
@@ -38,6 +40,23 @@ test('run --json prints the result with keys in the record, never texts', async 
   assert.match(result.output, /^Billing:/);
   assert.deepEqual(result.record.map((h: { member: string }) => h.member), ['triage', 'billing']);
   assert.ok(result.record.every((h: Record<string, unknown>) => !('input' in h) && !('text' in h) && !('output' in h)));
+});
+
+test('publicResult strips reason.detail from the result and from every record entry', () => {
+  const hop = { hopId: 'h', node: 'root', rootRunId: 'r', hops: 1, startedAt: '', durationMs: 1 };
+  const result: SystemResult = {
+    status: 'stopped', output: '', runId: 'r', reason: { code: 'denied', layer: 'host', by: 'x', detail: 'secret rule' },
+    record: [
+      { ...hop, hopId: 'a', member: 'triage', status: 'completed' },
+      { ...hop, hopId: 'b', member: 'billing', status: 'stopped', reason: { code: 'guard_block', layer: 'host', stage: 'send', detail: 'secret match' } },
+    ],
+  };
+  const printed = publicResult(result);
+  assert.deepEqual(printed.reason, { code: 'denied', layer: 'host', by: 'x' });
+  assert.deepEqual(printed.record[1]?.reason, { code: 'guard_block', layer: 'host', stage: 'send' });
+  assert.equal(printed.record[0]?.reason, undefined);
+  assert.doesNotMatch(JSON.stringify(printed), /secret/);
+  assert.equal(result.record[1]?.reason?.detail, 'secret match');
 });
 
 test('a run that does not complete exits 1 and names the stop code', async () => {

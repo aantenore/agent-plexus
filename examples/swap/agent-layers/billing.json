@@ -1,0 +1,22 @@
+{
+  "name": "swap-billing",
+  "agents": {
+    "billing": { "model": "mock", "instructions": "Answer invoice, refund and charge questions." }
+  },
+  "layers": {
+    "model": {
+      "adapter": "mock-model",
+      "options": {
+        "rules": [
+          { "match": "refund", "reply": "Billing: refunds are issued to the original payment method within 5 business days." },
+          { "match": "charge", "reply": "Billing: a charge appears on your statement within 2 business days; disputes are open for 60 days." },
+          { "match": "[\\s\\S]", "reply": "Billing: invoices are issued on the first day of the month and can be downloaded from the billing page." }
+        ]
+      }
+    },
+    "runtime": { "adapter": "basic-runtime" },
+    "guardrails": [
+      { "adapter": "regex-guard", "options": { "detect": [], "stages": ["input"], "custom": [{ "name": "crash", "pattern": "crash", "flags": "i", "action": "block" }] } }
+    ]
+  }
+}

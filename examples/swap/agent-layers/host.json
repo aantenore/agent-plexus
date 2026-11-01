@@ -1,0 +1,22 @@
+{
+  "name": "swap-host",
+  "agents": {
+    "support": { "model": "mock", "instructions": "Not used: the host only governs the member calls of the support system." }
+  },
+  "layers": {
+    "model": { "adapter": "mock-model" },
+    "runtime": { "adapter": "basic-runtime" },
+    "identity": {
+      "adapter": "static-identity",
+      "options": { "tokens": { "dev-token": { "subject": "support-desk", "roles": ["staff"] } } }
+    },
+    "authorization": {
+      "adapter": "rules-authorization",
+      "options": { "rules": [{ "effect": "allow", "tools": ["triage", "billing", "manuals"] }], "default": "deny" }
+    },
+    "guardrails": [
+      { "adapter": "regex-guard", "options": { "detect": ["email", "card", "apiKey", "injection"], "stages": ["tool_args"] } }
+    ],
+    "eval": [{ "adapter": "expected-eval", "options": { "mode": "contains" } }]
+  }
+}

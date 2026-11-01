@@ -8,11 +8,19 @@ export const hopLine = (hop: HopRecord): string =>
 export const resultText = (result: SystemResult): string =>
   result.status === 'completed' ? result.output : `[${result.status}] ${[result.reason?.code, result.reason?.layer].filter(Boolean).join(' ')}`.trim();
 
-/** A result safe to print as JSON: the reason's internal detail is left out. */
+/** A reason without its internal detail. */
+const withoutDetail = <T extends { detail?: string }>(reason: T): Omit<T, 'detail'> => {
+  const { detail: _detail, ...rest } = reason;
+  return rest;
+};
+
+/** A result safe to print as JSON: the internal detail of its reason and of every hop's reason is left out. */
 export function publicResult(result: SystemResult): SystemResult {
-  if (!result.reason || result.reason.detail === undefined) return result;
-  const { detail: _detail, ...reason } = result.reason;
-  return { ...result, reason };
+  return {
+    ...result,
+    ...(result.reason ? { reason: withoutDetail(result.reason) } : {}),
+    record: result.record.map((hop) => (hop.reason ? { ...hop, reason: withoutDetail(hop.reason) } : hop)),
+  };
 }
 
 /** `<layer> <member?> <memberLayer?> <confidence> <evidence>` */

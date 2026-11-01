@@ -1,0 +1,33 @@
+{
+  "name": "@agent-plexus/adapter-memory-execution",
+  "version": "0.1.0",
+  "description": "In-memory execution journal for agent-plexus prototypes",
+  "keywords": ["agent-plexus", "agent-plexus-adapter"],
+  "repository": { "type": "git", "url": "git+https://github.com/aantenore/agent-plexus.git", "directory": "adapters/memory-execution" },
+  "license": "MIT",
+  "author": "Antonio Antenore",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "exports": {
+    ".": {
+      "@agent-plexus/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\""
+  },
+  "peerDependencies": {
+    "@agent-plexus/core": "^0.1.0"
+  },
+  "devDependencies": {
+    "@agent-plexus/core": "0.1.0",
+    "@types/node": "^24.19.0",
+    "typescript": "^7.0.2"
+  }
+}

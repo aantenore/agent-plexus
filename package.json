@@ -1,0 +1,24 @@
+{
+  "name": "agent-plexus",
+  "private": true,
+  "type": "module",
+  "description": "Composes agents into multi-agent systems: members, registry, routing, topology, execution and attribution",
+  "license": "MIT",
+  "author": "Antonio Antenore",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "workspaces": [
+    "packages/*",
+    "adapters/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:packages": "npm test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "typescript": "^7.0.2"
+  }
+}

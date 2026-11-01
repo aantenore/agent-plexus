@@ -176,8 +176,9 @@ zero-dependency reference for each.
 
 ### L0 Members (`member`) · MemberPort
 
-Who does the work, and how is it called? `invoke(entry, input, ctx) → MemberResult`; optional `resume(entry,
-taskRef, input, ctx)`, `cancel(entry, taskRef, ctx)`. A remote call is two journal steps (store `taskRef`, then wait
+Who does the work, and how is it called? One instance per configured member: `describe() → AgentEntry`,
+`invoke(input, ctx) → MemberResult`; optional `resume(taskRef, input, ctx)`, `cancel(taskRef, ctx)`. `ctx` is the run
+context plus the hop id, the credential from the host's gate and the outbound bounds. A remote call is two journal steps (store `taskRef`, then wait
 for the end), so a restart resumes instead of sending again; on deadline or cancel the adapter cancels the remote
 task.
 
@@ -212,8 +213,11 @@ which picks a model.
 
 ### L3 Topology (`topology`) · TopologyPort
 
-In what order and shape does work flow between agents? `bind(system, spec) → RunnableSystem`; `run(input, ctx) →
-SystemResult`, optional `stream`. The adapter reaches members only through `memberCall`.
+In what order and shape does work flow between agents? `bind(spec, info) → BoundTopology`; `run(input, scope) →
+MemberResult`. The core gives the adapter a `RunScope` per run: `call` (the `memberCall` pipeline, the only way to a
+member), `route` (the AgentRouterPort over registry candidates), `matches` (evaluates a `Condition`), `abandon` (marks
+the hops of cancelled branches) and the topology limits. The core wraps the result into a `SystemResult` with the hop
+record. An adapter declares the `kinds` it runs; `check` refuses a topology that uses others.
 
 | Implementation | License | Notes |
 |---|---|---|
@@ -222,8 +226,9 @@ SystemResult`, optional `stream`. The adapter reaches members only through `memb
 
 ### L4 Execution (`execution`) · ExecutionPort
 
-Does a long run survive a restart, and wait for a person? `begin(runKey)`, `step(name, fn)` (runs once, replays on
-resume), `wait(name, until)`, `signal(runKey, name, value)`, `end()`. The budget ledger of a run is kept in its
+Does a long run survive a restart, and wait for a person? `begin(runKey) → Execution` with `step(name, fn)` (runs
+once, replays on resume), `wait(name, untilAt)`, `put(text) → key` (texts the hop records reference), `end(status)`;
+on the port, `signal(runKey, name, value)` and `read(key)`. The budget ledger of a run is kept in its
 journal, so it resumes with the run. A run waiting for a person returns `waiting`; the journal keeps which member,
 `taskRef` and context asked.
 
@@ -244,6 +249,19 @@ When the system fails, which agent and which layer caused it? `attribute(record,
 | `rule-attribution` (reference) | MIT | Deterministic; rules below. |
 | `judge-attribution` | MIT | A model reads the record (all at once, or binary search over hops, as in Who&When); agent level only. |
 | `replay-attribution` | MIT | Offline counterfactual replay: one member's output replaced, or one member swapped (as in AgenTracer). |
+
+Records come from a `RecordSource`, an interface inside this layer, not a port of its own: `records(rootRunId) →
+[HopRecord]` plus, when available, the member's own spans for a hop (`spans(hopId) → [{name, layer?, status,
+attrs}]`). The journal is enough for the hops agent-plexus makes itself; the spans tell where inside a remote member
+it failed (an agent-layers stack tags each span with `agent.layer`, a nested system with `plexus.layer`), joined
+through the trace context the telemetry hook propagates.
+
+| RecordSource | License | Notes |
+|---|---|---|
+| `journal` (reference) | MIT | Hop records from the ExecutionPort journal; no member spans. |
+| `jsonl` | MIT | Records and spans from files written by a JSONL telemetry (agent-layers `jsonl-telemetry`). |
+| Langfuse | MIT core (`ee/` not used) | Candidate: traces by trace id through its public API. |
+| Jaeger | Apache-2.0 | Candidate: traces by trace id through its query API. |
 
 Rules of `rule-attribution`, branching on `code` only:
 

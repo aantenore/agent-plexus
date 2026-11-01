@@ -1,0 +1,29 @@
+{
+  "name": "@agent-plexus/core",
+  "version": "0.1.0",
+  "description": "Ports, host hooks, the memberCall pipeline and system config for agent-plexus",
+  "keywords": ["agent-plexus", "agents", "multi-agent", "ports-and-adapters", "orchestration"],
+  "repository": { "type": "git", "url": "git+https://github.com/aantenore/agent-plexus.git", "directory": "packages/core" },
+  "license": "MIT",
+  "author": "Antonio Antenore",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "exports": {
+    ".": {
+      "@agent-plexus/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "typescript": "^7.0.2"
+  }
+}

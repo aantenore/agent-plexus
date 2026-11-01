@@ -6,4 +6,4 @@ NNNN · Date · Decided by`, sections Context, Decision, Consequences; an accept
 
 | # | Decision | Status | Date |
 |---|---|---|---|
-| [0001](0001-build-on-agent-layers.md) | Members are agent stacks, member calls are governed tool calls of a host stack, five own ports | Proposed | 2026-11-01 |
+| [0001](0001-own-ports-agent-layers-as-adapter.md) | Ten own layers and ports, a core with no dependencies, agent-layers as one adapter | Proposed | 2026-11-01 |

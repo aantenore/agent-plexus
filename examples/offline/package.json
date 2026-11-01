@@ -1,0 +1,25 @@
+{
+  "name": "@agent-plexus/example-offline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A support system of function members, runnable offline",
+  "license": "MIT",
+  "author": "Antonio Antenore",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@agent-plexus/adapter-basic-topology": "0.1.0",
+    "@agent-plexus/adapter-function-member": "0.1.0",
+    "@agent-plexus/adapter-memory-execution": "0.1.0",
+    "@agent-plexus/adapter-rule-attribution": "0.1.0",
+    "@agent-plexus/adapter-skill-router": "0.1.0",
+    "@agent-plexus/adapter-static-registry": "0.1.0",
+    "@agent-plexus/core": "0.1.0",
+    "@types/node": "^24.19.0",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "id": "billing-refund",
+    "input": "I need a refund for my last invoice",
+    "expected": {
+      "output": { "contains": "refunds are issued" },
+      "members": { "billing": { "status": "completed" } }
+    }
+  },
+  {
+    "id": "product-setup",
+    "input": "How do I do the product setup?",
+    "expected": {
+      "output": { "contains": "connect the power cable" },
+      "members": { "manuals": { "status": "completed" } }
+    }
+  },
+  {
+    "id": "billing-crash",
+    "input": "My invoice page will crash when I ask for a refund",
+    "expected": {
+      "output": { "contains": "Billing:" },
+      "members": { "billing": { "status": "completed" } }
+    }
+  }
+]

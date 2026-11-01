@@ -1,0 +1,44 @@
+{
+  "system": { "name": "support" },
+  "members": {
+    "triage": {
+      "adapter": "function-member",
+      "options": { "module": "./members/triage.ts#answer", "description": "First line of support: restates the request" }
+    },
+    "billing": {
+      "adapter": "function-member",
+      "options": { "module": "./members/billing.ts#answer", "description": "Answers invoice, refund and charge questions" }
+    },
+    "manuals": {
+      "adapter": "function-member",
+      "options": { "module": "./members/manuals.ts#answer", "description": "Answers product questions" }
+    }
+  },
+  "ports": {
+    "registry": {
+      "adapter": "static-registry",
+      "options": { "entries": { "billing": { "tags": ["billing"] }, "manuals": { "tags": ["product"] } } }
+    },
+    "router": {
+      "adapter": "skill-router",
+      "options": {
+        "rules": [
+          { "member": "billing", "matches": "(?i)invoice|refund|charge" },
+          { "member": "manuals", "matches": "(?i)manual|setup|product" }
+        ]
+      }
+    },
+    "topology": { "adapter": "basic-topology" },
+    "execution": { "adapter": "memory-execution" },
+    "attribution": { "adapter": "rule-attribution" }
+  },
+  "topology": {
+    "kind": "sequence",
+    "steps": ["triage", { "kind": "route", "candidates": ["billing", "manuals"], "fallback": "triage" }]
+  },
+  "limits": { "system": { "maxSteps": 10 } },
+  "profiles": {
+    "prototype": { "host": null },
+    "production": { "tier": "production" }
+  }
+}

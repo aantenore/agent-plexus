@@ -1,0 +1,34 @@
+{
+  "name": "@agent-plexus/cli",
+  "version": "0.1.0",
+  "description": "agent-plexus command line: check, run, dev, eval",
+  "keywords": ["agent-plexus", "cli", "agents", "multi-agent"],
+  "repository": { "type": "git", "url": "git+https://github.com/aantenore/agent-plexus.git", "directory": "packages/cli" },
+  "license": "MIT",
+  "author": "Antonio Antenore",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "bin": {
+    "agent-plexus": "src/cli.ts"
+  },
+  "exports": {
+    ".": {
+      "@agent-plexus/source": "./src/main.ts",
+      "types": "./dist/main.d.ts",
+      "default": "./dist/main.js"
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@agent-plexus/core": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "typescript": "^7.0.2"
+  }
+}

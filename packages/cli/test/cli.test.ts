@@ -1,0 +1,168 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { main } from '../src/main.ts';
+import { captureIo, CASES, CONFIG, EXAMPLE } from './helpers.ts';
+
+/** The example config with member modules made absolute, so it can live in another folder. */
+async function variant(dir: string, change: (config: any) => void): Promise<string> {
+  const config = JSON.parse(await readFile(CONFIG, 'utf8'));
+  for (const member of Object.values<any>(config.members)) member.options.module = join(EXAMPLE, member.options.module);
+  change(config);
+  const file = join(dir, 'plexus.json');
+  await writeFile(file, JSON.stringify(config));
+  return file;
+}
+
+test('run prints the output on stdout and one line per hop on stderr', async () => {
+  const c = captureIo();
+  assert.equal(await main(['run', '--config', CONFIG, 'I need a refund for my invoice'], c.io), 0, c.err());
+  assert.match(c.out(), /^Billing: refunds are issued/);
+  assert.match(c.err(), /^triage completed \d+ms\nbilling completed \d+ms$/);
+});
+
+test('run joins unquoted words, and --quiet drops the hop lines', async () => {
+  const c = captureIo();
+  assert.equal(await main(['run', '--quiet', 'how', 'do', 'I', 'do', 'the', 'product', 'setup'], c.io), 0, c.err());
+  assert.match(c.out(), /^Manuals: to set up the product/);
+  assert.equal(c.err(), '');
+});
+
+test('run --json prints the result with keys in the record, never texts', async () => {
+  const c = captureIo();
+  assert.equal(await main(['run', '--json', 'refund my invoice'], c.io), 0, c.err());
+  const result = JSON.parse(c.out());
+  assert.equal(result.status, 'completed');
+  assert.match(result.output, /^Billing:/);
+  assert.deepEqual(result.record.map((h: { member: string }) => h.member), ['triage', 'billing']);
+  assert.ok(result.record.every((h: Record<string, unknown>) => !('input' in h) && !('text' in h) && !('output' in h)));
+});
+
+test('a run that does not complete exits 1 and names the stop code', async () => {
+  const c = captureIo();
+  assert.equal(await main(['run', 'invoice crash'], c.io), 1);
+  assert.equal(c.out(), '[stopped] error');
+  assert.match(c.err(), /billing stopped error \d+ms/);
+});
+
+test('check passes for the base config and for the prototype profile', async () => {
+  for (const args of [['check'], ['check', '--profile', 'prototype']]) {
+    const c = captureIo();
+    assert.equal(await main(args, c.io), 0, c.out());
+    assert.match(c.out(), /tier prototype\ncheck passed$/);
+  }
+});
+
+test('check --profile production fails on the prototype host and adapter, without a stack trace', async () => {
+  const c = captureIo();
+  assert.equal(await main(['check', '--profile', 'production'], c.io), 1);
+  assert.match(c.out(), /FAIL \$\.host: host "prototype" is a prototype host/);
+  assert.match(c.out(), /FAIL \$\.ports\.execution: adapter "memory-execution" is prototype-only/);
+  assert.match(c.out(), /check failed: 2 FAIL, 0 WARN$/);
+  assert.equal(c.err(), '');
+  assert.doesNotMatch(c.out(), /\bat .*\.ts:\d+/);
+});
+
+test('check reports an unreadable config, an unknown profile and an unloadable adapter as FAIL', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-cli-'));
+  try {
+    const missing = captureIo(dir);
+    assert.equal(await main(['check'], missing.io), 1);
+    assert.match(missing.out(), /FAIL .*plexus\.json: cannot read as JSON/);
+
+    const unknown = captureIo();
+    assert.equal(await main(['check', '--profile', 'nope'], unknown.io), 1);
+    assert.match(unknown.out(), /FAIL \$\.profiles\.nope: not defined/);
+
+    await variant(dir, (config) => { config.ports.registry.adapter = 'does-not-exist'; });
+    const adapter = captureIo(dir);
+    assert.equal(await main(['check'], adapter.io), 1);
+    assert.match(adapter.out(), /FAIL \$\.ports\.registry: adapter "does-not-exist" is not installed/);
+    assert.equal(adapter.err(), '');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('check reports an invalid topology as FAIL', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-cli-'));
+  try {
+    const file = await variant(dir, (config) => { config.topology = { kind: 'sequence', steps: ['triage', 'ghost'] }; });
+    const c = captureIo(dir);
+    assert.equal(await main(['check', '--config', file], c.io), 1);
+    assert.match(c.out(), /FAIL \$\.topology: .*ghost/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('eval passes two cases, fails and attributes the crash, and exits 1', async () => {
+  const c = captureIo();
+  assert.equal(await main(['eval', CASES], c.io), 1, c.err());
+  assert.match(c.out(), /^PASS billing-refund$/m);
+  assert.match(c.out(), /^PASS product-setup$/m);
+  assert.match(c.out(), /^FAIL billing-crash$/m);
+  assert.match(c.out(), /^ {2}attribution member billing 0\.60 code:error/m);
+  assert.match(c.out(), /eval: 2 passed, 1 failed$/);
+});
+
+test('eval --json is machine output', async () => {
+  const c = captureIo();
+  assert.equal(await main(['eval', '--json', CASES], c.io), 1);
+  const report = JSON.parse(c.out());
+  assert.equal(report.passed, 2);
+  assert.equal(report.failed, 1);
+  const crash = report.cases.find((x: { id: string }) => x.id === 'billing-crash');
+  assert.equal(crash.passed, false);
+  assert.equal(crash.status, 'stopped');
+  assert.equal(crash.attributions[0].layer, 'member');
+  assert.equal(crash.attributions[0].member, 'billing');
+  assert.deepEqual(report.cases.filter((x: { passed: boolean }) => x.passed).map((x: { attributions: unknown[] }) => x.attributions), [[], []]);
+});
+
+test('eval exits 0 when every case passes, and rejects a malformed cases file', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-cli-'));
+  try {
+    await writeFile(join(dir, 'ok.json'), JSON.stringify([{ id: 'plain', input: 'refund my invoice' }]));
+    const ok = captureIo();
+    assert.equal(await main(['eval', join(dir, 'ok.json')], ok.io), 0, ok.out());
+    assert.match(ok.out(), /eval: 1 passed, 0 failed$/);
+
+    await writeFile(join(dir, 'bad.json'), JSON.stringify({ id: 'x' }));
+    const bad = captureIo();
+    assert.equal(await main(['eval', join(dir, 'bad.json')], bad.io), 1);
+    assert.match(bad.err(), /expected an array of cases/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('dev runs each line and stops at /exit', async () => {
+  const c = captureIo(undefined, 'refund my invoice\n\nhow do I do the product setup\n/exit\nignored\n');
+  assert.equal(await main(['dev'], c.io), 0, c.err());
+  assert.deepEqual(c.out().split('\n').map((l) => l.split(':')[0]), ['Billing', 'Manuals']);
+  assert.match(c.err(), /^system support .*\/exit to quit\.\ntriage completed/);
+  assert.equal(c.err().match(/^billing completed/gm)?.length, 1);
+  assert.equal(c.err().match(/^manuals completed/gm)?.length, 1);
+});
+
+test('--help per command exits 0; wrong usage and unknown commands exit 2', async () => {
+  for (const name of ['check', 'run', 'dev', 'eval']) {
+    const c = captureIo();
+    assert.equal(await main([name, '--help'], c.io), 0);
+    assert.match(c.out(), new RegExp(`^agent-plexus ${name}`));
+  }
+  const noText = captureIo();
+  assert.equal(await main(['run'], noText.io), 2);
+  assert.match(noText.err(), /expected <text>\nusage: agent-plexus run/);
+  const badFlag = captureIo();
+  assert.equal(await main(['check', '--json'], badFlag.io), 2);
+  const unknown = captureIo();
+  assert.equal(await main(['frobnicate'], unknown.io), 2);
+  assert.match(unknown.err(), /unknown command "frobnicate"[\s\S]*agent-plexus <command>/);
+  const none = captureIo();
+  assert.equal(await main([], none.io), 0);
+  assert.match(none.out(), /^agent-plexus <command>/);
+});

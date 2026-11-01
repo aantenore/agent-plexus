@@ -16,6 +16,15 @@ function reachable(start: string, edges: { from: string; to: string }[]): Set<st
   return seen;
 }
 
+/** Nodes whose kind is known but not run by the topology adapter. */
+export function unsupportedKinds(spec: TopologyNode, supportedKinds: readonly TopologyKind[]): { path: string; kind: TopologyKind }[] {
+  const out: { path: string; kind: TopologyKind }[] = [];
+  walkTopology(spec, (node, path) => {
+    if (typeof node !== 'string' && KNOWN_KINDS.includes(node.kind) && !supportedKinds.includes(node.kind)) out.push({ path, kind: node.kind });
+  });
+  return out;
+}
+
 /**
  * Structural problems of a topology against the configured members and routers and the kinds the topology adapter
  * runs: unknown members and routers, unsupported kinds, graph nodes that do not exist, an end no edge leads to.

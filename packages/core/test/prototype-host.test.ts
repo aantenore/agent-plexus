@@ -11,9 +11,9 @@ const result = (output: string, record: HopRecord[] = []): SystemResult => ({ st
 test('the gate allows everything, gives no token and checks nothing', async () => {
   const h = prototypeHost({ quiet: true });
   assert.equal(h.tier, 'prototype');
-  assert.equal((await h.gate.allow({ action: 'invoke', member: {} as never })).effect, 'allow');
+  assert.equal((await h.gate.allow({ runId: 'r', action: 'invoke', member: {} as never })).effect, 'allow');
   assert.equal(await h.gate.token(undefined, 'aud'), undefined);
-  assert.equal((await h.gate.check({ stage: 'send', text: 'x', member: {} as never })).action, 'allow');
+  assert.equal((await h.gate.check({ runId: 'r', stage: 'send', text: 'x', member: {} as never })).action, 'allow');
 });
 
 test('one line per hop span end; other spans and quiet mode write nothing', async () => {

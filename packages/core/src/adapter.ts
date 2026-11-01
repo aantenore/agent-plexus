@@ -44,6 +44,8 @@ export interface JsonSchema {
 }
 
 export interface AdapterContext {
+  /** Name of the system being assembled. */
+  system: string;
   /** Instance name: the member id for members, the port key otherwise. */
   name: string;
   /** Directory of the system config; relative paths in options resolve against it. */

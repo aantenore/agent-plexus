@@ -20,8 +20,8 @@ import { DEFAULT_ROUTER } from './topology-check.ts';
 import { limitNumber, type Env } from './system-limits.ts';
 import { errorMessage, withoutCredential } from './util.ts';
 
-/** Past runs kept in memory for attribution. */
-const HISTORY_RUNS = 100;
+/** Longest run id a caller may provide. */
+const MAX_RUN_ID = 128;
 
 export interface AssembleOptions {
   /** Overrides the config's host; without either, the prototype host. */
@@ -39,6 +39,10 @@ export interface AssembleOptions {
 export interface System {
   name: string;
   tier: Tier;
+  /**
+   * Runs the topology once. `ctx.runId` is used when the caller provides one (a non-empty string of at most 128
+   * characters; anything else is replaced by a generated id). The caller is responsible for its uniqueness.
+   */
   run(input: RunInput, ctx?: Partial<RunContext>): Promise<SystemResult>;
   entries(): Promise<AgentEntry[]>;
   attribute(result: SystemResult, scores?: Score[]): Promise<Attribution[]>;
@@ -68,7 +72,7 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
 
   let execution: ExecutionPort | undefined;
   const host: Host = opts.host
-    ?? (config.host ? await create('Host', config.host, { name: 'host', cwd, env, telemetry: noopTelemetry }, '$.host') : prototypeHost({ ...(opts.quiet ? { quiet: true } : {}), read: async (key) => execution?.read?.(key) }));
+    ?? (config.host ? await create('Host', config.host, { system: config.name, name: 'host', cwd, env, telemetry: noopTelemetry }, '$.host') : prototypeHost({ ...(opts.quiet ? { quiet: true } : {}), read: async (key) => execution?.read?.(key) }));
 
   const entryCache = new Map<string, Promise<AgentEntry>>();
   const members = new Map<string, MemberPort>();
@@ -82,7 +86,7 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
     return cached;
   };
   const entries = () => Promise.all([...members.keys()].map(entry));
-  const context = (name: string): AdapterContext => ({ name, cwd, env, telemetry: host.telemetry, members: entries });
+  const context = (name: string): AdapterContext => ({ system: config.name, name, cwd, env, telemetry: host.telemetry, members: entries });
 
   for (const [id, ref] of Object.entries(config.members)) members.set(id, await create('MemberPort', ref, context(id), `$.members.${id}`));
   const registry: RegistryPort | undefined = config.ports.registry ? await create('RegistryPort', config.ports.registry, context('registry'), '$.ports.registry') : undefined;
@@ -189,7 +193,7 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
     try { await run.end(result.status); } catch { /* the result stands */ }
     const records = [...state.records].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
     history.push({ rootRunId, record: records });
-    if (history.length > HISTORY_RUNS) history.shift();
+    if (history.length > limitNumber(limits.historyRuns)) history.shift();
     return record(result, records);
   }
 
@@ -197,7 +201,7 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
     name: config.name,
     tier: config.tier,
     run(input, partial = {}) {
-      const runId = randomUUID();
+      const runId = typeof partial.runId === 'string' && partial.runId.length > 0 && partial.runId.length <= MAX_RUN_ID ? partial.runId : randomUUID();
       const ctx: RunContext = { ...partial, runId, system: config.name };
       return host.telemetry.span(SPAN.run, { [ATTR.layer]: 'topology', [ATTR.system]: config.name }, async (span) => {
         const result = await execute(input, ctx, partial.lineage?.rootRunId ?? runId);
@@ -222,9 +226,15 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
           problems.push({ severity: 'fail', path: `$.members.${id}`, message: `member cannot describe itself: ${errorMessage(err)}` });
         }
       }
+      let registryIds: string[] | undefined;
+      let registryError: string | undefined;
+      if (registry) {
+        try { registryIds = (await registry.list()).map((e) => e.id); } catch (err) { registryError = errorMessage(err); }
+      }
       const findings = readinessFindings({
         config, host, adapters: used, entries: described,
-        topologyKinds: topology.kinds, routers: [...routers.keys()], ...(bindError ? { bindError } : {}),
+        topologyKinds: topology.kinds, routers: [...routers.keys()],
+        ...(registryIds ? { registryIds } : {}), ...(registryError ? { registryError } : {}), ...(bindError ? { bindError } : {}),
       });
       return [...findings, ...problems];
     },

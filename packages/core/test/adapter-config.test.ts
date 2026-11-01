@@ -18,7 +18,7 @@ const descriptor = defineAdapter({
   optionsSchema: { type: 'object', properties: { maxRuns: {}, tools: {} } },
   create: () => ({ name: 'lim', begin: async () => { throw new Error('unused'); }, signal: async () => {} }),
 });
-const ctx = (env: Record<string, string> = {}) => ({ name: 'e', cwd: '.', env, telemetry: prototypeHost().telemetry });
+const ctx = (env: Record<string, string> = {}) => ({ system: 'sys', name: 'e', cwd: '.', env, telemetry: prototypeHost().telemetry });
 const load = async () => descriptor as never;
 
 test('interpolate: whole and embedded references, recursively, with the path of a missing variable', () => {

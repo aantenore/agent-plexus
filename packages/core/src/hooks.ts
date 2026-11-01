@@ -6,6 +6,9 @@
 import type { AgentEntry, Caller, EvalCase, Score, SystemResult } from './shapes.ts';
 
 export interface GateQuestion {
+  /** The system run the call belongs to. */
+  runId: string;
+  sessionId?: string;
   caller?: Caller;
   action: 'invoke';
   member: AgentEntry;
@@ -21,6 +24,9 @@ export interface GateCheck {
   stage: 'send' | 'receive';
   text: string;
   member: AgentEntry;
+  /** The system run the call belongs to. */
+  runId: string;
+  sessionId?: string;
   caller?: Caller;
 }
 

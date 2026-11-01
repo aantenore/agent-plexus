@@ -10,8 +10,6 @@ import {
 import { limitNumber, type SystemLimits } from './system-limits.ts';
 import { errorMessage, withoutCredential } from './util.ts';
 
-/** Least time worth starting a member call with. */
-const MIN_REMAINING_MS = 1000;
 /** Largest delay `setTimeout` accepts. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
@@ -65,7 +63,7 @@ function roundTrips(recent: readonly string[], next: string): number {
 function checkBounds(env: MemberCallEnv, run: RunState, member: string, options: CallOptions, now: number): MemberResult | undefined {
   const { bounds } = run.ledger;
   if (run.ctx.signal?.aborted || options.signal?.aborted) return stop('aborted');
-  if (deadlineMs(bounds) - now < MIN_REMAINING_MS) return stop('timeout', 'topology');
+  if (deadlineMs(bounds) - now < limitNumber(env.limits.minRemainingMs)) return stop('timeout', 'topology');
   if (bounds.hops + 1 > bounds.maxHops) return stop('hop_limit', 'topology');
   if (run.steps >= limitNumber(env.limits.maxSteps)) return stop('limit', 'topology', 'limits.system.maxSteps');
   if (roundTrips(run.recent, member) > limitNumber(env.limits.maxRepeats)) return stop('limit', 'topology', 'limits.system.maxRepeats');
@@ -75,10 +73,11 @@ function checkBounds(env: MemberCallEnv, run: RunState, member: string, options:
 /** A verdict that is not one of the three actions is a block. */
 type Checked = { text: string } | { blocked: MemberResult };
 
-async function checkText(env: MemberCallEnv, stage: 'send' | 'receive', text: string, entry: AgentEntry, caller: Caller | undefined): Promise<Checked> {
+async function checkText(env: MemberCallEnv, stage: 'send' | 'receive', text: string, entry: AgentEntry, run: RunState): Promise<Checked> {
+  const { caller, runId, sessionId } = run.ctx;
   const blocked = (detail?: string): Checked => ({ blocked: stop('guard_block', 'host', env.host.name, detail, 'stopped', stage) });
   try {
-    const verdict = await env.host.gate.check({ stage, text, member: entry, ...(caller ? { caller: withoutCredential(caller) } : {}) });
+    const verdict = await env.host.gate.check({ stage, text, member: entry, runId, ...(sessionId ? { sessionId } : {}), ...(caller ? { caller: withoutCredential(caller) } : {}) });
     if (verdict.action === 'allow') return { text };
     if (verdict.action === 'redact' && typeof verdict.text === 'string') return { text: verdict.text };
     return blocked(verdict.reason);
@@ -177,7 +176,7 @@ async function pipeline(
 
   // 2. May this caller invoke this member.
   try {
-    const decision = await host.gate.allow({ ...(caller ? { caller: withoutCredential(caller) } : {}), action: 'invoke', member: entry });
+    const decision = await host.gate.allow({ runId: ctx.runId, ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}), ...(caller ? { caller: withoutCredential(caller) } : {}), action: 'invoke', member: entry });
     if (decision.effect === 'ask') return early(stop('needs_input', 'host', host.name, decision.reason, 'waiting'));
     if (decision.effect !== 'allow') return early(stop('denied', 'host', host.name, decision.reason));
   } catch (err) {
@@ -185,7 +184,7 @@ async function pipeline(
   }
 
   // 3. Check what is sent.
-  const sent = await checkText(env, 'send', inputText(input), entry, caller);
+  const sent = await checkText(env, 'send', inputText(input), entry, run);
   if ('blocked' in sent) return early(sent.blocked);
   const sentInput = withText(input, sent.text);
   const dropped = partCount(input);
@@ -212,7 +211,7 @@ async function pipeline(
   let final = result;
   let blocked = false;
   if (result.status === 'completed') {
-    const received = await checkText(env, 'receive', result.output, entry, caller);
+    const received = await checkText(env, 'receive', result.output, entry, run);
     blocked = 'blocked' in received;
     final = 'blocked' in received ? { ...received.blocked, ...spent } : { ...result, output: received.text };
   }
@@ -241,7 +240,7 @@ async function callAsStep(
         signal,
         hopId,
         ...(credential ? { credential } : {}),
-        outbound: ledger.outbound(ctx.runId, run.rootRunId, reservation),
+        outbound: ledger.outbound(ctx.runId, run.rootRunId, reservation, limitNumber(env.limits.marginMs)),
       };
       return invoke({ port, input, ctx: memberCtx, timeoutMs: Math.min(remaining, stepMs), stepBinding: stepMs <= remaining, deadlineBy: ledger.deadlineBy, timer });
     });

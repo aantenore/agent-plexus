@@ -85,12 +85,12 @@ test('outbound carries one more hop, the reserved budget and the time left minus
   let now = NOW;
   const l = new Ledger(bounds({ tokens: 100 }), () => now);
   const r = l.reserve(0.5)!;
-  const first = l.outbound('run', 'root', r);
+  const first = l.outbound('run', 'root', r, 1000);
   assert.deepEqual([first.hops, first.maxHops, first.tokens, first.rootRunId, first.parentRunId], [2, 4, 50, 'root', 'run']);
   assert.equal(first.remainingMs, 59_000);
   now += 10_000;
-  assert.equal(l.outbound('run', 'root', r).remainingMs, 49_000);
+  assert.equal(l.outbound('run', 'root', r, 1000).remainingMs, 49_000);
   assert.equal(l.outbound('run', 'root', r, 0).remainingMs, 50_000);
   now += 100_000;
-  assert.equal(l.outbound('run', 'root', r).remainingMs, 0);
+  assert.equal(l.outbound('run', 'root', r, 1000).remainingMs, 0);
 });

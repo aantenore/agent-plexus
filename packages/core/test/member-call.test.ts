@@ -295,3 +295,36 @@ test('gate.check: redact without text is a block, on both stages', async () => {
   const receive = await call({ host: { check: (c) => (c.stage === 'receive' ? { action: 'redact' } : { action: 'allow' }) } });
   assert.deepEqual([receive.out.result.status, receive.reason?.code, receive.reason?.stage, receive.out.result.output], ['stopped', 'guard_block', 'receive', '']);
 });
+
+test('the gate is asked with the system run id and the session', async () => {
+  const asked: unknown[] = [];
+  await call({
+    sessionId: 'sess-1',
+    host: { allow: (q) => { asked.push([q.runId, q.sessionId]); return { effect: 'allow' }; }, check: (c) => { asked.push([c.stage, c.runId, c.sessionId]); return { action: 'allow' }; } },
+  });
+  assert.deepEqual(asked, [['run-1', 'sess-1'], ['send', 'run-1', 'sess-1'], ['receive', 'run-1', 'sess-1']]);
+  const bare: unknown[] = [];
+  await call({ host: { allow: (q) => { bare.push(Object.keys(q).includes('sessionId')); return { effect: 'allow' }; } } });
+  assert.deepEqual(bare, [false]);
+});
+
+test('limits.system.minRemainingMs is honoured: a short deadline still runs when it is lowered', async () => {
+  const bounds = { deadlineAt: new Date(Date.now() + 500).toISOString() };
+  refused((await call({ bounds })), 'stopped', 'timeout', 'topology');
+  const r = await call({ bounds, limits: { minRemainingMs: 0 } });
+  assert.equal(r.out.result.status, 'completed');
+  const strict = await call({ limits: { minRemainingMs: 60_000 }, bounds: { deadlineAt: new Date(Date.now() + 30_000).toISOString() } });
+  refused(strict, 'stopped', 'timeout', 'topology');
+});
+
+test('limits.system.marginMs is the time kept back on the outbound bounds', async () => {
+  const remaining = async (marginMs: number) => {
+    let seen: MemberCallContext | undefined;
+    await call({ limits: { marginMs }, bounds: { deadlineAt: new Date(Date.now() + 60_000).toISOString() }, members: { m: (_i, ctx) => { seen = ctx; return completed('ok'); } } });
+    return seen!.outbound.remainingMs;
+  };
+  const none = await remaining(0);
+  const margin = await remaining(20_000);
+  assert.ok(none > 55_000 && none <= 60_000);
+  assert.ok(margin > 35_000 && margin <= 40_000);
+});

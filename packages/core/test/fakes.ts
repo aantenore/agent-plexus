@@ -86,6 +86,7 @@ export interface SetupOptions {
   limits?: Partial<Record<keyof SystemLimits, number | 'unbounded'>>;
   bounds?: Partial<Bounds>;
   caller?: Caller;
+  sessionId?: string;
   signal?: AbortSignal;
   now?: () => number;
 }
@@ -104,7 +105,7 @@ export async function setup(o: SetupOptions = {}): Promise<Setup> {
   const limits = { ...values, ...o.limits } as SystemLimits;
   const members = new Map(Object.entries(o.members ?? { m: () => completed('ok') }).map(([id, fn]) => [id, member(id, (i, c) => { harness.log.push('invoke'); return fn(i, c); }, o.entries?.[id])]));
   const ctx: RunContext = {
-    runId: 'run-1', system: 'sys', ...(o.caller ? { caller: o.caller } : {}), ...(o.signal ? { signal: o.signal } : {}),
+    runId: 'run-1', system: 'sys', ...(o.sessionId ? { sessionId: o.sessionId } : {}), ...(o.caller ? { caller: o.caller } : {}), ...(o.signal ? { signal: o.signal } : {}),
     ...(o.bounds ? { bounds: { deadlineAt: new Date(Date.now() + 60_000).toISOString(), hops: 0, maxHops: 3, ...o.bounds } } : {}),
   };
   const now = (o.now ?? Date.now)();

@@ -4,7 +4,7 @@ import type { ResolvedConfig } from './config.ts';
 import type { Host } from './hooks.ts';
 import type { AgentEntry, TopologyKind } from './shapes.ts';
 import { limitFindings } from './system-limits.ts';
-import { topologyProblems } from './topology-check.ts';
+import { topologyProblems, unsupportedKinds } from './topology-check.ts';
 
 export interface Finding {
   severity: 'warn' | 'fail';
@@ -21,6 +21,10 @@ export interface ReadinessInput {
   entries: AgentEntry[];
   topologyKinds: readonly TopologyKind[];
   routers: string[];
+  /** Ids the registry lists, when it has been asked. */
+  registryIds?: string[];
+  /** Why the registry could not be listed, when it could not. */
+  registryError?: string;
   /** Why the topology could not be bound, when it could not. */
   bindError?: string;
 }
@@ -43,9 +47,16 @@ export function readinessFindings(input: ReadinessInput): Finding[] {
     }
     for (const f of limitFindings(config.limits)) out.push({ severity: f.severity, path: f.path, message: f.message });
   }
-  if (input.bindError) out.push({ severity: 'fail', path: '$.topology', message: `topology could not be bound: ${input.bindError}` });
+  // A bind failure that the core's own findings already explain (same node and kind) is not reported twice.
+  const unsupported = unsupportedKinds(config.topology, input.topologyKinds);
+  const explained = input.bindError !== undefined && unsupported.some((u) => input.bindError!.includes(u.path) && input.bindError!.includes(u.kind));
+  if (input.bindError && !explained) out.push({ severity: 'fail', path: '$.topology', message: `topology could not be bound: ${input.bindError}` });
   for (const message of topologyProblems(config.topology, Object.keys(config.members), input.topologyKinds, input.routers)) {
     out.push({ severity: 'fail', path: '$.topology', message });
+  }
+  if (input.registryError) out.push({ severity: 'fail', path: '$.ports.registry', message: `registry could not list its entries: ${input.registryError}` });
+  for (const id of input.registryIds ?? []) {
+    if (!Object.keys(config.members).includes(id)) out.push({ severity: 'fail', path: '$.ports.registry', message: `entry "${id}" is not a configured member` });
   }
   if (config.registry.requireSigned) {
     for (const e of input.entries) {

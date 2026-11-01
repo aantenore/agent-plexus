@@ -118,8 +118,8 @@ export class Ledger {
     this.#open.delete(reservation);
   }
 
-  /** What crosses to the next agent: time left minus a margin, one more hop, the reserved budget. */
-  outbound(runId: string, rootRunId: string, reservation: Reservation, marginMs = 1000): OutboundBounds {
+  /** What crosses to the next agent: time left minus `marginMs`, one more hop, the reserved budget. */
+  outbound(runId: string, rootRunId: string, reservation: Reservation, marginMs: number): OutboundBounds {
     return {
       remainingMs: Math.max(0, deadlineMs(this.bounds) - this.#now() - marginMs),
       hops: this.bounds.hops + 1,

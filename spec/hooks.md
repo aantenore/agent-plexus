@@ -15,9 +15,10 @@ configured `host` adapter that fills `Host`.
 | [`state`](#state) | no | None | Optional |
 
 `tier` is `prototype` or `production`. The readiness gate fails a production-tier profile whose host is a prototype
-host. The agent-layers adapter (planned) builds a host from a stack: `gate` from its verified caller,
-AuthorizationPort, ApprovalPort, CredentialPort and GuardPort; `telemetry` from its TelemetryPort; `score` from its
-EvaluatorPort adapters; `state` from its StatePort. Another host is another adapter of the same four hooks.
+host. The `agent-layers` adapter builds a host from a stack: `gate` from its AuthorizationPort, ApprovalPort,
+CredentialPort and GuardPorts, `telemetry` from its TelemetryPort, `score` from its EvaluatorPorts. It provides no
+`state`: agent-layers' StatePort is an append-only event log per session, not a key/value store. Another host is
+another adapter of the same four hooks.
 
 ## gate
 
@@ -26,12 +27,12 @@ Authorization, credentials and content checks for every member call.
 ### Operations
 
 - `allow(question: GateQuestion) → GateDecision`
-  May this caller invoke this member? `GateQuestion` is `{caller?, action: "invoke", member: AgentEntry}`;
+  May this caller invoke this member? `GateQuestion` is `{runId, sessionId?, caller?, action: "invoke", member: AgentEntry}`;
   `GateDecision` is `{effect: "allow" | "deny" | "ask", reason?}`.
 - `token(caller: Caller?, audience: String) → String?`
   A credential for the member's audience, on behalf of the caller. Absent when none is needed.
 - `check(check: GateCheck) → GateVerdict`
-  Is this text acceptable? `GateCheck` is `{stage: "send" | "receive", text, member: AgentEntry, caller?}`;
+  Is this text acceptable? `GateCheck` is `{stage: "send" | "receive", text, member: AgentEntry, runId, sessionId?, caller?}`;
   `GateVerdict` is `{action: "allow" | "block" | "redact", text?, reason?}`. `text` is required for `redact`.
 
 ### Semantics
@@ -44,7 +45,8 @@ Authorization, credentials and content checks for every member call.
 - `token` is called only for a member with an `audience`. A failure is `needs_auth`. A production-tier host that
   returns no token for an audience also stops the call with `needs_auth`; a prototype host may return none.
 - The caller reaches the hook without its `credential`. A token returned for a member is never the caller's own.
-- `reason` is internal; the core records it as the `detail` of the stop reason and never shows it to a caller.
+- `reason` is internal; the core records it as the `detail` of the stop reason and never shows it to a caller (the CLI
+  leaves `detail` out of its JSON output).
 
 ### Errors
 
@@ -96,7 +98,7 @@ Spans, events and metrics. The core names everything `plexus.*` and sets `plexus
 ### Semantics
 
 Key/value storage a host offers. No default exists: ExecutionPort keeps its own journal. It is used by the planned
-`host-execution` adapter, which stores the journal there.
+`host-execution` adapter, which stores the journal there. The `agent-layers` host does not provide it.
 
 ## Conformance
 

@@ -1,7 +1,7 @@
 /**
  * The agent-plexus language: the shapes that cross its ports and hooks. Fixed and minimal; extra data goes in `ext`
- * under `<adapter>.<name>` keys, which the core copies and never reads. Values that mean the same as in agent-layers
- * (run status, stop codes) are equal by choice, so an adapter maps them one to one.
+ * under `<adapter>.<name>` keys, which the core copies and never reads. Run status and stop codes use values chosen to
+ * match the common vocabularies of agent stacks, so an adapter maps them one to one.
  */
 import type { AttributionLayer } from './layers.ts';
 
@@ -27,7 +27,7 @@ export interface Caller {
   ext?: Ext;
 }
 
-/** Deadline, budget and hop count of a run. Same fields and rules as the agent-layers bounds proposal. */
+/** Deadline, budget and hop count of a run. Carried across hops so every agent in a chain works within the same limits. */
 export interface Bounds {
   /** ISO 8601, local clock. */
   deadlineAt: string;
@@ -98,7 +98,7 @@ export interface MemberResult {
   /** Required when `status` is not `completed`. */
   reason?: StopReason;
   runId?: string;
-  /** Opaque handle to resume or cancel the member's work (an A2A task id and context). */
+  /** Opaque handle to resume or cancel remote work. */
   taskRef?: string;
   usage?: Usage;
   costUsd?: number;
@@ -117,7 +117,7 @@ export interface AgentEntry {
   name: string;
   description: string;
   skills: Skill[];
-  /** `protocol` is a vocabulary (`function`, `a2a`, extended by adapters). */
+  /** `protocol` is a vocabulary (`function` is built in; adapters add their own). */
   endpoint: { protocol: string; url?: string; ref?: string };
   /** Credential audience; from config, never from a card. */
   audience?: string;
@@ -221,7 +221,7 @@ export interface EvalCase {
 export interface Attribution {
   layer: AttributionLayer;
   member?: string;
-  /** The member's own name for where it failed (an agent-layers layer id, for instance). */
+  /** The member's own name for where it failed (a layer id of the member's own stack, for instance). */
   memberLayer?: string;
   hopId?: string;
   /** In [0, 1]. */

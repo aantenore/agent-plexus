@@ -15,8 +15,11 @@ export const SYSTEM_LIMITS = defineLimits({
   maxRepeats: { path: 'limits.system.maxRepeats', default: 3, unit: 'count', min: 1, max: 100, safe: { min: 1, max: 10 }, why: 'Back-and-forth between the same two members.' },
   stepTimeoutMs: { path: 'limits.system.stepTimeoutMs', default: 300_000, unit: 'ms', min: 1, unbounded: 'fail', safe: { min: 1, max: HOUR_MS }, why: 'One member call, capped by the time left.' },
   cardTtlMs: { path: 'limits.registry.cardTtlMs', default: 300_000, unit: 'ms', min: 0, max: 86_400_000, why: 'How long a fetched card is trusted.' },
+  minRemainingMs: { path: 'limits.system.minRemainingMs', default: 1000, unit: 'ms', min: 0, max: 60_000, why: 'A member call does not start with less time left than this.' },
+  marginMs: { path: 'limits.system.marginMs', default: 1000, unit: 'ms', min: 0, max: 60_000, why: 'Time kept back from the deadline on each outbound call.' },
   maxCardBytes: { path: 'limits.registry.maxCardBytes', default: 65_536, unit: 'bytes', min: 1024, max: 1_048_576, why: 'Largest card read.' },
   maxCandidates: { path: 'limits.router.maxCandidates', default: 20, unit: 'count', min: 1, max: 200, safe: { min: 1, max: 50 }, why: 'Candidates sent to a model or knowledge router.' },
+  historyRuns: { path: 'limits.attribution.historyRuns', default: 100, unit: 'count', min: 1, max: 10_000, why: 'Past runs kept in memory for attribution.' },
   maxRecords: { path: 'limits.attribution.maxRecords', default: 500, unit: 'count', min: 1, max: 100_000, why: 'Hop records read by one attribution.' },
 });
 

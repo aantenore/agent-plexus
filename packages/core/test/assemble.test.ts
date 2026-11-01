@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { defineAdapter, type AdapterDescriptor, type Tier } from '../src/adapter.ts';
+import { defineAdapter, type AdapterContext, type AdapterDescriptor, type Tier } from '../src/adapter.ts';
 import { assemble } from '../src/assemble.ts';
 import { resolveConfig } from '../src/config.ts';
 import { AdapterError, ConfigError } from '../src/errors.ts';
 import type { AgentRouterPort, AttributionPort, BoundTopology, ExecutionPort, RegistryPort, RunScope, TopologyPort } from '../src/ports.ts';
 import { prototypeHost } from '../src/prototype-host.ts';
-import type { Attribution, MemberResult, RunInput, TopologyNode } from '../src/shapes.ts';
+import type { AgentEntry, Attribution, MemberResult, RunInput, TopologyNode } from '../src/shapes.ts';
 import { inputText } from '../src/shapes.ts';
 import { recordingHost, member as fakeMemberPort, memoryExecution } from './fakes.ts';
 
@@ -109,9 +109,9 @@ const rawConfig = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-async function build(over: Record<string, unknown> = {}, opts: { tiers?: Tier[]; host?: ReturnType<typeof recordingHost>['host']; profile?: string } = {}) {
+async function build(over: Record<string, unknown> = {}, opts: { tiers?: Tier[]; host?: ReturnType<typeof recordingHost>['host']; profile?: string; extra?: AdapterDescriptor[] } = {}) {
   const probe: Probe = { closed: 0, begun: [], scopes: [] };
-  const all = descriptors(probe, opts.tiers);
+  const all = [...(opts.extra ?? []), ...descriptors(probe, opts.tiers)];
   const config = resolveConfig(rawConfig(over), { cwd: process.cwd(), ...(opts.profile ? { profile: opts.profile } : {}) });
   const system = await assemble(config, {
     host: opts.host ?? prototypeHost({ quiet: true }),
@@ -306,4 +306,84 @@ test('${env:...} in adapter options is filled in; a missing variable names its p
   const system = await make('a-${env:X}-${env:Y:-d}', { X: 'x' });
   assert.equal((await system.run('q')).output, 'triage:a-x-d:q');
   await assert.rejects(make('${env:NOPE}', {}), (e: unknown) => e instanceof ConfigError && e.errors[0] === '$.members.triage.options.reply: environment variable NOPE is not set');
+});
+
+const registryOf = (name: string, list: (ctx: AdapterContext) => Promise<AgentEntry[]>) => defineAdapter({
+  fills: 'RegistryPort', name, maps, tiers: both, portVersion: '0.1.0',
+  create: (_o, ctx): RegistryPort => ({ name, list: () => list(ctx), get: async () => undefined }),
+}) as unknown as AdapterDescriptor;
+
+const topologyOf = (name: string, bindError: string) => defineAdapter({
+  fills: 'TopologyPort', name, maps, tiers: both, portVersion: '0.1.0',
+  create: (): TopologyPort => ({ name, kinds: ['sequence', 'route'], bind: () => { throw new Error(bindError); } }),
+}) as unknown as AdapterDescriptor;
+
+test('adapters are created with the name of the system', async () => {
+  const seen: string[] = [];
+  const spy = defineAdapter({
+    fills: 'MemberPort', name: 'spy-member', maps, tiers: both, portVersion: '0.1.0',
+    create: (_o, ctx) => { seen.push(ctx.system); return fakeMemberPort(ctx.name, async () => ({ status: 'completed', output: 'x' })); },
+  }) as unknown as AdapterDescriptor;
+  await build({ members: { triage: { adapter: 'spy-member' }, billing: { adapter: 'spy-member' } } }, { extra: [spy] });
+  assert.deepEqual(seen, ['support', 'support']);
+});
+
+test('run uses the run id the caller provides, and generates one otherwise', async () => {
+  const { system, probe } = await build({ topology: { kind: 'sequence', steps: ['triage'] } });
+  const mine = await system.run('x', { runId: 'caller-run-1' });
+  assert.equal(mine.runId, 'caller-run-1');
+  assert.equal(probe.scopes.at(-1)?.ctx.runId, 'caller-run-1');
+  assert.deepEqual(probe.begun, ['caller-run-1']);
+  assert.equal((await system.run('x', { runId: 'r'.repeat(128) })).runId.length, 128);
+  for (const runId of ['', 'r'.repeat(129), 42 as never]) {
+    const res = await system.run('x', { runId });
+    assert.notEqual(res.runId, runId);
+    assert.ok(res.runId.length > 10 && res.runId.length <= 128);
+  }
+});
+
+test('check: a registry entry that is not a configured member fails', async () => {
+  const ghost = registryOf('ghost-registry', async (ctx) => [...(await ctx.members!()), { ...(await ctx.members!())[0]!, id: 'ghost' }]);
+  const { system } = await build({ ports: { ...rawConfig().ports, registry: { adapter: 'ghost-registry' } } }, { extra: [ghost] });
+  const findings = await system.check();
+  assert.deepEqual(findings.map((f) => [f.severity, f.path, f.message]), [['fail', '$.ports.registry', 'entry "ghost" is not a configured member']]);
+});
+
+test('check: a registry that throws is a failure, not an exception', async () => {
+  const broken = registryOf('broken-registry', async () => { throw new Error('registry down'); });
+  const { system } = await build({ ports: { ...rawConfig().ports, registry: { adapter: 'broken-registry' } } }, { extra: [broken] });
+  const findings = await system.check();
+  assert.equal(findings.length, 1);
+  assert.deepEqual([findings[0]!.severity, findings[0]!.path], ['fail', '$.ports.registry']);
+  assert.match(findings[0]!.message, /registry down/);
+});
+
+test('check: an unsupported kind that fails the bind is reported once, by the core', async () => {
+  const strict = topologyOf('strict-topology', 'strict-topology: node "root.steps[1]" has unsupported kind "loop"');
+  const { system } = await build(
+    { ports: { ...rawConfig().ports, topology: { adapter: 'strict-topology' } }, topology: { kind: 'sequence', steps: ['triage', { kind: 'loop', body: 'triage', until: {} }] } },
+    { extra: [strict] },
+  );
+  const msgs = (await system.check()).map((f) => f.message);
+  assert.deepEqual(msgs, ['root.steps[1]: kind "loop" is not supported by the topology adapter']);
+  assert.equal((await system.run('x')).reason?.layer, 'topology');
+});
+
+test('check: a bind failure the core does not explain is reported with the adapter message', async () => {
+  const odd = topologyOf('odd-topology', 'cannot start');
+  const { system } = await build({ ports: { ...rawConfig().ports, topology: { adapter: 'odd-topology' } } }, { extra: [odd] });
+  assert.deepEqual((await system.check()).map((f) => f.message), ['topology could not be bound: cannot start']);
+});
+
+test('limits.attribution.historyRuns bounds the runs kept for attribution', async () => {
+  const { system } = await build({ topology: { kind: 'sequence', steps: ['triage'] }, limits: { attribution: { historyRuns: 1 } } });
+  const first = await system.run('x');
+  await system.run('x');
+  const attributions = await system.attribute({ ...first, status: 'stopped', record: first.record.map((r) => ({ ...r, status: 'stopped' as const })) });
+  assert.equal(attributions[0]?.evidence[0], 'source:0');
+  const kept = await build({ topology: { kind: 'sequence', steps: ['triage'] }, limits: { attribution: { historyRuns: 2 } } });
+  const one = await kept.system.run('x');
+  await kept.system.run('x');
+  const again = await kept.system.attribute({ ...one, status: 'stopped', record: one.record.map((r) => ({ ...r, status: 'stopped' as const })) });
+  assert.equal(again[0]?.evidence[0], 'source:1');
 });

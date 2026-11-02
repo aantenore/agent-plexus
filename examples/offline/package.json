@@ -12,12 +12,7 @@
     "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\""
   },
   "devDependencies": {
-    "@agent-plexus/adapter-basic-topology": "0.2.0",
-    "@agent-plexus/adapter-function-member": "0.2.0",
-    "@agent-plexus/adapter-memory-execution": "0.2.0",
-    "@agent-plexus/adapter-rule-attribution": "0.2.0",
-    "@agent-plexus/adapter-skill-router": "0.2.0",
-    "@agent-plexus/adapter-static-registry": "0.2.0",
+    "@agent-plexus/adapters": "0.2.0",
     "@agent-plexus/core": "0.2.0",
     "@types/node": "^24.19.0",
     "typescript": "^7.0.2"

@@ -1,0 +1,105 @@
+{
+  "name": "@agent-plexus/adapters",
+  "version": "0.2.0",
+  "description": "Reference adapters for agent-plexus, one subpath export each: @agent-plexus/adapters/<name>",
+  "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-plexus-adapter", "agent-layers", "sqlite"],
+  "homepage": "https://github.com/aantenore/agent-plexus/tree/main/packages/adapters#readme",
+  "bugs": {
+    "url": "https://github.com/aantenore/agent-plexus/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aantenore/agent-plexus.git",
+    "directory": "packages/adapters"
+  },
+  "license": "MIT",
+  "author": "Antonio Antenore",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    "./a2a-member": {
+      "@agent-plexus/source": "./src/a2a-member/index.ts",
+      "types": "./dist/a2a-member/index.d.ts",
+      "import": "./dist/a2a-member/index.js"
+    },
+    "./agent-layers": {
+      "@agent-plexus/source": "./src/agent-layers/index.ts",
+      "types": "./dist/agent-layers/index.d.ts",
+      "import": "./dist/agent-layers/index.js"
+    },
+    "./agent-layers/runtime": {
+      "@agent-plexus/source": "./src/agent-layers/runtime.ts",
+      "types": "./dist/agent-layers/runtime.d.ts",
+      "import": "./dist/agent-layers/runtime.js"
+    },
+    "./basic-topology": {
+      "@agent-plexus/source": "./src/basic-topology/index.ts",
+      "types": "./dist/basic-topology/index.d.ts",
+      "import": "./dist/basic-topology/index.js"
+    },
+    "./function-member": {
+      "@agent-plexus/source": "./src/function-member/index.ts",
+      "types": "./dist/function-member/index.d.ts",
+      "import": "./dist/function-member/index.js"
+    },
+    "./memory-execution": {
+      "@agent-plexus/source": "./src/memory-execution/index.ts",
+      "types": "./dist/memory-execution/index.d.ts",
+      "import": "./dist/memory-execution/index.js"
+    },
+    "./rule-attribution": {
+      "@agent-plexus/source": "./src/rule-attribution/index.ts",
+      "types": "./dist/rule-attribution/index.d.ts",
+      "import": "./dist/rule-attribution/index.js"
+    },
+    "./skill-router": {
+      "@agent-plexus/source": "./src/skill-router/index.ts",
+      "types": "./dist/skill-router/index.d.ts",
+      "import": "./dist/skill-router/index.js"
+    },
+    "./sqlite-execution": {
+      "@agent-plexus/source": "./src/sqlite-execution/index.ts",
+      "types": "./dist/sqlite-execution/index.d.ts",
+      "import": "./dist/sqlite-execution/index.js"
+    },
+    "./static-registry": {
+      "@agent-plexus/source": "./src/static-registry/index.ts",
+      "types": "./dist/static-registry/index.d.ts",
+      "import": "./dist/static-registry/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\"",
+    "prepack": "npm run build && node ../../scripts/copy-license.mjs"
+  },
+  "peerDependencies": {
+    "@a2a-js/sdk": "^1.3.0",
+    "@agent-layers/core": "^0.4.0",
+    "@agent-plexus/core": "^0.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@a2a-js/sdk": { "optional": true },
+    "@agent-layers/core": { "optional": true }
+  },
+  "devDependencies": {
+    "@a2a-js/sdk": "^1.3.0",
+    "@agent-layers/adapters": "^0.4.0",
+    "@agent-layers/conformance": "^0.4.0",
+    "@agent-layers/core": "^0.4.0",
+    "@agent-layers/gateway": "^0.4.0",
+    "@agent-plexus/conformance": "0.2.0",
+    "@agent-plexus/core": "0.2.0",
+    "@types/node": "^24.19.0",
+    "typescript": "^7.0.2"
+  }
+}

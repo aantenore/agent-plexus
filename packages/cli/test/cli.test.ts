@@ -107,7 +107,7 @@ test('check reports an unreadable config, an unknown profile and an unloadable a
     await variant(dir, (config) => { config.ports.registry.adapter = 'does-not-exist'; });
     const adapter = captureIo(dir);
     assert.equal(await main(['check'], adapter.io), 1);
-    assert.match(adapter.out(), /FAIL \$\.ports\.registry: adapter "does-not-exist" is not installed/);
+    assert.match(adapter.out(), /FAIL \$\.ports\.registry: adapter "does-not-exist" is not one of @agent-plexus\/adapters/);
     assert.equal(adapter.err(), '');
   } finally {
     await rm(dir, { recursive: true, force: true });

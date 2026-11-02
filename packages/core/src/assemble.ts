@@ -77,7 +77,7 @@ export interface AssembleOptions {
   /** Directory relative paths resolve against (default: the config's). */
   cwd?: string;
   env?: Env;
-  /** Finds adapter descriptors (default: `@agent-plexus/adapter-<name>` or a module path). For tests. */
+  /** Finds adapter descriptors (default: `@agent-plexus/adapters/<name>` or a module path). For tests. */
   resolveAdapter?: DescriptorLoader;
   /** The default prototype host prints no hop lines (ignored when a host is given or configured). */
   quiet?: boolean;

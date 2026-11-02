@@ -26,7 +26,7 @@ network between agents is the blast radius.
 ## Remote agents over A2A
 
 The adapter `a2a-member` applies these rules before and during every call to a remote agent
-([adapter README](../../adapters/a2a-member/README.md#security)):
+([adapter README](../../packages/adapters/src/a2a-member/README.md#security)):
 
 - **Endpoint pinning.** The endpoint in a card is used only when it has the origin of the configured `url` or is listed
   in `allowedEndpoints`; otherwise the call is refused unless `endpoint` is set. A card cannot send the credential to

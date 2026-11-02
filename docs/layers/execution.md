@@ -207,8 +207,8 @@ Change `ports.execution.adapter`. Members and topology stay. A production profil
 
 | Adapter | Maps | Status |
 |---|---|---|
-| [`memory-execution`](../../adapters/memory-execution) | An in-process journal; lost on restart (prototype only) | implemented |
-| [`sqlite-execution`](../../adapters/sqlite-execution) | SQLite through `node:sqlite`; a run survives a restart (prototype, production) | implemented |
+| [`memory-execution`](../../packages/adapters/src/memory-execution) | An in-process journal; lost on restart (prototype only) | implemented |
+| [`sqlite-execution`](../../packages/adapters/src/sqlite-execution) | SQLite through `node:sqlite`; a run survives a restart (prototype, production) | implemented |
 | `host-execution` | The journal in the host's `state` hook | planned |
 | DBOS, Temporal, Hatchet | MIT | candidate |
 

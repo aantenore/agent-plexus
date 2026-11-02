@@ -4,7 +4,7 @@ Command line for [agent-plexus](https://github.com/aantenore/agent-plexus): chec
 talk to it and evaluate it against a file of cases.
 
 ```bash
-npm install --save-dev @agent-plexus/cli @agent-plexus/core    # plus the adapters your plexus.json names
+npm install --save-dev @agent-plexus/cli @agent-plexus/core @agent-plexus/adapters    # plus any plugin your plexus.json names
 npx agent-plexus check                                         # load, assemble, readiness gate
 npx agent-plexus run "I need a refund for my last invoice"     # output on stdout, one line per hop on stderr
 npx agent-plexus resume <runId> --approve                      # answer a waiting run (durable execution adapter)

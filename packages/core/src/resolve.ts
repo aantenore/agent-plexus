@@ -20,25 +20,44 @@ export interface Created<F extends Fills> {
 
 const isPath = (name: string) => name.startsWith('.') || name.startsWith('/');
 
+/** The package whose subpath exports are the adapters found by name alone: `"adapter": "<name>"`. */
+export const ADAPTERS_PACKAGE = '@agent-plexus/adapters';
+
+const missingPackage = (err: unknown): string | undefined =>
+  (err as { code?: string }).code === 'ERR_MODULE_NOT_FOUND' ? /Cannot find package '([^']+)'/.exec(errorMessage(err))?.[1] : undefined;
+
+function moduleProblem(err: unknown, file: string, target: string): string {
+  const notFound = (err as { code?: string }).code === 'ERR_MODULE_NOT_FOUND' && errorMessage(err).includes(file);
+  return notFound ? `module ${target} not found` : `failed to load: ${errorMessage(err)}`;
+}
+
+/** Why `@agent-plexus/adapters/<name>` did not load: the package is missing, has no such adapter, or misses a peer. */
+function packageProblem(err: unknown, name: string): string {
+  const missing = missingPackage(err);
+  if (missing === ADAPTERS_PACKAGE) return `is not installed (npm install ${ADAPTERS_PACKAGE})`;
+  if ((err as { code?: string }).code === 'ERR_PACKAGE_PATH_NOT_EXPORTED' && errorMessage(err).includes(`./${name}`)) {
+    return `is not one of ${ADAPTERS_PACKAGE} (name another adapter by module path or through plugins)`;
+  }
+  if (missing) return `needs the package ${missing} (npm install ${missing})`;
+  return `failed to load: ${errorMessage(err)}`;
+}
+
 const describeAll = (list: AdapterDescriptor[]) => list.map((d) => `${d.name} (${d.fills})`).join(', ') || 'none';
 
 /**
- * Imports `@agent-plexus/adapter-<name>`, or, for a name starting with `.` or `/`, the module at that path relative to
+ * Imports `@agent-plexus/adapters/<name>`, or, for a name starting with `.` or `/`, the module at that path relative to
  * `cwd` (`./mine.js#name` picks one descriptor when the module has several for the port), and picks from its
  * `adapters` export the descriptor with that name that fills the port.
  */
 export const loadDescriptor: DescriptorLoader = async (fills, name, cwd) => {
   const [target = name, wanted] = isPath(name) ? name.split('#') : [name];
   const file = resolve(cwd, target);
-  const specifier = isPath(name) ? pathToFileURL(file).href : `@agent-plexus/adapter-${name}`;
+  const specifier = isPath(name) ? pathToFileURL(file).href : `${ADAPTERS_PACKAGE}/${name}`;
   let mod: Record<string, unknown>;
   try {
     mod = (await import(specifier)) as Record<string, unknown>;
   } catch (err) {
-    if ((err as { code?: string }).code === 'ERR_MODULE_NOT_FOUND' && errorMessage(err).includes(isPath(name) ? file : specifier)) {
-      throw new Error(isPath(name) ? `module ${target} not found` : `is not installed (npm install @agent-plexus/adapter-${name})`);
-    }
-    throw new Error(`failed to load: ${errorMessage(err)}`);
+    throw new Error(isPath(name) ? moduleProblem(err, file, target) : packageProblem(err, name));
   }
   if (!Array.isArray(mod.adapters)) throw new Error('module has no "adapters" export (an array of descriptors)');
   const all = (mod.adapters as AdapterDescriptor[]).filter((d) => isPlainObject(d));

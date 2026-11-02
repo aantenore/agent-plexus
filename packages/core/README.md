@@ -9,7 +9,7 @@ per port, per profile; `assemble` turns the config into a system that runs offli
 host hooks.
 
 ```bash
-npm install @agent-plexus/core @agent-plexus/adapter-function-member @agent-plexus/adapter-basic-topology
+npm install @agent-plexus/core @agent-plexus/adapters
 ```
 
 ```ts

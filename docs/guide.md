@@ -21,7 +21,7 @@ modules in `members/`, and point `--config` at it. Rename the package in the cop
 workspace `@agent-plexus/example-offline`, and two workspaces with one name make `npm install` fail. Or copy it outside
 `examples/` (still inside the repository, so Node finds `node_modules`) and leave `package.json` and `tsconfig.json`
 behind. Adapters named in the config are found in the `plugins` modules first, then as
-`@agent-plexus/adapter-<name>` from the repository's `node_modules`; module paths in options are relative to the
+`@agent-plexus/adapters/<name>` from the repository's `node_modules`; module paths in options are relative to the
 config file. The `--conditions=@agent-plexus/source` flag makes Node load the TypeScript sources of the workspace
 packages; the sections below write the command as `agent-plexus`.
 
@@ -132,14 +132,14 @@ An agent served over A2A, in any language or framework, is a member through `a2a
 - Limits (`timeoutMs`, `pollMs`, `maxCardBytes`, `cardTtlMs`, `cancelTimeoutMs`) are in [limits](limits.md#a2a-member--memberport).
 
 All options, the state mapping and what is not done are in the
-[adapter README](../adapters/a2a-member/README.md).
+[adapter README](../packages/adapters/src/a2a-member/README.md).
 
 ## Resume a waiting run
 
 A run ends `waiting` when the host's gate answers `ask` (a person must approve the call) or a member asks for more
 input. `resume` answers it under the same run id: finished steps replay from the journal and the waiting call gets the
 reply. Across processes the journal must outlive the process, so the system needs a durable execution adapter, such as
-[`sqlite-execution`](../adapters/sqlite-execution); `memory-execution` resumes only within the process that ran the run.
+[`sqlite-execution`](../packages/adapters/src/sqlite-execution); `memory-execution` resumes only within the process that ran the run.
 The swap example's [`file-execution`](../examples/swap/adapters/file-execution.ts) keeps it in JSON files:
 
 ```json
@@ -179,7 +179,7 @@ while another invocation runs the same run ("in progress") gives `failed` with c
 
 ## Write an adapter
 
-An adapter is a package `@agent-plexus/adapter-<name>` with a factory and a descriptor. A router that picks the
+An adapter is a module with a factory and a descriptor: a subpath `@agent-plexus/adapters/<name>` in this repository, or a package of its own elsewhere. A router that picks the
 candidate whose skill tags occur most often in the input:
 
 ```ts
@@ -263,33 +263,36 @@ test('tag-router fills AgentRouterPort and picks by tag', async () => {
 
 Steps:
 
-1. Create `adapters/<name>/` and copy `package.json`, `tsconfig.json` and `tsconfig.build.json` from a reference adapter
-   such as `adapters/skill-router`. Name the package `@agent-plexus/adapter-<name>`; keep `@agent-plexus/core` as a peer
-   dependency and the `@agent-plexus/source` export condition that points at `src/`.
-2. Write `src/index.ts`: a factory and a `defineAdapter` descriptor with `fills`, `name` (= `<name>`), `maps` (`standard`
+1. In this repository: create `packages/adapters/src/<name>/` and add the subpath `./<name>` to the `exports` of
+   `packages/adapters/package.json`, with the `@agent-plexus/source` condition first (pointing at
+   `./src/<name>/index.ts`), then `types` and `import` (pointing at `dist/<name>/`). A library only this adapter needs
+   is an optional peer dependency of the package (`peerDependenciesMeta`) and a dev dependency for its tests. Elsewhere:
+   copy [`examples/adapter-template`](../examples/adapter-template), a package of its own with `@agent-plexus/core` as a
+   peer dependency.
+2. Write `src/<name>/index.ts` (`src/index.ts` in a package of its own): a factory and a `defineAdapter` descriptor with `fills`, `name` (= `<name>`), `maps` (`standard`
    or `technology`), `portVersion: PORT_VERSIONS.<Port>`, `tiers` and `optionsSchema`. Export an `adapters` array: the
    loader reads it.
 3. Declare every timeout, size, count or truncation length once with `defineLimits` and set it as the descriptor's
    `limits` (see [limits.md](limits.md)), never a literal in the code.
-4. Write `test/*.test.ts` with `node:test`, including the port's contract tests from the conformance kit
+4. Write `test/<name>/*.test.ts` with `node:test`, including the port's contract tests from the conformance kit
    `@agent-plexus/conformance`.
-5. Write `README.md`: what it maps onto which port, tiers, an options table and a config snippet.
+5. Write `src/<name>/README.md`: what it maps onto which port, tiers, an options table and a config snippet.
 6. Add the adapter to [adapters.md](adapters.md), and its limits to [limits.md](limits.md).
 7. Use it by name (`"adapter": "tag-router"`) once the package is installed, or by path while you develop:
    `"adapter": "./tag-router/src/index.ts"`; `#<name>` picks one descriptor when a module exports several for the port.
-   A package outside `@agent-plexus/adapter-*` (`@acme/plexus-adapters`) is listed in the config's `plugins`; its
+   A package outside `@agent-plexus/adapters` (`@acme/plexus-adapters`) is listed in the config's `plugins`; its
    adapters are then named like any other (see [Adapter lookup](#adapter-lookup)).
 
-Checks for the pull request, run only for the package you touched:
+Checks for the pull request, run only for what you touched:
 
 ```bash
-npm run typecheck -w @agent-plexus/adapter-<name>
-npm test -w @agent-plexus/adapter-<name>
+npm run typecheck -w @agent-plexus/adapters
+node --conditions=@agent-plexus/source --test "packages/adapters/test/<name>/*.test.ts"
 ```
 
 Rules:
 
-- Name the package after the framework, protocol or technology it maps. If it speaks a standard, set `maps.standard`;
+- Name the adapter after the framework, protocol or technology it maps. If it speaks a standard, set `maps.standard`;
   otherwise `maps.technology`.
 - Translate at the edge. A protocol's names stay inside the adapter; what crosses the port is the language
   ([spec/language.md](../spec/language.md)).
@@ -316,7 +319,7 @@ An `adapter` value is resolved in this order:
 |---|---|
 | Starts with `.` or `/` | The module at that path, relative to the config file; `#<name>` picks one descriptor |
 | A name exported by a `plugins` module | That module; the first plugin listed wins |
-| Any other name | The package `@agent-plexus/adapter-<name>` |
+| Any other name | The subpath `@agent-plexus/adapters/<name>` (a name it does not export is an error) |
 
 `plugins` lists modules, packages or paths, resolved as an `import` written in the config's directory would be: a path
 relative to it, or a package installed in a `node_modules` above it, through its `exports` with the import conditions
@@ -400,7 +403,7 @@ Rules:
 
 ### A real host: agent-layers
 
-[`@agent-plexus/adapter-agent-layers`](../adapters/agent-layers) builds the four hooks from an agent-layers stack, so
+[`@agent-plexus/adapters/agent-layers`](../packages/adapters/src/agent-layers) builds the four hooks from an agent-layers stack, so
 the control and insight you already configured there govern the system. Install it next to the config of a stack and
 point the host at that config:
 
@@ -437,9 +440,9 @@ denies every call.
 The same package has two more descriptors. The member `agent-layers` (`"adapter": "agent-layers"` under `members`) is an
 agent of a stack, in process; the call's deadline, hops, budget and lineage become the stack run's `delegation`, and the
 caller's `actors` its actors. The runtime plugin `agent-plexus`, loaded through the `plugins` of the agent-layers config
-(`"plugins": ["@agent-plexus/adapter-agent-layers/runtime"]`), runs a system as the runtime of a stack, so the
+(`"plugins": ["@agent-plexus/adapters/agent-layers/runtime"]`), runs a system as the runtime of a stack, so the
 agent-layers gateway can serve it; the system runs within the stack run's bounds. The stack's tools as the tool source of `supervise` are planned. The options,
-mappings and limits are in the [adapter README](../adapters/agent-layers/README.md).
+mappings and limits are in the [adapter README](../packages/adapters/src/agent-layers/README.md).
 
 ## Stack config reference
 
@@ -449,7 +452,7 @@ Schema file is planned.
 | Key | Meaning |
 |---|---|
 | `system.name` | System name; the `plexus.system` attribute |
-| `plugins` | Modules (packages or paths) exporting adapter descriptors, for adapters outside `@agent-plexus/adapter-*`; see [Adapter lookup](#adapter-lookup) |
+| `plugins` | Modules (packages or paths) exporting adapter descriptors, for adapters outside `@agent-plexus/adapters`; see [Adapter lookup](#adapter-lookup) |
 | `host` | `{ adapter, options? }` filling `Host`; absent or `null`: the prototype host |
 | `members` | Member id → `{ adapter, options? }` filling MemberPort |
 | `ports.registry` | Required by a `route` or `handoff` node, which reads its candidates from it (`check` fails without one) |
@@ -499,7 +502,7 @@ check failed: 2 FAIL, 0 WARN
 | Finding | Fix | Status |
 |---|---|---|
 | `$.host` | A host adapter backed by real identity, policy and telemetry; the agent-layers adapter | Available: [`agent-layers`](#a-real-host-agent-layers) |
-| `$.ports.execution` | A durable ExecutionPort: `sqlite-execution`; `host-execution` (planned); DBOS, Temporal, Hatchet (candidates) | Available: [`sqlite-execution`](../adapters/sqlite-execution) |
+| `$.ports.execution` | A durable ExecutionPort: `sqlite-execution`; `host-execution` (planned); DBOS, Temporal, Hatchet (candidates) | Available: [`sqlite-execution`](../packages/adapters/src/sqlite-execution) |
 | `$.members.<id>` | Members behind `a2a-member` with signed cards (`keys`, `requireSigned`) or pinned endpoints | Available: [`a2a-member`](#call-a-remote-agent) |
 | limits | Set `limits.system.*` explicitly and keep them in the safe range | Implemented |
 

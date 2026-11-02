@@ -131,7 +131,7 @@ spec/            language-neutral contracts: language.md, hooks.md, ports/ (JSON
 packages/core    @agent-plexus/core: ports, host hooks, memberCall, assemble, system config, limits (zero dependencies)
 packages/cli     @agent-plexus/cli: check, run, resume, dev, eval
 packages/conformance  @agent-plexus/conformance: contract tests a port adapter runs in its own tests
-adapters/<name>  @agent-plexus/adapter-<name>: one package per framework, protocol or technology
+packages/adapters  @agent-plexus/adapters: the reference adapters, one subpath export each (@agent-plexus/adapters/<name>)
 examples/        sample systems: offline (reference adapters), swap (each layer replaced by one config value)
 docs/            product, architecture, stack, guide, adapters, limits, layers/<id>.md, cross-cutting/, decisions/, research/, proposals/
 ```
@@ -142,7 +142,8 @@ docs/            product, architecture, stack, guide, adapters, limits, layers/<
 npm install                                          # workspaces, dev dependencies only
 npm run typecheck -w @agent-plexus/core              # typecheck one package
 npm test -w @agent-plexus/core                       # tests of one package
-npm test -w @agent-plexus/adapter-skill-router       # tests of one adapter
+npm test -w @agent-plexus/adapters                   # tests of every adapter
+node --conditions=@agent-plexus/source --test "packages/adapters/test/skill-router/*.test.ts"   # one adapter
 ```
 
 Contributions: [CONTRIBUTING.md](CONTRIBUTING.md). Core paths need a spec change first. Releases:

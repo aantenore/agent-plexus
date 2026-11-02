@@ -132,6 +132,6 @@ adapters given in `adapters` (a topology, an execution and an attribution, unles
 then runs S1-S3. A MemberPort adapter runs as a member of that system.
 
 How to write an adapter: [CONTRIBUTING.md](https://github.com/aantenore/agent-plexus/blob/main/CONTRIBUTING.md), starting
-from [`adapters/_template`](https://github.com/aantenore/agent-plexus/tree/main/adapters/_template).
+from [`examples/adapter-template`](https://github.com/aantenore/agent-plexus/tree/main/examples/adapter-template).
 
 Requires Node >= 22.18. License: MIT.

@@ -16,7 +16,7 @@ Only the latest published version of each `@agent-plexus/*` package receives sec
 
 ## Scope
 
-The packages in this repository: `packages/*` and `adapters/*`. The examples under `examples/` use prototype
+The packages in this repository: `packages/*`, the adapters included (`packages/adapters`). The examples under `examples/` use prototype
 adapters and the prototype host, which allow every call and check nothing, and are not meant to be exposed on a
 network as they are. Vulnerabilities in third-party agents, hosts or services that a system calls belong to the
 respective projects. The threat model between agents is in

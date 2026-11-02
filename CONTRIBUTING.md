@@ -2,36 +2,38 @@
 
 ## Add an adapter in one pull request
 
-Adapters are independent packages, so anyone can add and maintain one without touching the core.
+The reference adapters live in one package, `@agent-plexus/adapters`, one subpath export each, so a release publishes
+few packages. An adapter maintained outside this repository is a package of its own, used through the config's
+`plugins`, and needs no change here.
 
-1. Copy [`adapters/_template`](adapters/_template) to `adapters/<name>`: a private skeleton with a descriptor, limits,
-   `capabilities`, namespaced `ext`, a passing conformance test and a maturity checklist. Name it after the framework,
-   protocol or technology it maps: `a2a-member`, `sqlite-execution`.
-2. In `package.json`: name `@agent-plexus/adapter-<name>`, set `repository.directory` to `adapters/<name>`, keep
-   `@agent-plexus/core` as a peer dependency and the `@agent-plexus/source` export condition that points at `src/`.
-   Runtime dependencies only when the technology needs a client library.
-3. In `src/index.ts`: a factory plus a `defineAdapter` descriptor with `fills`, `name` (= `<name>`), `maps`
+1. Create `packages/adapters/src/<name>/`, named after the framework, protocol or technology it maps: `a2a-member`,
+   `sqlite-execution`. [`examples/adapter-template`](examples/adapter-template) shows a descriptor, limits,
+   `capabilities`, namespaced `ext`, a passing conformance test and a maturity checklist.
+2. In `packages/adapters/package.json`: add the subpath `./<name>` to `exports`, with the `@agent-plexus/source`
+   condition first (`./src/<name>/index.ts`), then `types` and `import` (`./dist/<name>/index.d.ts`, `.js`). A client
+   library only this adapter needs is an optional peer dependency (`peerDependencies` plus `peerDependenciesMeta`) and a
+   dev dependency for the tests; installing the package pulls in nothing heavy.
+3. In `src/<name>/index.ts`: a factory plus a `defineAdapter` descriptor with `fills`, `name` (= `<name>`), `maps`
    (`standard` or `technology`), `portVersion: PORT_VERSIONS.<Port>`, `tiers` and `optionsSchema`; export an `adapters`
    array. A MemberPort adapter also declares `capabilities` (`resume`, `cancel`, `checkpoint`, `waits`) so the
    readiness gate can warn about systems that need more. The core checks the descriptor when it loads it
-   (`checkDescriptor`) and refuses an incompatible `portVersion`. A package not named `@agent-plexus/adapter-<name>`
-   is used through the config's `plugins`. Technology-specific data goes in `ext`. Every timeout, size, count or truncation length is an option
-   declared once with `defineLimits` and set as the descriptor's `limits` (see [docs/limits.md](docs/limits.md)),
-   never a literal in the code.
-4. Tests: `test/*.test.ts` with `node:test`. `test/conformance.test.ts` runs the suite of the port with
-   `checkAdapter(adapter, { options, fixtures })` from [`@agent-plexus/conformance`](packages/conformance) (a
-   devDependency) and expects no failures. A known gap is marked `todo` for its rule id only (`failuresOf`,
-   `failuresExcept`), never removed. For an upstream service, add a contract test against a pinned version that skips
-   when the service is down.
-5. `README.md`: what it maps onto which port, tiers, an options table, a config snippet and its limits.
+   (`checkDescriptor`) and refuses an incompatible `portVersion`. A name alone (`"adapter": "<name>"`) loads
+   `@agent-plexus/adapters/<name>`; any other module is used through the config's `plugins`. Technology-specific data
+   goes in `ext`. Every timeout, size, count or truncation length is an option declared once with `defineLimits` and
+   set as the descriptor's `limits` (see [docs/limits.md](docs/limits.md)), never a literal in the code.
+4. Tests: `test/<name>/*.test.ts` with `node:test`. `test/<name>/conformance.test.ts` runs the suite of the port with
+   `checkAdapter(adapter, { options, fixtures })` from [`@agent-plexus/conformance`](packages/conformance) and expects
+   no failures. A known gap is marked `todo` for its rule id only (`failuresOf`, `failuresExcept`), never removed. For
+   an upstream service, add a contract test against a pinned version that skips when the service is down.
+5. `src/<name>/README.md`: what it maps onto which port, tiers, an options table, a config snippet and its limits.
 6. Add the adapter to the catalog in [docs/adapters.md](docs/adapters.md) (remove it from the Planned list if it was
    there) and its limits to [docs/limits.md](docs/limits.md).
 
-Checks for the pull request, run only for the package you touched:
+Checks for the pull request, run only for the adapter you touched:
 
 ```bash
-npm run typecheck -w @agent-plexus/adapter-<name>
-npm test -w @agent-plexus/adapter-<name>
+npm run typecheck -w @agent-plexus/adapters
+node --conditions=@agent-plexus/source --test "packages/adapters/test/<name>/*.test.ts"
 ```
 
 New adapters start as `experimental`; the criteria for `beta` and `stable` are in
@@ -66,7 +68,7 @@ The steps for the maintainer, including the npm organization and the GitHub Acti
 
 TypeScript, ESM, Node >= 22.18, `node --test`, small files, short JSDoc. Zero runtime dependencies in the core
 packages. Documentation in English, short sentences, tables over prose, no marketing language. Never put tokens or
-secrets in errors, logs or telemetry. Framework and protocol names appear only in adapter packages.
+secrets in errors, logs or telemetry. Framework and protocol names appear only in adapters.
 
 ## Documentation
 

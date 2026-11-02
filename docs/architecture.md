@@ -87,9 +87,10 @@ flowchart LR
   `a2a-member`). A database is an ExecutionPort too (adapter `sqlite-execution`).
 - **Inbound** is the CLI. Network exposure is the host's: the agent-layers gateway serves a system over A2A,
   OpenAI-compatible and MCP when the runtime plugin `agent-plexus` of the agent-layers adapter is loaded through the
-  `plugins` of the agent-layers config (`@agent-plexus/adapter-agent-layers/runtime`).
-- An adapter package is named after what it maps (`@agent-plexus/adapter-function-member`) and exports an `adapters`
-  array of descriptors; one package may fill several ports. A package with another name is listed in the config's
+  `plugins` of the agent-layers config (`@agent-plexus/adapters/agent-layers/runtime`).
+- A reference adapter is a subpath of `@agent-plexus/adapters` named after what it maps
+  (`@agent-plexus/adapters/function-member`) and exports an `adapters` array of descriptors; one module may fill
+  several ports. A package with another name is listed in the config's
   `plugins` and its adapters are named like the others. Every descriptor loaded is checked (`checkDescriptor`): its
   shape, and a `portVersion` compatible with `PORT_VERSIONS` (same major; same minor while the major is `0`).
 
@@ -205,7 +206,7 @@ sequenceDiagram
 2. A core change starts with a spec change: the port page in `spec/ports/` and the version in `PORT_VERSIONS`.
 3. Adapters depend only on `@agent-plexus/core` (peer). The port contract tests are the conformance kit
    `@agent-plexus/conformance`.
-4. Framework and protocol names appear only in adapter packages. The core speaks one language and names no framework or
+4. Framework and protocol names appear only in adapters. The core speaks one language and names no framework or
    protocol, not even in comments.
 5. Extra data goes in `ext`, never in a new field: keys are `<adapter>.<name>`; the core never reads an adapter key.
 6. Limits are declared once with `defineLimits` and set by configuration, never a literal in the code.
@@ -216,8 +217,8 @@ sequenceDiagram
 |---|---|---|
 | Layer id | stable lowercase word | `topology` |
 | Port | `<Name>Port` | `TopologyPort`, `AgentRouterPort` |
-| Adapter package | `@agent-plexus/adapter-<framework, protocol or technology>` | `@agent-plexus/adapter-skill-router` |
-| Adapter name in config | the package suffix, or a module path starting with `.` or `/` (`#<name>` picks a descriptor) | `"adapter": "skill-router"` |
+| Adapter module | `@agent-plexus/adapters/<framework, protocol or technology>` | `@agent-plexus/adapters/skill-router` |
+| Adapter name in config | the subpath, or a module path starting with `.` or `/` (`#<name>` picks a descriptor) | `"adapter": "skill-router"` |
 | Member id | key under `members` in the config | `billing` |
 | Port slot | key under `ports` | `registry`, `router`, `topology`, `execution`, `attribution` |
 | Node path | `root`, then `.steps[i]`, `.branches[i]`, `.merge`, `.fallback`, `.body#<n>` | `root.steps[1]` |

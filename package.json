@@ -10,7 +10,6 @@
   },
   "workspaces": [
     "packages/*",
-    "adapters/*",
     "examples/*"
   ],
   "scripts": {

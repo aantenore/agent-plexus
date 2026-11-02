@@ -6,5 +6,5 @@ dist/
 
 # package build output (LICENSE is copied in by prepack)
 packages/*/LICENSE
-adapters/*/LICENSE
+examples/*/LICENSE
 *.tgz

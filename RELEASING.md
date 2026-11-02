@@ -1,7 +1,8 @@
 # Releasing
 
-Every package under `packages/*` and `adapters/*` is published to npm under the `@agent-plexus` scope, all with the
-same version. The packages under `examples/*` are private and are not part of the release.
+Every package under `packages/*` is published to npm under the `@agent-plexus` scope, all with the
+same version: `core`, `cli`, `conformance` and `adapters` (every reference adapter, one subpath export each), so a
+release publishes four packages. The packages under `examples/*` are private and are not part of the release.
 
 ## First release
 
@@ -51,5 +52,9 @@ package can hit it: wait and run the release again, it publishes only what is mi
 - `prepack` in each package builds it and copies the root `LICENSE` into the package folder (ignored by git). The
   build of a package needs the `dist/` of the packages it depends on, which `npm run build` (dependency order)
   provides.
-- Packages depend on `@agent-layers/core` only where an adapter needs it; that package is published separately from
-  the agent-layers repository.
+- `@agent-plexus/adapters` declares the libraries of single adapters (`@a2a-js/sdk`, `@agent-layers/core`) as optional
+  peer dependencies, and as dev dependencies for its tests. The agent-layers packages are published separately from the
+  agent-layers repository; their range (`^0.4.0`) moves when agent-layers changes its minor.
+- 0.2.0 replaces the nine `@agent-plexus/adapter-<name>` packages (0.1.0) with `@agent-plexus/adapters`; see
+  [CHANGELOG.md](CHANGELOG.md). Deprecate the old packages on npm after the release, for example
+  `npm deprecate @agent-plexus/adapter-skill-router "moved to @agent-plexus/adapters/skill-router"`.

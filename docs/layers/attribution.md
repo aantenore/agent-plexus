@@ -136,7 +136,7 @@ Change `ports.attribution.adapter`. Records and scores stay the same.
 
 | Adapter | Maps | Status |
 |---|---|---|
-| [`rule-attribution`](../../adapters/rule-attribution) | Deterministic rules on hop records (prototype, production) | implemented |
+| [`rule-attribution`](../../packages/adapters/src/rule-attribution) | Deterministic rules on hop records (prototype, production) | implemented |
 | `judge-attribution` | A model reads the record, all at once or by binary search over hops; agent level only | planned |
 | `replay-attribution` | Offline counterfactual replay: one member's output replaced, or one member swapped | planned |
 

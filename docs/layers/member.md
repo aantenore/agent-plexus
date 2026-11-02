@@ -160,9 +160,9 @@ A2A needs no adapter of its own.
 
 | Adapter | Maps | Status |
 |---|---|---|
-| [`function-member`](../../adapters/function-member) | An in-process function (prototype, production) | implemented |
-| [`a2a-member`](../../adapters/a2a-member) | An agent served over A2A 1.0 and 0.3, on the official JavaScript SDK (prototype, production); card fetched without credential and verified against configured keys, endpoint pinning, https and private-address rules, polling, resume, cancel, bounds extension | implemented |
-| [`agent-layers`](../../adapters/agent-layers) | An agent of an agent-layers stack, in process (prototype, production); the outbound bounds become the run's `delegation` (deadline, hops, budget, lineage) and the caller's `actors` map both ways; a waiting stack run is reported with its approval under `ext["agent-layers.approval"]`, but not resumed (`waits` without `resume`) | implemented |
+| [`function-member`](../../packages/adapters/src/function-member) | An in-process function (prototype, production) | implemented |
+| [`a2a-member`](../../packages/adapters/src/a2a-member) | An agent served over A2A 1.0 and 0.3, on the official JavaScript SDK (prototype, production); card fetched without credential and verified against configured keys, endpoint pinning, https and private-address rules, polling, resume, cancel, bounds extension | implemented |
+| [`agent-layers`](../../packages/adapters/src/agent-layers) | An agent of an agent-layers stack, in process (prototype, production); the outbound bounds become the run's `delegation` (deadline, hops, budget, lineage) and the caller's `actors` map both ways; a waiting stack run is reported with its approval under `ext["agent-layers.approval"]`, but not resumed (`waits` without `resume`) | implemented |
 | `agent-layers`: tool source of `supervise` | The stack's tools as what a supervisor can call | planned |
 
 Another agent-plexus system as a member works in process through the `fn` option of `function-member` (code only, not

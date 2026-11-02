@@ -49,4 +49,4 @@ An adapter that cannot decide returns an empty list. A source that fails to deli
 
 ## Version history
 
-- 0.1.0: initial. Reference adapter: [`rule-attribution`](../../adapters/rule-attribution).
+- 0.1.0: initial. Reference adapter: [`rule-attribution`](../../packages/adapters/src/rule-attribution).

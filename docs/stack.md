@@ -167,7 +167,7 @@ descriptors:
 - the `agent-layers` member: an agent of a stack, in process. The call's deadline, hops, budget and lineage become the
   stack run's `delegation`, and the caller's `actors` map both ways;
 - the runtime plugin `agent-plexus`: an agent-layers RuntimePort that runs a system, loaded through the `plugins` of the
-  agent-layers config (`@agent-plexus/adapter-agent-layers/runtime`), so the gateway exposes the system.
+  agent-layers config (`@agent-plexus/adapters/agent-layers/runtime`), so the gateway exposes the system.
 
 The stack's tools as the tool source of a `supervise` topology are planned.
 

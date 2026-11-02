@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 
 /**
  * A minimal A2A 1.0 agent over node:http, 127.0.0.1 only: it serves its card and answers `SendMessage` with a settled
- * task. Reduced from the fake of the a2a-member tests (adapters/a2a-member/test/fake.ts, not exported).
+ * task. Reduced from the fake of the a2a-member tests (packages/adapters/test/a2a-member/fake.ts, not exported).
  */
 export interface FakeAgent {
   cardUrl: string;

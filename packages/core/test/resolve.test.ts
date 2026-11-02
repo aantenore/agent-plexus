@@ -117,7 +117,7 @@ test('pluginLoader resolves bare plugins as imports from the config directory: E
     assert.deepEqual(fallbackCalls, ['dual-cjs']);
     await assert.rejects(pluginLoader(['nothing'], fallback)('MemberPort', 'x', dir), /plugin "nothing" failed to load: it exports no adapter descriptors/);
     // A package not installed where the config is fails: it is never looked up from the core's own location.
-    await assert.rejects(pluginLoader(['@agent-plexus/adapter-function-member'], fallback)('MemberPort', 'x', dir), /is not installed where the config is/);
+    await assert.rejects(pluginLoader(['@agent-plexus/adapters/function-member'], fallback)('MemberPort', 'x', dir), /is not installed where the config is/);
     await assert.rejects(pluginLoader(['esm-only/missing'], fallback)('MemberPort', 'x', dir), /exports no "\.\/missing" for import/);
     assert.deepEqual(fallbackCalls, ['dual-cjs']);
   } finally {

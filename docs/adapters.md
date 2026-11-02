@@ -1,12 +1,14 @@
 # Adapters
 
-Every implementation is an adapter: a package `@agent-plexus/adapter-<name>` that maps a framework, a protocol or a
-technology onto a port. Adapters are independent packages, so each can have its own maintainer and release cadence.
+Every implementation is an adapter: a module that maps a framework, a protocol or a technology onto a port. The
+reference adapters ship in one package, `@agent-plexus/adapters`, one subpath export each
+(`@agent-plexus/adapters/<name>`); an adapter maintained elsewhere is its own package, with its own maintainer and
+release cadence.
 How to write one: [guide.md](guide.md#write-an-adapter) and [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-A config names an adapter by name (`"adapter": "skill-router"`, found as `@agent-plexus/adapter-skill-router`), by
+A config names an adapter by name (`"adapter": "skill-router"`, found as `@agent-plexus/adapters/skill-router`), by
 module path (`"./adapters/mine.ts#name"`), or by a name a `plugins` module exports: a package outside
-`@agent-plexus/adapter-*` (`"plugins": ["@acme/plexus-adapters"]`) needs no rename. Lookup order and rules:
+`@agent-plexus/adapters` (`"plugins": ["@acme/plexus-adapters"]`) needs no rename. Lookup order and rules:
 [guide.md](guide.md#adapter-lookup). The core checks each descriptor it loads (`checkDescriptor`) and refuses one
 whose `portVersion` is incompatible with the core's. A MemberPort adapter declares its `capabilities` (`resume`,
 `cancel`, `checkpoint`, `waits`), which the readiness gate reads. The conformance kit `@agent-plexus/conformance` runs
@@ -37,9 +39,9 @@ Every package has its own README with options, behaviour and limits.
 
 | Layer | Adapter | Fills | Maps | Tiers | Status | Maturity |
 |---|---|---|---|---|---|---|
-| `member` | [`function-member`](../adapters/function-member) | MemberPort | technology: in-process function | prototype, production | implemented | experimental |
-| `member` | [`agent-layers`](../adapters/agent-layers) | MemberPort | technology: agent-layers stack | prototype, production | implemented | experimental |
-| `member` | [`a2a-member`](../adapters/a2a-member) | MemberPort | standard: Agent2Agent (A2A) 1.0 and 0.3, JSON-RPC binding (official JavaScript SDK) | prototype, production | implemented | experimental |
+| `member` | [`function-member`](../packages/adapters/src/function-member) | MemberPort | technology: in-process function | prototype, production | implemented | experimental |
+| `member` | [`agent-layers`](../packages/adapters/src/agent-layers) | MemberPort | technology: agent-layers stack | prototype, production | implemented | experimental |
+| `member` | [`a2a-member`](../packages/adapters/src/a2a-member) | MemberPort | standard: Agent2Agent (A2A) 1.0 and 0.3, JSON-RPC binding (official JavaScript SDK) | prototype, production | implemented | experimental |
 
 Declared `capabilities`: `a2a-member` all four (`resume`, `cancel`, `checkpoint`, `waits`); `agent-layers` `waits`,
 and `resume` and `cancel` when the installed agent-layers has run control (0.4.0 on; before, the readiness gate warns
@@ -49,41 +51,42 @@ that a run waiting on it cannot continue); `function-member` none.
 
 | Layer | Adapter | Fills | Maps | Tiers | Status | Maturity |
 |---|---|---|---|---|---|---|
-| `registry` | [`static-registry`](../adapters/static-registry) | RegistryPort | technology: static member list. Optional `trust` policy (`requireSigned`, `keyIds`, `exempt`) withholds entries without a verified card signature and emits `plexus.registry.refused` | prototype, production | implemented | experimental |
-| `routing` | [`skill-router`](../adapters/skill-router) | AgentRouterPort | technology: rules on regular expressions, tags and skills | prototype, production | implemented | experimental |
+| `registry` | [`static-registry`](../packages/adapters/src/static-registry) | RegistryPort | technology: static member list. Optional `trust` policy (`requireSigned`, `keyIds`, `exempt`) withholds entries without a verified card signature and emits `plexus.registry.refused` | prototype, production | implemented | experimental |
+| `routing` | [`skill-router`](../packages/adapters/src/skill-router) | AgentRouterPort | technology: rules on regular expressions, tags and skills | prototype, production | implemented | experimental |
 
 #### Flow plane
 
 | Layer | Adapter | Fills | Maps | Tiers | Status | Maturity |
 |---|---|---|---|---|---|---|
-| `topology` | [`basic-topology`](../adapters/basic-topology) | TopologyPort | technology: in-process topology executor (`sequence`, `route`, `loop`, `parallel`, `handoff`, `supervise`, `graph`) | prototype, production | implemented | experimental |
-| `execution` | [`memory-execution`](../adapters/memory-execution) | ExecutionPort | technology: in-process memory | prototype | implemented | experimental |
-| `execution` | [`sqlite-execution`](../adapters/sqlite-execution) | ExecutionPort | technology: SQLite through `node:sqlite` | prototype, production | implemented | experimental |
+| `topology` | [`basic-topology`](../packages/adapters/src/basic-topology) | TopologyPort | technology: in-process topology executor (`sequence`, `route`, `loop`, `parallel`, `handoff`, `supervise`, `graph`) | prototype, production | implemented | experimental |
+| `execution` | [`memory-execution`](../packages/adapters/src/memory-execution) | ExecutionPort | technology: in-process memory | prototype | implemented | experimental |
+| `execution` | [`sqlite-execution`](../packages/adapters/src/sqlite-execution) | ExecutionPort | technology: SQLite through `node:sqlite` | prototype, production | implemented | experimental |
 
 #### Insight plane
 
 | Layer | Adapter | Fills | Maps | Tiers | Status | Maturity |
 |---|---|---|---|---|---|---|
-| `attribution` | [`rule-attribution`](../adapters/rule-attribution) | AttributionPort | technology: deterministic rules on hop records | prototype, production | implemented | experimental |
+| `attribution` | [`rule-attribution`](../packages/adapters/src/rule-attribution) | AttributionPort | technology: deterministic rules on hop records | prototype, production | implemented | experimental |
 
 #### Host
 
 | Adapter | Fills | Maps | Tiers | Status | Maturity |
 |---|---|---|---|---|---|
-| [`agent-layers`](../adapters/agent-layers) | Host | technology: agent-layers stack | prototype, production | implemented | experimental |
-| [`agent-layers/runtime`](../adapters/agent-layers) | an agent-layers RuntimePort (plugin of an agent-layers config) | technology: agent-plexus system | prototype, production | implemented | experimental |
+| [`agent-layers`](../packages/adapters/src/agent-layers) | Host | technology: agent-layers stack | prototype, production | implemented | experimental |
+| [`agent-layers/runtime`](../packages/adapters/src/agent-layers) | an agent-layers RuntimePort (plugin of an agent-layers config) | technology: agent-plexus system | prototype, production | implemented | experimental |
 
-The `agent-layers` package (`@agent-plexus/adapter-agent-layers`) is the only one that depends on agent-layers. It has
-three descriptors:
+The `agent-layers` adapter (`@agent-plexus/adapters/agent-layers`) is the only one that depends on agent-layers
+(`@agent-layers/core`, an optional peer dependency of `@agent-plexus/adapters`: install it next to the package to use
+this adapter). It has three descriptors:
 
 - the host `agent-layers`: `gate` from the stack's authorization, approval, credentials and guards, `telemetry`,
   `score`, and `state` from the stack's StorePort when it has one (keys `plexus.<key>`);
 - the member `agent-layers`: an agent of a stack, in process. The call's deadline, hops, budget and lineage become the
   stack run's `delegation`, and the caller's `actors` map both ways;
 - the runtime plugin `agent-plexus`: an agent-layers RuntimePort that runs a system. An agent-layers config loads it
-  through `plugins` (`@agent-plexus/adapter-agent-layers/runtime`), not agent-plexus, so it is a separate entry point.
+  through `plugins` (`@agent-plexus/adapters/agent-layers/runtime`), not agent-plexus, so it is a separate entry point.
 
-10 adapters in 9 packages, plus the runtime plugin.
+10 adapters in one package (`@agent-plexus/adapters`, 9 subpaths), plus the runtime plugin.
 
 ### Planned
 

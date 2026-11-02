@@ -56,7 +56,7 @@ whole share spent. `stop` tells a refusal over the hop limit or the deadline apa
 
 ## Implementations
 
-- [`a2a-member`](../../adapters/a2a-member/README.md) sends the canonical URI by default and this alias with
+- [`a2a-member`](../../packages/adapters/src/a2a-member/README.md) sends the canonical URI by default and this alias with
   `boundsUri: "plexus"`, for peers that know only this one; it reads the report under either URI.
 - The agent-layers `a2a` adapter (runtime and channel) accepts both URIs and writes the report under the one the client
   activated.

@@ -143,7 +143,7 @@ ADK-TS and Strands TS are candidates when a team already runs that engine.
 
 | Adapter | Maps | Status |
 |---|---|---|
-| [`basic-topology`](../../adapters/basic-topology) | An in-process executor: `sequence`, `route`, `loop`, `parallel`, `handoff`, `supervise`, `graph` (prototype, production) | implemented |
+| [`basic-topology`](../../packages/adapters/src/basic-topology) | An in-process executor: `sequence`, `route`, `loop`, `parallel`, `handoff`, `supervise`, `graph` (prototype, production) | implemented |
 
 Full list: [adapters.md](../adapters.md).
 

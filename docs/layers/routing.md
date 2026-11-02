@@ -118,7 +118,7 @@ Change `ports.router.adapter` or add a named router and point the node at it. Me
 
 | Adapter | Maps | Status |
 |---|---|---|
-| [`skill-router`](../../adapters/skill-router) | Rules on regular expressions, tags and skills; the heaviest applicable rule wins (prototype, production) | implemented |
+| [`skill-router`](../../packages/adapters/src/skill-router) | Rules on regular expressions, tags and skills; the heaviest applicable rule wins (prototype, production) | implemented |
 | `model-router` | A model chooses among names and descriptions, as a structured answer | planned |
 | `knowledge-router` | A search backend ranks entries | planned |
 

@@ -29,7 +29,7 @@ export type LimitsConfig = Partial<Record<'system' | 'router' | 'attribution', R
 export interface SystemConfig {
   $schema?: string;
   system: { name: string };
-  /** Modules (packages or paths) whose exported descriptors are found by name before `@agent-plexus/adapter-<name>`. */
+  /** Modules (packages or paths) whose exported descriptors are found by name before `@agent-plexus/adapters/<name>`. */
   plugins?: string[];
   /** Absent or null: the prototype host. */
   host?: AdapterRef | null;

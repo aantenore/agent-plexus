@@ -25,7 +25,7 @@ guardrails.
    production tier.
 3. **One call path.** Every member call goes through the core's `memberCall` pipeline, which asks the host's gate
    before and after the call.
-4. **agent-layers is the reference host, through one adapter.** `@agent-plexus/adapter-agent-layers` builds the
+4. **agent-layers is the reference host, through one adapter.** `@agent-plexus/adapters/agent-layers` builds the
    hooks from a stack, offers stacks as members, and runs a system as a stack's runtime so the gateway exposes it. It
    is the only package that depends on agent-layers; the core never names it.
 5. **Minimal own language.** `TopologySpec`, `AgentEntry`, `HopRecord`, `Attribution`, `RouteDecision`, plus a

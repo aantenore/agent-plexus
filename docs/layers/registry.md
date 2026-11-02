@@ -117,7 +117,7 @@ as its own options.
 
 | Adapter | Maps | Status |
 |---|---|---|
-| [`static-registry`](../../adapters/static-registry) | The members configured in the system, with overrides from config; fetches nothing (prototype, production) | implemented |
+| [`static-registry`](../../packages/adapters/src/static-registry) | The members configured in the system, with overrides from config; fetches nothing (prototype, production) | implemented |
 | Card-fetching registry | Cards listed in config, fetched, pinned, signatures checked | candidate |
 | AGNTCY Agent Directory + OASF | Apache-2.0 | candidate |
 | Kubernetes CRDs | Apache-2.0 | candidate |

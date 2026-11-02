@@ -3,16 +3,49 @@
  * `assemble(config, host)`. Each hook has a prototype default (prototype-host.ts) that the readiness gate refuses on a
  * production-tier profile.
  */
-import type { AgentEntry, Caller, EvalCase, Score, SystemResult } from './shapes.ts';
+import type { AgentEntry, Caller, CallerIdentity, EvalCase, Score, SystemResult } from './shapes.ts';
 
-export interface GateQuestion {
+/** A person's answer, through `System.resume`, to an earlier `ask`; `by` is the id of the caller that resumed. */
+export interface GateAnswer {
+  approved: boolean;
+  reason?: string;
+  by?: string;
+}
+
+interface GateQuestionBase {
   /** The system run the call belongs to. */
   runId: string;
   sessionId?: string;
+  /** Who asks: the caller of the run, or the caller that resumes it. Never with its credential. */
   caller?: Caller;
+}
+
+/** May `caller` call `member`. */
+export interface InvokeQuestion extends GateQuestionBase {
   action: 'invoke';
   member: AgentEntry;
+  /**
+   * The answer, through `System.resume`, to an earlier `ask` for this call. The host decides again: an approval is not
+   * a permission by itself.
+   */
+  answer?: GateAnswer;
 }
+
+/**
+ * May `caller` continue a run that `owner` started: `System.resume`, or `run` with the id of a run the journal knows
+ * when the caller is not its owner. Asked before any reply is delivered.
+ */
+export interface ResumeQuestion extends GateQuestionBase {
+  action: 'resume';
+  /** The caller that started the run, identity only; absent when the run started without a caller. */
+  owner?: CallerIdentity;
+  /** The member the run waits on; absent when the run waits on nothing or the member cannot describe itself. */
+  member?: AgentEntry;
+  /** The approval this resume gives to a gate's `ask`, with `by` set to the resuming caller's id. */
+  answer?: GateAnswer;
+}
+
+export type GateQuestion = InvokeQuestion | ResumeQuestion;
 
 export interface GateDecision {
   effect: 'allow' | 'deny' | 'ask';
@@ -37,7 +70,7 @@ export interface GateVerdict {
   reason?: string;
 }
 
-/** Authorization, credentials and content checks for every member call. Errors are a deny. */
+/** Authorization, credentials and content checks for every member call, and authorization of a resume. Errors are a deny. */
 export interface GateHook {
   allow(question: GateQuestion): Promise<GateDecision>;
   /** A credential for the member's audience, on behalf of the caller; undefined when none is needed. */

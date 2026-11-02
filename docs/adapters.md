@@ -19,7 +19,7 @@ readiness gate (`agent-plexus check --profile <p>`) rejects prototype-only adapt
 adapter below is at maturity **experimental**; ports are at version 0.1.0.
 
 Status words: **implemented** is in this repository with its tests. **Planned** is work on the order of work: the
-adapters in the Planned table below, the `handoff`, `supervise` and `graph` kinds, the conformance package, the JSON
+adapters in the Planned table below, the `supervise` kind, the conformance package, the JSON
 Schemas and the CLI commands `diff` and `draw`. A **candidate** is a technology worth an adapter, with no work scheduled.
 
 ### Available
@@ -38,15 +38,16 @@ Every package has its own README with options, behaviour and limits.
 
 | Layer | Adapter | Fills | Maps | Tiers | Status | Maturity |
 |---|---|---|---|---|---|---|
-| `registry` | [`static-registry`](../adapters/static-registry) | RegistryPort | technology: static member list | prototype, production | implemented | experimental |
+| `registry` | [`static-registry`](../adapters/static-registry) | RegistryPort | technology: static member list. Optional `trust` policy (`requireSigned`, `keyIds`, `exempt`) withholds entries without a verified card signature and emits `plexus.registry.refused` | prototype, production | implemented | experimental |
 | `routing` | [`skill-router`](../adapters/skill-router) | AgentRouterPort | technology: rules on regular expressions, tags and skills | prototype, production | implemented | experimental |
 
 #### Flow plane
 
 | Layer | Adapter | Fills | Maps | Tiers | Status | Maturity |
 |---|---|---|---|---|---|---|
-| `topology` | [`basic-topology`](../adapters/basic-topology) | TopologyPort | technology: in-process topology executor (`sequence`, `route`, `loop`, `parallel`) | prototype, production | implemented | experimental |
+| `topology` | [`basic-topology`](../adapters/basic-topology) | TopologyPort | technology: in-process topology executor (`sequence`, `route`, `loop`, `parallel`, `handoff`, `graph`; `supervise` is planned) | prototype, production | implemented | experimental |
 | `execution` | [`memory-execution`](../adapters/memory-execution) | ExecutionPort | technology: in-process memory | prototype | implemented | experimental |
+| `execution` | [`sqlite-execution`](../adapters/sqlite-execution) | ExecutionPort | technology: SQLite through `node:sqlite` | prototype, production | implemented | experimental |
 
 #### Insight plane
 
@@ -72,7 +73,7 @@ three descriptors:
 - the runtime plugin `agent-plexus`: an agent-layers RuntimePort that runs a system. An agent-layers config loads it
   through `plugins` (`@agent-plexus/adapter-agent-layers/runtime`), not agent-plexus, so it is a separate entry point.
 
-8 adapters in 7 packages, plus the runtime plugin.
+10 adapters in 9 packages, plus the runtime plugin.
 
 ### Planned
 
@@ -80,11 +81,10 @@ three descriptors:
 |---|---|---|---|---|---|
 | `model-router` | AgentRouterPort | routing | technology: a model chooses among names and descriptions | planned | Any OpenAI-compatible endpoint, or a stack's governed model through `agent-layers` |
 | `knowledge-router` | AgentRouterPort | routing | technology: a search backend ranks entries | planned | Any agent-layers knowledge source through `agent-layers` |
-| `sqlite-execution` | ExecutionPort | execution | technology: SQLite through `node:sqlite` | planned | |
 | `host-execution` | ExecutionPort | execution | technology: the host's `state` hook | planned | |
 | `judge-attribution` | AttributionPort | attribution | technology: a model reads the hop record | planned | Agent level only |
 | `replay-attribution` | AttributionPort | attribution | technology: offline counterfactual replay | planned | One member's output replaced, or one member swapped |
-| `basic-topology`: `handoff`, `supervise`, `graph` | TopologyPort | topology | technology: in-process topology executor | planned | `bind` rejects these kinds today |
+| `basic-topology`: `supervise` | TopologyPort | topology | technology: in-process topology executor | planned | `check` and `bind` reject the kind today |
 | `agent-layers`: tool source of `supervise` | — | member | technology: agent-layers stack | planned | The stack's tools as what a supervisor can call; needs the `supervise` kind |
 
 ### Candidates

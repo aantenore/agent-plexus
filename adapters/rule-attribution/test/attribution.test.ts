@@ -123,6 +123,18 @@ test('limit blames the largest token usage, else the highest cost, else the long
   assert.equal((await run([quick, long, stop('limit')]))[0]?.member, 'long');
 });
 
+test('limit ignores the usage and cost of replayed hops, which an earlier invocation spent; they are still evidence', async () => {
+  const stop = stopped('x', { code: 'limit', layer: 'agent-loop' }, { durationMs: 1 });
+  const replayed = hop('replayed', { durationMs: 0, usage: { inputTokens: 900, outputTokens: 0 }, costUsd: 9, replayed: true });
+  const fresh = hop('fresh', { durationMs: 5, usage: { inputTokens: 20, outputTokens: 0 } });
+  const [blamed] = await run([replayed, fresh, stop]);
+  assert.deepEqual([blamed?.member, blamed?.evidence.at(-1)], ['fresh', `spent:${fresh.hopId}`]);
+  const priced = hop('priced', { durationMs: 5, costUsd: 0.5 });
+  assert.equal((await run([replayed, priced, stop]))[0]?.member, 'priced');
+  const failing = failed('again', { code: 'error' }, { replayed: true });
+  assert.equal((await run([failing]))[0]?.member, 'again');
+});
+
 test('timeout ignores abandoned hops and route nodes when finding the slowest', async () => {
   const lost = hop('lost', { durationMs: 5000, abandoned: true });
   const route = hop('', { durationMs: 4000, route: {} });

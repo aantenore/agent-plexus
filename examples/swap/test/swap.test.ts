@@ -148,14 +148,18 @@ test('file-execution: a second begin with the same runKey replays a stored step'
   }
 });
 
-test('file-execution: a signal reaches a wait, and a failed step stores nothing', async () => {
+test('file-execution: a signal reaches a wait, the first signal of a name wins, and a failed step stores nothing', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'swap-test-'));
   try {
     const port = createFileExecution({ dir }, { name: 'execution', cwd: dir });
     const run = await port.begin('run-1');
     const waiting = run.wait('approval', new Date(Date.now() + 60_000).toISOString());
-    await port.signal('run-1', 'approval', { ok: true });
+    assert.equal(await port.signal('run-1', 'approval', { ok: true }), true);
     assert.deepEqual(await waiting, { ok: true });
+    assert.equal(await port.signal('run-1', 'approval', { ok: false }), false);
+    assert.equal(await port.signal('run-1', 'early', 1), true);
+    assert.equal(await port.signal('run-1', 'early', 2), false);
+    assert.equal(await run.wait('early', new Date().toISOString()), 1);
     let attempts = 0;
     await assert.rejects(run.step('s', async () => { attempts++; throw new Error('boom'); }), /boom/);
     assert.equal(await run.step('s', async () => ++attempts), 2);
@@ -288,6 +292,31 @@ test('swap-host: the host governs the calls; a member the rules do not allow is 
     assert.equal(attributions[0]?.layer, 'host');
   } finally {
     await s.close();
+  }
+});
+
+test('static-registry trust with registry.requireListed: a direct call to an unsigned member is denied by the registry; an exempt one runs', async () => {
+  const withTrust = (trust: Record<string, unknown>) => {
+    const raw = JSON.parse(readFileSync(CONFIG, 'utf8')) as { ports: { registry: { options: Record<string, unknown> } }; registry?: unknown; topology: unknown };
+    raw.ports.registry.options.trust = trust;
+    raw.registry = { requireListed: true };
+    raw.topology = { kind: 'sequence', steps: ['triage'] };
+    return resolveConfig(raw, { cwd: dirname(CONFIG) });
+  };
+  const strict = await assembleWith(withTrust({ requireSigned: true }));
+  try {
+    const result = await strict.run('anything');
+    assert.equal(result.status, 'stopped');
+    assert.deepEqual([result.reason?.code, result.reason?.layer], ['denied', 'registry']);
+    assert.deepEqual(members(result), ['triage']);
+  } finally {
+    await strict.close();
+  }
+  const exempt = await assembleWith(withTrust({ requireSigned: true, exempt: ['triage'] }));
+  try {
+    assert.equal((await exempt.run('anything')).status, 'completed');
+  } finally {
+    await exempt.close();
   }
 });
 

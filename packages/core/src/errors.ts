@@ -21,3 +21,21 @@ export class AdapterError extends Error {
     this.adapter = adapter;
   }
 }
+
+/** Code of the error an ExecutionPort's `begin` rejects with while another invocation holds the run. */
+export const RUN_BUSY = 'RUN_BUSY';
+
+/** `begin` found the run held by another invocation, in this process or another. Recognised by its `code`. */
+export class RunBusyError extends Error {
+  override name = 'RunBusyError';
+  readonly code = RUN_BUSY;
+  readonly runKey: string;
+  constructor(runKey: string, message = `run "${runKey}" is held by another invocation`) {
+    super(message);
+    this.runKey = runKey;
+  }
+}
+
+/** Whether an error says the run is held by another invocation: a `RunBusyError` or any error with code `RUN_BUSY`. */
+export const isRunBusy = (err: unknown): boolean =>
+  typeof err === 'object' && err !== null && (err as { code?: unknown }).code === RUN_BUSY;

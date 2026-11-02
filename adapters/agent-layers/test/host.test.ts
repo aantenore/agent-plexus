@@ -162,13 +162,17 @@ test('approval: keyed per run, an approval of one run does not allow another', a
 });
 
 test('approval: keyed per caller, an approval of one caller does not allow another', async () => {
-  const { system, stack } = await fixture({ approve: ['audited'] });
+  const { host, system, stack } = await fixture({ approve: ['audited'] });
   const sys = await system(['audited']);
   const first = await sys.run('hello', { caller, runId: 'run-c' });
   const id = /approval pending: (.+)$/.exec(first.reason?.detail ?? '')?.[1]!;
   await stack.ports.approval!.decide(id, { approved: true, by: 'bob' });
+  const audited = { id: 'audited', name: 'audited', description: '', skills: [], endpoint: { protocol: 'function' }, trust: { signed: false, pinned: true } };
+  const asked = await host.gate.allow({ action: 'invoke', runId: 'run-c', caller: { ...publicAlice, id: 'bob' }, member: audited });
+  assert.equal(asked.effect, 'ask');
+  // Nor can another caller continue the run itself: only its owner may.
   const bob = await sys.run('hello', { caller: { ...caller, id: 'bob' }, runId: 'run-c' });
-  assert.equal(bob.status, 'waiting');
+  assert.deepEqual([bob.status, bob.reason?.code, bob.reason?.layer], ['stopped', 'denied', 'host']);
   await stack.close();
 });
 
@@ -367,4 +371,46 @@ test('configured host: the agent defaults to the system name and an option wins'
 test('configured host: invalid options are refused', async () => {
   const config = await plexusConfig(['billing'], { host: { adapter: 'agent-layers', options: {} } });
   await assert.rejects(assemble(config, { cwd: fixtures }), /config/);
+});
+
+test('resume: only the run owner may resume; the owner is asked as action resume about the waiting member', async () => {
+  const { host, stack } = await fixture({ risk: { billing: 'read' } });
+  const asked: AccessQuestion[] = [];
+  const authorization = stack.ports.authorization!;
+  const evaluate = authorization.evaluate.bind(authorization);
+  authorization.evaluate = async (q, o) => { asked.push(structuredClone(q)); return evaluate(q, o); };
+  const member = { id: 'billing', name: 'billing', description: '', skills: [], endpoint: { protocol: 'function' }, trust: { signed: false, pinned: true } };
+  const owner = { id: 'alice', kind: 'user' as const };
+  const mallory = { id: 'mallory', kind: 'user' as const, roles: ['staff'], scopes: [] };
+
+  const stolen = await host.gate.allow({ action: 'resume', runId: 'r1', caller: mallory, owner, member });
+  assert.deepEqual(stolen, { effect: 'deny', reason: 'only the caller that started the run may resume it' });
+  assert.equal((await host.gate.allow({ action: 'resume', runId: 'r1', owner, member })).effect, 'deny');
+  assert.equal(asked.length, 0, 'a resume by someone else never reaches the policy');
+
+  assert.equal((await host.gate.allow({ action: 'resume', runId: 'r1', caller: publicAlice, owner, member })).effect, 'allow');
+  assert.deepEqual(asked[0], {
+    caller: publicAlice,
+    action: 'resume',
+    target: { kind: 'agent', id: 'billing', layer: 'harness', risk: 'read', agent: 'agent-plexus' },
+    ext: { 'agent-plexus.owner': { id: 'alice', kind: 'user' } },
+  });
+  // A run that waits on no member is asked about as the run itself; these rules know no such target and deny it.
+  assert.equal((await host.gate.allow({ action: 'resume', runId: 'r2' })).effect, 'deny');
+  assert.deepEqual(asked[1]?.target, { kind: 'run', id: 'r2', layer: 'harness', risk: 'exec', agent: 'agent-plexus' });
+
+  authorization.evaluate = async (q) => ({ allowed: q.action !== 'resume', reason: 'no resumes' });
+  assert.deepEqual(await host.gate.allow({ action: 'resume', runId: 'r1', caller: publicAlice, owner, member }), { effect: 'deny', reason: 'no resumes' });
+  assert.equal((await host.gate.allow({ action: 'invoke', runId: 'r1', caller: publicAlice, member })).effect, 'allow');
+  await stack.close();
+});
+
+test('resume through a system: a caller other than the owner is denied by the host before anything is delivered', async () => {
+  const { system, stack } = await fixture({ approve: ['audited'] });
+  const sys = await system(['audited']);
+  const first = await sys.run('hello', { runId: 'owned', caller });
+  assert.equal(first.status, 'waiting');
+  const stolen = await sys.resume('owned', { approved: true }, { caller: { id: 'mallory', kind: 'user', roles: ['staff'], scopes: [] } });
+  assert.deepEqual([stolen.status, stolen.reason?.code, stolen.reason?.layer, stolen.reason?.by], ['stopped', 'denied', 'host', 'agent-layers']);
+  await stack.close();
 });

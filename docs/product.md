@@ -68,7 +68,7 @@ flowchart TB
     xhost["host<br/>agent-layers stack"]:::control
     xmem["L0 member<br/>a2a-member"]:::foundation
     xreg["L1 registry<br/>signed cards or pinned endpoints"]:::model
-    xexe["L4 execution<br/>sqlite or host journal (planned),<br/>DBOS (candidate)"]:::agent
+    xexe["L4 execution<br/>sqlite-execution,<br/>host journal (planned),<br/>DBOS (candidate)"]:::agent
     xatt["L5 attribution<br/>rule-attribution, judge (planned)"]:::insight
   end
   proto -->|"edit the profile"| prod

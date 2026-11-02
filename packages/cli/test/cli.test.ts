@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import type { SystemResult } from '@agent-plexus/core';
-import { publicResult } from '../src/format.ts';
+import { publicResult, resumeHint } from '../src/format.ts';
 import { main } from '../src/main.ts';
 import { captureIo, CASES, CONFIG, EXAMPLE } from './helpers.ts';
 
@@ -57,6 +58,14 @@ test('publicResult strips reason.detail from the result and from every record en
   assert.equal(printed.record[0]?.reason, undefined);
   assert.doesNotMatch(JSON.stringify(printed), /secret/);
   assert.equal(result.record[1]?.reason?.detail, 'secret match');
+});
+
+test('resumeHint asks for what the kept wait needs and names it, quoted for the shell', () => {
+  const waiting: SystemResult = { status: 'waiting', output: '', runId: 'r1', reason: { code: 'needs_input', layer: 'member' }, record: [] };
+  assert.equal(resumeHint({ ...waiting, wait: { token: 'call:root.branches[1]:0#0', kind: 'approval', member: 'G' } }), "waiting: agent-plexus resume r1 --approve | --deny --wait 'call:root.branches[1]:0#0'");
+  assert.equal(resumeHint({ ...waiting, runId: "it's", wait: { token: 'call:root:0#2', kind: 'input', member: 'D' } }), "waiting: agent-plexus resume 'it'\\''s' --input <text> --wait 'call:root:0#2'");
+  assert.equal(resumeHint(waiting), 'waiting: agent-plexus resume r1 --input <text>');
+  assert.equal(resumeHint({ ...waiting, reason: { code: 'needs_input', layer: 'host' } }), 'waiting: agent-plexus resume r1 --approve | --deny');
 });
 
 test('a run that does not complete exits 1 and names the stop code', async () => {
@@ -185,7 +194,7 @@ test('dev runs each line and stops at /exit', async () => {
 });
 
 test('--help per command exits 0; wrong usage and unknown commands exit 2', async () => {
-  for (const name of ['check', 'run', 'dev', 'eval']) {
+  for (const name of ['check', 'run', 'resume', 'dev', 'eval']) {
     const c = captureIo();
     assert.equal(await main([name, '--help'], c.io), 0);
     assert.match(c.out(), new RegExp(`^agent-plexus ${name}`));
@@ -201,4 +210,58 @@ test('--help per command exits 0; wrong usage and unknown commands exit 2', asyn
   const none = captureIo();
   assert.equal(await main([], none.io), 0);
   assert.match(none.out(), /^agent-plexus <command>/);
+});
+
+/** A system whose one member waits for input, over the example file journal in `dir`, so runs outlive the process. */
+async function waitingSystem(dir: string): Promise<string> {
+  const file = join(dir, 'plexus.json');
+  await writeFile(file, JSON.stringify({
+    system: { name: 'asking' },
+    members: { asker: { adapter: fileURLToPath(new URL('fixtures/asking-member.ts', import.meta.url)) } },
+    ports: {
+      topology: { adapter: 'basic-topology' },
+      execution: { adapter: join(EXAMPLE, '../swap/adapters/file-execution.ts'), options: { dir: join(dir, 'journal') } },
+      attribution: { adapter: 'rule-attribution' },
+    },
+    topology: { kind: 'sequence', steps: ['asker'] },
+  }));
+  return file;
+}
+
+test('resume answers a waiting run from another process through a durable journal', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-cli-'));
+  try {
+    const file = await waitingSystem(dir);
+    const started = captureIo();
+    assert.equal(await main(['run', '--config', file, 'start'], started.io), 1);
+    assert.equal(started.out(), '[waiting] needs_input member');
+    const hint = /waiting: agent-plexus resume (\S+) --input <text> --wait '([^']+)'/.exec(started.err());
+    assert.ok(hint, started.err());
+    const [, runId, wait] = hint as unknown as [string, string, string];
+    assert.equal(wait, 'call:root.steps[0]:0#0');
+
+    const elsewhere = captureIo();
+    assert.equal(await main(['resume', runId, '--config', file, '--json', '--input', 'x', '--wait', 'call:other:0#0'], elsewhere.io), 1);
+    assert.equal(JSON.parse(elsewhere.out()).status, 'failed');
+
+    const resumed = captureIo();
+    assert.equal(await main(['resume', runId, '--config', file, '--input', 'order 42', '--wait', wait], resumed.io), 0, resumed.err());
+    assert.equal(resumed.out(), 'task-1: order 42');
+    assert.match(resumed.err(), /^asker completed \d+ms$/);
+
+    const again = captureIo();
+    assert.equal(await main(['resume', runId, '--config', file, '--json', '--approve'], again.io), 1);
+    const result = JSON.parse(again.out());
+    assert.deepEqual([result.status, result.reason], ['failed', { code: 'error', layer: 'execution' }]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('resume needs one run id and exactly one of --input, --approve, --deny', async () => {
+  for (const args of [['resume', '--approve'], ['resume', 'r1'], ['resume', 'r1', '--approve', '--deny'], ['resume', 'r1', '--input', 'x', '--reason', 'y'], ['resume', 'r1', '--approve', '--wait', '']]) {
+    const c = captureIo();
+    assert.equal(await main(args, c.io), 2, args.join(' '));
+    assert.match(c.err(), /usage: agent-plexus resume/);
+  }
 });

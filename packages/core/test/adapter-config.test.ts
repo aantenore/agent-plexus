@@ -16,7 +16,7 @@ const limits = defineLimits({
 const descriptor = defineAdapter({
   fills: 'ExecutionPort', name: 'lim', maps: {}, tiers: ['production'], limits,
   optionsSchema: { type: 'object', properties: { maxRuns: {}, tools: {} } },
-  create: () => ({ name: 'lim', begin: async () => { throw new Error('unused'); }, signal: async () => {} }),
+  create: () => ({ name: 'lim', begin: async () => { throw new Error('unused'); }, signal: async () => false }),
 });
 const ctx = (env: Record<string, string> = {}) => ({ system: 'sys', name: 'e', cwd: '.', env, telemetry: prototypeHost().telemetry });
 const load = async () => descriptor as never;

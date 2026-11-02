@@ -8,6 +8,19 @@ export const hopLine = (hop: HopRecord): string =>
 export const resultText = (result: SystemResult): string =>
   result.status === 'completed' ? result.output : `[${result.status}] ${[result.reason?.code, result.reason?.layer].filter(Boolean).join(' ')}`.trim();
 
+/** A word the shell passes as it is: quoted unless it is plain. */
+const shellWord = (word: string): string => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`);
+
+/**
+ * How to answer a waiting run: an approval when the host's gate asked, else the input the member asked for, and the
+ * wait it answers. A result without a wait falls back on the layer of its reason.
+ */
+export function resumeHint(result: SystemResult): string {
+  const approval = result.wait ? result.wait.kind === 'approval' : result.reason?.layer === 'host';
+  const reply = approval ? '--approve | --deny' : '--input <text>';
+  return `waiting: agent-plexus resume ${shellWord(result.runId)} ${reply}${result.wait ? ` --wait ${shellWord(result.wait.token)}` : ''}`;
+}
+
 /** A reason without its internal detail. */
 const withoutDetail = <T extends { detail?: string }>(reason: T): Omit<T, 'detail'> => {
   const { detail: _detail, ...rest } = reason;

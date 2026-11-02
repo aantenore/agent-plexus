@@ -44,8 +44,8 @@ setting is absent. **Accepted** is the validated range. **Safe range** is what p
 | `limits.system.maxSteps` | `20` | 1–∞ or unbounded | 1–100 | fail if unbounded; warn outside safe range | Member calls in one run; the next call stops with `limit`. |
 | `limits.system.maxDepth` | `3` | 0–∞ or unbounded | 0–10 | fail if unbounded; warn outside safe range | Hops a system run may add when the host passes no bounds (nested systems, supervisors); the next call stops with `hop_limit`. |
 | `limits.system.maxParallel` | `4` | 1–64 | 1–16 | warn outside safe range | Branches of a `parallel` node running at once. |
-| `limits.system.maxIterations` | `5` | 1–100 | 1–20 | warn outside safe range | Default bound of a `loop` node. |
-| `limits.system.maxHandoffs` | `10` | 1–100 | 1–20 | warn outside safe range | Default bound of a `handoff` node (planned: the kind is not run yet). |
+| `limits.system.maxIterations` | `5` | 1–100 | 1–20 | warn outside safe range | Default bound of a `loop` node, and the most visits of one node in a `graph`. |
+| `limits.system.maxHandoffs` | `10` | 1–100 | 1–20 | warn outside safe range | Default bound of a `handoff` node: turns after the first; the next stops with `limit`. |
 | `limits.system.maxRepeats` | `3` | 1–100 | 1–10 | warn outside safe range | Back-and-forth round trips between the same two members before the next call stops with `limit`. |
 | `limits.system.stepTimeoutMs` | `300000` ms | 1–∞ or unbounded | 1–3600000 | fail if unbounded; warn outside safe range | One member call, capped by the time left in the run. |
 | `limits.system.minRemainingMs` | `1000` ms | 0–60000 | — | — | A member call does not start with less time left in the run than this; the call stops with `timeout`. |
@@ -98,3 +98,11 @@ Ordered by layer. Set them under the adapter's `options`; an adapter not listed 
 | Setting | Default | Accepted | Safe range | On production | Why |
 |---|---|---|---|---|---|
 | `options.maxRuns` | `1000` | 1–∞ | — | — | Runs kept in memory, with their stored steps and texts; ended runs are dropped oldest first. The adapter is prototype-only, so the gate refuses it on production anyway. |
+
+### `sqlite-execution` · ExecutionPort
+
+| Setting | Default | Accepted | Safe range | On production | Why |
+|---|---|---|---|---|---|
+| `options.maxRuns` | `1000` | 1–∞ | — | — | Runs kept in the database, with their stored steps and texts; ended runs are dropped oldest first. |
+| `options.busyTimeoutMs` | `5000` ms | 0–∞ | — | — | How long a write waits for another process that holds the database file before it fails. |
+| `options.leaseMs` | `600000` ms | 1–∞ | longer than the slowest step | — | How long a run stays held by the instance that began it after its last write. Another process cannot run it meanwhile; past it, a process that crashed no longer blocks the run, and a holder that was too slow is refused its next write. |

@@ -106,12 +106,17 @@ function largest(hops: HopRecord[], measure: (hop: HopRecord) => number | undefi
   return best;
 }
 
-const tokens = (hop: HopRecord) => (hop.usage ? hop.usage.inputTokens + hop.usage.outputTokens : undefined);
+/** Spend of this invocation only: a replayed hop's usage and cost were spent by an earlier one. */
+const tokens = (hop: HopRecord) => (hop.usage && !hop.replayed ? hop.usage.inputTokens + hop.usage.outputTokens : undefined);
+const cost = (hop: HopRecord) => (hop.replayed ? undefined : hop.costUsd);
 
-/** The member that spent the most: for `limit` the most tokens, else the highest cost, else the most time; for `timeout` the most time. */
+/**
+ * The member that spent the most in this invocation: for `limit` the most tokens, else the highest cost, else the most
+ * time; for `timeout` the most time. Replayed hops spent nothing here.
+ */
 function biggestSpender(hops: HopRecord[], code: string): HopRecord | undefined {
   if (code === 'limit') {
-    const measure = hops.some((h) => h.member && tokens(h) !== undefined) ? tokens : hops.some((h) => h.member && h.costUsd !== undefined) ? (h: HopRecord) => h.costUsd : undefined;
+    const measure = hops.some((h) => h.member && tokens(h) !== undefined) ? tokens : hops.some((h) => h.member && cost(h) !== undefined) ? cost : undefined;
     if (measure) return largest(hops, measure);
   }
   return largest(hops, (h) => h.durationMs);

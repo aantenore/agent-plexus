@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import {
+  assemble, defineAdapter, inputText, PORT_VERSIONS, prototypeHost, resolveConfig, type AdapterDescriptor, type MemberPort, type TopologyPort,
+} from '@agent-plexus/core';
 import { adapter, createMemoryExecution, limits } from '../src/index.ts';
 
 const make = (maxRuns?: number) => createMemoryExecution(maxRuns === undefined ? {} : { maxRuns }, { name: 'execution' });
@@ -72,7 +75,7 @@ test('wait resolves with the value given by signal', async () => {
   const port = make();
   const run = await port.begin('r');
   const waiting = run.wait('approval', soon(5000));
-  await port.signal('r', 'approval', { ok: true });
+  assert.equal(await port.signal('r', 'approval', { ok: true }), true);
   assert.deepEqual(await waiting, { ok: true });
   assert.deepEqual(await run.wait('approval', soon(5000)), { ok: true });
 });
@@ -90,7 +93,7 @@ test('wait gives undefined at the deadline, and a late signal is ignored', async
   const started = Date.now();
   assert.equal(await run.wait('slow', soon(20)), undefined);
   assert.ok(Date.now() - started >= 15);
-  await port.signal('r', 'slow', 'late');
+  assert.equal(await port.signal('r', 'slow', 'late'), false);
   assert.equal(await run.wait('slow', soon(5000)), undefined);
   assert.equal(await run.wait('past', new Date(Date.now() - 1000).toISOString()), undefined);
 });
@@ -215,4 +218,93 @@ test('remember rejects a value without a JSON form and an empty key; kept values
   await port.begin('b');
   assert.equal(await run.recall('k'), 1);
   assert.equal(await (await port.begin('a')).recall('k'), undefined);
+});
+
+test('signal is first wins: a second signal of a name, before or after its wait, is refused and changes nothing', async () => {
+  const port = make();
+  const run = await port.begin('r');
+  assert.equal(await port.signal('r', 'reply', 'first'), true);
+  assert.equal(await port.signal('r', 'reply', 'second'), false);
+  assert.equal(await run.wait('reply', soon(5000)), 'first');
+  assert.equal(await port.signal('r', 'reply', 'third'), false);
+  assert.equal(await (await port.begin('r')).wait('reply', soon(5000)), 'first');
+});
+
+// Resumes through a system: one reply per wait. -------------------------------------------------------------------
+
+/** A system of one member `D` that waits for input and continues through `resume`, journaled by `journal`. */
+async function waitingSystem(journal: AdapterDescriptor, options: Record<string, unknown> = {}) {
+  const resumed: string[] = [];
+  const invoked: string[] = [];
+  const maps = { technology: 'test' };
+  const tiers: ('prototype' | 'production')[] = ['prototype'];
+  const member = defineAdapter({
+    fills: 'MemberPort', name: 'waiting-member', maps, tiers, portVersion: PORT_VERSIONS.MemberPort,
+    create: (_o, ctx): MemberPort => ({
+      name: ctx.name,
+      describe: async () => ({ id: ctx.name, name: ctx.name, description: ctx.name, skills: [], endpoint: { protocol: 'function' }, trust: { signed: false, pinned: false } }),
+      invoke: async (input) => {
+        invoked.push(inputText(input));
+        return { status: 'waiting', output: '', reason: { code: 'needs_input', layer: 'member' }, taskRef: 'task-1' };
+      },
+      resume: async (_ref, input) => {
+        resumed.push(input === undefined ? '-' : inputText(input));
+        await new Promise((done) => setTimeout(done, 20));
+        return { status: 'completed', output: `D:${input === undefined ? '-' : inputText(input)}` };
+      },
+    }),
+  });
+  const topology = defineAdapter({
+    fills: 'TopologyPort', name: 'one-call', maps, tiers, portVersion: PORT_VERSIONS.TopologyPort,
+    create: (): TopologyPort => ({ name: 'one-call', kinds: ['sequence'], bind: () => ({ run: async (input, scope) => (await scope.call('D', input, { node: 'root' })).result }) }),
+  });
+  const attribution = defineAdapter({
+    fills: 'AttributionPort', name: 'no-attribution', maps, tiers, portVersion: PORT_VERSIONS.AttributionPort,
+    create: () => ({ name: 'no-attribution', attribute: async () => [] }),
+  });
+  const all = [member, topology, attribution, journal] as unknown as AdapterDescriptor[];
+  const config = resolveConfig({
+    system: { name: 'waits' },
+    members: { D: { adapter: 'waiting-member' } },
+    ports: { topology: { adapter: 'one-call' }, execution: { adapter: (journal as { name: string }).name, options }, attribution: { adapter: 'no-attribution' } },
+    topology: { kind: 'sequence', steps: ['D'] },
+  }, { cwd: process.cwd() });
+  const system = await assemble(config, {
+    host: prototypeHost({ quiet: true }),
+    resolveAdapter: async (fills, name) => {
+      const found = all.find((d) => d.fills === fills && d.name === name);
+      if (!found) throw new Error('is not installed');
+      return found;
+    },
+  });
+  return { system, resumed, invoked };
+}
+
+test('two concurrent resumes of one run: the first runs it, the other fails as in progress; the member resumes once', async () => {
+  const { system, resumed } = await waitingSystem(adapter as unknown as AdapterDescriptor, {});
+  assert.equal((await system.run('hi', { runId: 'c1' })).status, 'waiting');
+  const [a, b] = await Promise.all([system.resume('c1', { input: 'ALICE' }), system.resume('c1', { input: 'BOB' })]);
+  assert.deepEqual([a.status, a.output], ['completed', 'D:ALICE']);
+  assert.deepEqual([b.status, b.reason?.code, b.reason?.layer, b.reason?.detail], ['failed', 'error', 'execution', 'run c1 is in progress']);
+  assert.deepEqual(resumed, ['ALICE']);
+  await system.close();
+});
+
+test('a resume refused while another holds the run neither ends it nor lets maxRuns drop it mid-resume', async () => {
+  const alice = { id: 'alice', kind: 'user' as const, roles: [], scopes: [] };
+  const mallory = { id: 'mallory', kind: 'user' as const, roles: [], scopes: [] };
+  const { system, resumed, invoked } = await waitingSystem(adapter as unknown as AdapterDescriptor, { maxRuns: 1 });
+  assert.equal((await system.run('hi', { runId: 'x1', caller: alice })).status, 'waiting');
+  const first = system.resume('x1', { input: 'ok' }, { caller: alice });
+  await new Promise((done) => setTimeout(done, 5));
+  const refused = await system.resume('x1', { input: 'evil' }, { caller: mallory });
+  assert.equal(refused.reason?.detail, 'run x1 is in progress');
+  // A new run beyond maxRuns while x1 is held: x1 is not dropped.
+  assert.equal((await system.run('other', { runId: 'y1' })).status, 'waiting');
+  const done = await first;
+  assert.deepEqual([done.status, done.output], ['completed', 'D:ok'], JSON.stringify(done.reason));
+  const again = await system.run('hi', { runId: 'x1', caller: alice });
+  assert.deepEqual([again.status, again.output], ['completed', 'D:ok']);
+  assert.deepEqual([invoked, resumed], [['hi', 'other'], ['ok']]);
+  await system.close();
 });

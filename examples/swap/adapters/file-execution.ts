@@ -168,18 +168,19 @@ export function createFileExecution(options: FileExecutionOptions, ctx: Pick<Ada
     name: ctx.name,
     async begin(runKey) {
       if (typeof runKey !== 'string' || !runKey) throw new TypeError(`${NAME}: runKey must be a non-empty string`);
-      const run = (await open(runKey, true)) as Run;
-      delete run.file.status;
-      return execution(run);
+      // Not exclusive: two processes on one directory can run the same run at once. Prototype only.
+      return execution((await open(runKey, true)) as Run);
     },
     async signal(runKey, name, value) {
       const run = await open(runKey, false);
       if (!run) throw new Error(`${NAME}: unknown run "${runKey}"`);
-      if (Object.hasOwn(run.file.waits, name)) return;
+      // First wins: a name already signalled, or whose wait settled, takes no other value.
+      if (Object.hasOwn(run.file.waits, name) || Object.hasOwn(run.file.signals, name)) return false;
       const stored = store(value);
       if (run.pending.has(name)) settle(run, name, stored);
       else run.file.signals[name] = stored;
       await persist(run);
+      return true;
     },
     async read(key) {
       const at = key.lastIndexOf(':t');
@@ -200,7 +201,7 @@ export const adapter = defineAdapter<'ExecutionPort', FileExecutionOptions>({
   maps: { technology: 'JSON files in a directory' },
   portVersion: PORT_VERSIONS.ExecutionPort,
   tiers: ['prototype'],
-  description: 'Keeps the journal of each run in a JSON file: a new instance on the same directory resumes the runs of the old one. Prototype only: no locking, no cleanup of ended runs.',
+  description: 'Keeps the journal of each run in a JSON file: a new instance on the same directory resumes the runs of the old one. Prototype only: no hold across processes (two processes may run one run at once), no cleanup of ended runs.',
   optionsSchema: {
     type: 'object',
     properties: { dir: { type: 'string', minLength: 1 } },

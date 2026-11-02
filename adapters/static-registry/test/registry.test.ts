@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { AgentEntry } from '@agent-plexus/core';
-import { adapter, createStaticRegistry, type StaticRegistryOptions } from '../src/index.ts';
+import type { AgentEntry, Attributes, TelemetryHook } from '@agent-plexus/core';
+import { adapter, createStaticRegistry, REFUSED_EVENT, type StaticRegistryOptions } from '../src/index.ts';
 
 const entry = (id: string, extra: Partial<AgentEntry> = {}): AgentEntry => ({
   id,
@@ -112,4 +112,103 @@ test('invalid options fail at create time', () => {
   assert.throws(() => createStaticRegistry({ entries: { a: { skills: [{}] as never } } }, ctx), /skills/);
   assert.throws(() => createStaticRegistry({ entries: { a: { attrs: 'x' as never } } }, ctx), /attrs/);
   assert.throws(() => createStaticRegistry({}, { name: 'r' }), /members/);
+});
+
+const signed = (id: string, keyId?: string) => entry(id, { trust: { signed: true, ...(keyId ? { keyId } : {}), pinned: true } });
+
+const withTelemetry = (options: StaticRegistryOptions, members: () => Promise<AgentEntry[]>) => {
+  const events: { name: string; attrs: Attributes }[] = [];
+  const telemetry: TelemetryHook = {
+    span: (_name, _attrs, fn) => fn({ set: () => {}, event: () => {} }),
+    event: (name, attrs) => void events.push({ name, attrs }),
+    metric: () => {},
+  };
+  return { events, registry: createStaticRegistry(options, { name: 'registry', members, telemetry }) };
+};
+
+test('requireSigned: signed entries pass, unsigned ones are refused from get and list', async () => {
+  const r = registry({ trust: { requireSigned: true } }, async () => [signed('remote', 'k1'), entry('local')]);
+  assert.deepEqual((await r.list()).map((e) => e.id), ['remote']);
+  assert.equal((await r.get('remote'))?.id, 'remote');
+  assert.equal(await r.get('local'), undefined);
+});
+
+test('without a policy, or with requireSigned false, nothing is refused', async () => {
+  assert.equal((await registry({}).list()).length, 3);
+  assert.equal((await registry({ trust: {} }).list()).length, 3);
+  assert.equal((await registry({ trust: { requireSigned: false, exempt: ['triage'] } }).list()).length, 3);
+});
+
+test('keyIds: only signatures from the listed keys pass; it implies requireSigned', async () => {
+  const members = async () => [signed('a', 'k1'), signed('b', 'k2'), signed('c'), entry('d', { trust: { signed: false, keyId: 'k1', pinned: true } })];
+  const r = registry({ trust: { keyIds: ['k1', 'k3'] } }, members);
+  assert.deepEqual((await r.list()).map((e) => e.id), ['a']);
+  assert.equal(await r.get('b'), undefined);
+  assert.equal(await r.get('c'), undefined);
+  assert.equal(await r.get('d'), undefined);
+});
+
+test('exempt members pass without a signature; exemption does not leak to others', async () => {
+  const r = registry({ trust: { requireSigned: true, keyIds: ['k1'], exempt: ['local', 'ghost'] } }, async () => [entry('local'), entry('other'), signed('remote', 'k1')]);
+  assert.deepEqual((await r.list()).map((e) => e.id), ['local', 'remote']);
+});
+
+test('an entry without trust is refused', async () => {
+  const noTrust = { ...entry('x'), trust: undefined } as unknown as AgentEntry;
+  const r = registry({ trust: { requireSigned: true } }, async () => [noTrust]);
+  assert.deepEqual(await r.list(), []);
+  assert.equal(await r.get('x'), undefined);
+});
+
+test('filters apply after the policy', async () => {
+  const r = registry({ trust: { requireSigned: true } }, async () => [signed('a'), entry('b')]);
+  assert.deepEqual((await r.list({ attrs: { region: 'eu' } })).map((e) => e.id), []);
+});
+
+test('a refusal is reported once per entry state, with the member and reason only', async () => {
+  let members = [entry('local'), signed('remote', 'bad')];
+  const { events, registry: r } = withTelemetry({ trust: { keyIds: ['k1'] } }, async () => members);
+  await r.list();
+  await r.list();
+  await r.get('local');
+  await r.get('remote');
+  assert.deepEqual(events.map((e) => [e.name, e.attrs['plexus.member'], e.attrs['plexus.registry.reason']]), [
+    [REFUSED_EVENT, 'local', 'unsigned'],
+    [REFUSED_EVENT, 'remote', 'key'],
+  ]);
+  assert.equal(events[0]?.attrs['plexus.layer'], 'registry');
+  assert.deepEqual(Object.keys(events[1]?.attrs ?? {}).sort(), ['plexus.layer', 'plexus.member', 'plexus.registry.reason']);
+  // the key changes: refused again; accepted then refused again: reported again
+  members = [entry('local'), signed('remote', 'bad2')];
+  await r.list();
+  members = [signed('local', 'k1'), signed('remote', 'k1')];
+  await r.list();
+  members = [entry('local'), signed('remote', 'k1')];
+  await r.list();
+  assert.equal(events.length, 4);
+  assert.deepEqual(events.slice(2).map((e) => [e.attrs['plexus.member'], e.attrs['plexus.registry.reason']]), [['remote', 'key'], ['local', 'unsigned']]);
+});
+
+test('accepted entries and exempt members report nothing', async () => {
+  const { events, registry: r } = withTelemetry({ trust: { requireSigned: true, exempt: ['local'] } }, async () => [entry('local'), signed('remote', 'k1')]);
+  await r.list();
+  assert.deepEqual(events, []);
+});
+
+test('invalid trust options fail at create time', () => {
+  const ctx = { name: 'r', members: async () => [] };
+  assert.throws(() => createStaticRegistry({ trust: [] as never }, ctx), /trust must be an object/);
+  assert.throws(() => createStaticRegistry({ trust: { requireSigned: 'yes' as never } }, ctx), /requireSigned/);
+  assert.throws(() => createStaticRegistry({ trust: { keyIds: 'k1' as never } }, ctx), /keyIds/);
+  assert.throws(() => createStaticRegistry({ trust: { keyIds: [''] } }, ctx), /keyIds/);
+  assert.throws(() => createStaticRegistry({ trust: { keyIds: [] } }, ctx), /keyIds must not be empty/);
+  assert.throws(() => createStaticRegistry({ trust: { exempt: [1] as never } }, ctx), /exempt/);
+});
+
+test('the options schema describes trust and rejects unknown keys', () => {
+  const trust = adapter.optionsSchema?.properties?.trust;
+  assert.equal(trust?.additionalProperties, false);
+  assert.deepEqual(Object.keys(trust?.properties ?? {}), ['requireSigned', 'keyIds', 'exempt']);
+  assert.equal(trust?.properties?.keyIds?.items?.minLength, 1);
+  assert.equal(trust?.properties?.exempt?.items?.minLength, 1);
 });

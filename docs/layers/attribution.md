@@ -65,10 +65,10 @@ records beat log text. See [research/protocols.md](../research/protocols.md).
 |---|---|---|---|---|
 | 1 | The candidate is the earliest hop that did not complete, or whose member failed an expectation (a score with `member` below 1) | | | |
 | 1 | Completed hop of a member that failed an expectation | `member` | The hop | medium |
-| 2 | A route node that chose no member | `routing` | none | high |
+| 2 | A route node that chose no member, or whose routing failed | `routing` | none | high |
 | 3 | `hop_limit` | `topology`, `routing` when a router chose the call | none | high |
 | 3 | `timeout`, `limit` with `reason.layer` `topology` (the system's own limit or deadline) | `topology` | none | high |
-| 3 | `timeout`, `limit` otherwise | `member` | `limit`: the hop with the most tokens, else the highest cost, else the longest duration. `timeout`: the longest duration | medium |
+| 3 | `timeout`, `limit` otherwise | `member` | `limit`: the hop with the most tokens, else the highest cost, else the longest duration, `replayed` hops' usage and cost left out. `timeout`: the longest duration | medium |
 | 3 | `denied`, `needs_auth` from the host | `host` | none | high |
 | 3 | `guard_block` from the host | `host` | `receive`: the hop's own member; `send`: the first upstream member that added text (the previous completed hop's member when texts are not readable); none when every upstream member only repeated the caller's input (evidence `origin:input`) | high |
 | 3 | Any other code with `reason.layer` `topology` | `topology` | none | medium |

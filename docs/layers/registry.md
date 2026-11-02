@@ -47,13 +47,40 @@ Mapped by adapters, not by the port:
 
 ## Boundaries
 
-- Cards are untrusted. Planned: JWS signatures checked against configured keys, size and count bounded, cached with a
-  TTL. Production requires signed cards or endpoints pinned in config.
+- Cards are untrusted. `a2a-member` checks their JWS signatures against configured keys only, bounds their size
+  (`maxCardBytes`) and caches them for `cardTtlMs`. Production requires signed cards or endpoints pinned in config.
 - `audience` always comes from config; a card cannot set the audience a token is minted for.
 - `registry.requireSigned` makes `check` fail every member with neither a signed card nor a pinned endpoint. A
   function member is pinned.
+- `registry.requireListed` makes the registry a gate: a member call needs the registry to return the member, else it is
+  `denied` (layer `registry`). Without it the registry only supplies route candidates.
 - The core cuts the candidates it hands to a router at `limits.router.maxCandidates`.
 - Choosing among candidates is [routing](routing.md); a registry does not rank.
+
+## Signed cards
+
+- **Verifies**: the member that reads the card. `a2a-member` checks the JWS of its remote card against the keys in
+  config and reports `trust: { signed, keyId, pinned }` on its entry. A registry takes that as given.
+- **Enforces**: the `static-registry` `trust` policy (`requireSigned`, `keyIds`, `exempt`). An entry that fails it is not
+  returned by `get`, is left out of `list`, and is reported once as a `plexus.registry.refused` event with the member id
+  and the reason (`unsigned` or `key`).
+- **Direct calls**: only with the system config flag `registry.requireListed: true` does the core refuse to call a member
+  the registry does not return, even when the topology names it directly (`denied`, layer `registry`); `check` fails a
+  member the registry does not list. Without the flag a refused member can still be named by the topology. The flag is in
+  the [config reference](../guide.md#stack-config-reference).
+- **Production**: `requireSigned` with `keyIds`, `exempt` listing the local members (they have no card), and
+  `registry.requireListed: true`.
+
+```json
+{
+  "ports": {
+    "registry": {
+      "adapter": "static-registry",
+      "options": { "trust": { "requireSigned": true, "keyIds": ["partners-2026"], "exempt": ["triage"] } }
+    }
+  }
+}
+```
 
 ## Configuration
 
@@ -62,7 +89,7 @@ Mapped by adapters, not by the port:
   "ports": {
     "registry": { "adapter": "static-registry", "options": { "entries": { "billing": { "tags": ["billing"] } } } }
   },
-  "registry": { "requireSigned": false },
+  "registry": { "requireSigned": false, "requireListed": false },
   "limits": { "registry": { "cardTtlMs": 300000, "maxCardBytes": 65536 } }
 }
 ```

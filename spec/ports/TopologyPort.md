@@ -36,8 +36,13 @@ What the core gives the adapter for one run.
 
 `CallOptions` is `{node, parentHopId?, share?, signal?, route?}`: the topology path of the calling node, the fraction of
 the remaining budget to reserve (parallel branches; default all that is not reserved), a cancellation signal, and the
-router's decision that chose the member. `CallOutcome` is `{hopId, result}`. `RouteRequest` is
-`{input, candidates, router?, node}`.
+router's decision that chose the member. `CallOutcome` is `{hopId, result}`; when the call replayed from the journal,
+`result` has no `usage` or `costUsd` (an earlier invocation spent them), so totals summed over results count only this
+invocation. `RouteRequest` is `{input, candidates, router?, node, optional?}`. With `optional`, choosing nobody is an
+expected answer (a handoff that ends): the core writes no hop record for it. Without `optional`, a decision with no
+member is a hop of its own (`stopped`, `rejected`, layer `routing`), which attribution can name. A decision with
+`failed` (the router or the registry threw, or the router chose outside the candidates) always writes a hop of its
+own, `failed`, code `error`, layer `routing`, also with `optional`.
 
 ## Semantics
 
@@ -46,8 +51,17 @@ router's decision that chose the member. `CallOutcome` is `{hopId, result}`. `Ro
   enforces `maxParallel`, `maxIterations` and `maxHandoffs` from `scope.limits` or the node's own bound.
 - `bind` rejects a spec that uses a kind it does not run, naming the kind and its path.
 - A `sequence` stops at the first step that is not `completed` and returns its result.
+- A `handoff` asks its router with `optional: true`: a router that chooses nobody ends the handoff `completed`, and
+  leaves no routing hop that a later failure could be attributed to. A routing decision with `failed` stops the
+  handoff `failed`, code `error`, layer `routing`. A `route` node whose decision failed runs its `fallback`, else ends
+  `failed` the same way.
+- A `handoff` is bounded by `maxHandoffs` (the node's own, else `scope.limits`); a `graph` follows the first edge from
+  a node that applies, and a node visited more than `scope.limits.maxIterations` times stops with `limit`. An edge
+  without `when` applies to a `completed` result; an edge's `when` applies to a `waiting` result only if its `status`
+  names `waiting`, otherwise a waiting node ends the graph `waiting`.
 - Node paths used in hop records: `root`, `root.steps[i]`, `root.branches[i]`, `root.merge`, `root.fallback`,
-  `root.body#<iteration>` (iterations count from 1).
+  `root.body#<iteration>` (iterations count from 1), `root.turns[i]` (handoff), `root.nodes.<id>` (graph; `#<visit>`
+  from the second visit).
 - The core wraps the result into a `SystemResult` with the hop record, sorted by start time.
 
 ## Errors

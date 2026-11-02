@@ -31,8 +31,9 @@ export interface ReadinessInput {
 
 /**
  * The readiness gate. On a production tier: the host must not be a prototype, no adapter may be prototype-only, and
- * limits (the system's and each adapter's) must be bounded and in their safe ranges. On any tier: the topology must be valid, and with
- * `registry.requireSigned` every member must have a signed card or a pinned endpoint.
+ * limits (the system's and each adapter's) must be bounded and in their safe ranges. On any tier: the topology must be valid, with
+ * `registry.requireSigned` every member must have a signed card or a pinned endpoint, and with `registry.requireListed`
+ * the registry must list every member.
  */
 export function readinessFindings(input: ReadinessInput): Finding[] {
   const { config } = input;
@@ -57,6 +58,12 @@ export function readinessFindings(input: ReadinessInput): Finding[] {
   if (input.registryError) out.push({ severity: 'fail', path: '$.ports.registry', message: `registry could not list its entries: ${input.registryError}` });
   for (const id of input.registryIds ?? []) {
     if (!Object.keys(config.members).includes(id)) out.push({ severity: 'fail', path: '$.ports.registry', message: `entry "${id}" is not a configured member` });
+  }
+  if (config.registry.requireListed) {
+    if (!config.ports.registry) out.push({ severity: 'fail', path: '$.registry.requireListed', message: 'registry.requireListed needs ports.registry' });
+    for (const id of Object.keys(config.members)) {
+      if (input.registryIds && !input.registryIds.includes(id)) out.push({ severity: 'fail', path: `$.members.${id}`, message: `member "${id}" is not listed by the registry (registry.requireListed)` });
+    }
   }
   if (config.registry.requireSigned) {
     for (const e of input.entries) {

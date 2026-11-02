@@ -40,7 +40,9 @@ word, `file-execution` makes a temp directory and removes it on close.
 
 The `adapters/` files are what a third party writes: each exports `adapters`, an array of descriptors made with
 `defineAdapter`, and imports only `@agent-plexus/core`. None wraps a reference adapter. `file-execution` is tier
-`prototype` only, so the readiness gate refuses it on a production tier.
+`prototype` only, so the readiness gate refuses it on a production tier. It does not hold a run across processes
+(no `RUN_BUSY`, no `release`): within one process the core runs one invocation per run, but two processes on one
+directory may run the same run at once.
 
 ## Commands
 

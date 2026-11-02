@@ -2,26 +2,74 @@ import { randomUUID } from 'node:crypto';
 import type { AdapterContext, Fills, FillTypes, Tier } from './adapter.ts';
 import { loadConditionFns, matchesCondition } from './condition.ts';
 import type { ResolvedConfig } from './config.ts';
-import type { Host } from './hooks.ts';
+import type { GateAnswer, Host, ResumeQuestion } from './hooks.ts';
+import { isRunBusy } from './errors.ts';
 import { deadlineBy, deadlineMs, Ledger, openBounds } from './ledger.ts';
-import { memberCall, type MemberCallEnv, type RunState } from './member-call.ts';
-import { ATTR, METRIC, SPAN } from './names.ts';
+import {
+  memberCall, nextStepKey, replyName, replyWait, resumeReply, RUN_KEYS, waitingCall, waitRef, waitToken, type MemberCallEnv, type RunState,
+  type WaitingCall,
+} from './member-call.ts';
+import { ATTR, EVENT, METRIC, SPAN } from './names.ts';
 import type {
-  AgentRouterPort, AttributionPort, BoundTopology, ExecutionPort, MemberPort, RecordSource, RegistryPort, RouteRequest, RunScope,
-  TopologyPort,
+  AgentRouterPort, AttributionPort, BoundTopology, Execution, ExecutionPort, MemberPort, RecordSource, RegistryPort, RouteRequest,
+  RunScope, TopologyPort,
 } from './ports.ts';
 import { prototypeHost, noopTelemetry } from './prototype-host.ts';
 import { readinessFindings, type Finding } from './readiness.ts';
 import { createAdapter, loadDescriptor, type DescriptorLoader } from './resolve.ts';
-import type {
-  AgentEntry, Attribution, EvalCase, HopRecord, MemberResult, RouteDecision, RunContext, RunInput, Score, SystemResult,
+import {
+  callerIdentity, inputText, isRunInput, sameIdentity, type AgentEntry, type Attribution, type CallerIdentity, type EvalCase,
+  type HopRecord, type Lineage, type MemberResult, type ResumeReply, type RouteDecision, type RunContext, type RunInput, type RunStatus,
+  type Score, type SystemResult,
 } from './shapes.ts';
 import { DEFAULT_ROUTER } from './topology-check.ts';
 import { limitNumber, type Env } from './system-limits.ts';
-import { errorMessage, withoutCredential } from './util.ts';
+import { errorMessage, isPlainObject, withoutCredential } from './util.ts';
 
 /** Longest run id a caller may provide. */
 const MAX_RUN_ID = 128;
+
+const isRunId = (id: unknown): id is string => typeof id === 'string' && id.length > 0 && id.length <= MAX_RUN_ID;
+
+const lineageOf = (value: unknown): Lineage | undefined =>
+  isPlainObject(value) && typeof value.rootRunId === 'string' && typeof value.parentRunId === 'string'
+    ? { rootRunId: value.rootRunId, parentRunId: value.parentRunId }
+    : undefined;
+
+/** A kept `run:owner`: an identity, `null` for a run started without a caller, undefined when it is not a valid one. */
+function ownerOf(value: unknown): CallerIdentity | null | undefined {
+  if (value === null) return null;
+  if (!isPlainObject(value) || typeof value.id !== 'string' || (value.kind !== 'user' && value.kind !== 'agent')) return undefined;
+  const actors = Array.isArray(value.actors)
+    ? value.actors.filter((a): a is { id: string; kind: 'user' | 'agent' } => isPlainObject(a) && typeof a.id === 'string' && (a.kind === 'user' || a.kind === 'agent'))
+    : undefined;
+  return callerIdentity({ id: value.id, kind: value.kind, ...(typeof value.name === 'string' ? { name: value.name } : {}), ...(actors ? { actors } : {}) });
+}
+
+/** Same text and same parts: a string and `{ text }` with that string are the same input. */
+const sameInput = (a: RunInput, b: RunInput): boolean => {
+  const parts = (i: RunInput) => JSON.stringify(typeof i === 'string' ? [] : i.parts ?? []);
+  return inputText(a) === inputText(b) && parts(a) === parts(b);
+};
+
+/** What the run had kept when an invocation began it: its input and its owner (undefined for a new run). */
+interface Kept {
+  input: unknown;
+  owner: unknown;
+}
+
+/**
+ * How a run starts: its input and context and the wait it reads a reply for, or why it cannot start. A refusal leaves
+ * the run as it was: the invocation lets go of it without a status, and only a run that kept nothing ends `failed`.
+ */
+type Opening = { input: RunInput; ctx: RunContext; resuming?: WaitingCall } | { refused: MemberResult };
+
+/**
+ * Runs held by an invocation in this process, per journal: one invocation per run at a time. Keyed by the execution
+ * adapter instance rather than the system, so systems that share one journal instance share the hold too; systems on
+ * separate instances of one store rely on the adapter's own hold (`begin` rejecting with `RUN_BUSY`).
+ */
+const holds = new WeakMap<ExecutionPort, Set<string>>();
 
 export interface AssembleOptions {
   /** Overrides the config's host; without either, the prototype host. */
@@ -41,9 +89,21 @@ export interface System {
   tier: Tier;
   /**
    * Runs the topology once. `ctx.runId` is used when the caller provides one (a non-empty string of at most 128
-   * characters; anything else is replaced by a generated id). The caller is responsible for its uniqueness.
+   * characters; anything else is replaced by a generated id). The caller is responsible for its uniqueness. With the
+   * id of a run the journal knows, the run continues (completed steps replay) only with the same input, and only for
+   * its owner or a caller the host's gate lets `resume` it.
    */
   run(input: RunInput, ctx?: Partial<RunContext>): Promise<SystemResult>;
+  /**
+   * Answers a run that ended `waiting` and runs its topology again under the same run id, with the input kept when it
+   * started: completed steps replay from the journal and the waiting call reads the reply. `input` answers a member
+   * that waits for input, `approved` the host's `ask`; `wait`, when given, must be the token of the wait the run keeps
+   * (`SystemResult.wait.token`), so a late or repeated reply cannot answer a later wait. Like `run`, a new invocation:
+   * deadline and budget come from `ctx` and the limits, and `ctx.caller` is who resumes. The host's gate is asked
+   * `resume` first (with the run's owner); only `allow` delivers the reply. One reply per wait: the first delivered
+   * wins. Across processes it needs a durable execution adapter.
+   */
+  resume(runId: string, reply: ResumeReply, ctx?: Partial<RunContext>): Promise<SystemResult>;
   entries(): Promise<AgentEntry[]>;
   attribute(result: SystemResult, scores?: Score[]): Promise<Attribution[]>;
   score(evalCase: EvalCase, result: SystemResult): Promise<Score[]>;
@@ -122,35 +182,108 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
     return found.slice(0, limitNumber(limits.maxCandidates));
   }
 
-  /** A route that chose nobody is a hop of its own, so attribution can see it; it is not a step. */
+  /** Reports a journal write that failed: the key (or `end`, `release`) and the error, never the value. */
+  const writeFailed = (key: string, err: unknown): void =>
+    host.telemetry.event(EVENT.writeFailed, { [ATTR.layer]: 'execution', [ATTR.system]: config.name, [ATTR.executionKey]: key, [ATTR.errorMessage]: errorMessage(err) });
+
+  /** Keeps a run value; a write that fails is reported and the run goes on, though it may not be resumable. Whether it succeeded. */
+  async function keep(run: Execution, key: string, value: unknown): Promise<boolean> {
+    try {
+      await run.remember(key, value);
+      return true;
+    } catch (err) {
+      writeFailed(key, err);
+      return false;
+    }
+  }
+
+  /** Ends the run with a status; a failure is reported and the result stands. */
+  async function end(run: Execution, status: RunStatus): Promise<void> {
+    try {
+      await run.end(status);
+    } catch (err) {
+      writeFailed('end', err);
+    }
+  }
+
+  /** Lets go of the run without a status; a failure is reported and the result stands. */
+  async function release(run: Execution): Promise<void> {
+    try {
+      await run.release?.();
+    } catch (err) {
+      writeFailed('release', err);
+    }
+  }
+
+  /** The wait a waiting result names, else the latest the run recorded (reported: the result named none of them). */
+  function keptWait(result: MemberResult, waits: readonly WaitingCall[] = []): WaitingCall | undefined {
+    const token = result.wait?.token;
+    const named = token === undefined ? undefined : waits.find((w) => waitToken(w) === token);
+    if (named) return named;
+    const latest = waits.at(-1);
+    if (latest) host.telemetry.event(EVENT.waitInferred, { [ATTR.layer]: 'execution', [ATTR.system]: config.name, [ATTR.member]: latest.member });
+    return latest;
+  }
+
+  /**
+   * A route that chose nobody, or that failed, is a hop of its own, so attribution can see it; it is not a step. A route
+   * that chose nobody writes none when `optional`; a failed one always does.
+   */
   function recordNoRoute(state: RunState, node: string, decision: RouteDecision): void {
     state.records.push({
       hopId: randomUUID(), member: '', node, rootRunId: state.rootRunId, hops: state.ledger.bounds.hops + 1,
-      startedAt: new Date().toISOString(), durationMs: 0, status: 'stopped', reason: { code: 'rejected', layer: 'routing' },
+      startedAt: new Date().toISOString(), durationMs: 0,
+      ...(decision.failed
+        ? { status: 'failed' as const, reason: { code: 'error', layer: 'routing', ...(decision.reason ? { detail: decision.reason } : {}) } }
+        : { status: 'stopped' as const, reason: { code: 'rejected', layer: 'routing' } }),
       route: { ...(decision.ranked ? { ranked: decision.ranked } : {}) },
     });
   }
 
   function scopeOf(state: RunState, input: RunInput): RunScope {
-    const route = (request: RouteRequest): Promise<RouteDecision> =>
-      host.telemetry.span(SPAN.route, { [ATTR.layer]: 'routing', [ATTR.system]: config.name, [ATTR.nodePath]: request.node }, async (span) => {
+    // Throws when routing fails, so the failure is never journaled as a decision.
+    const decide = async (request: RouteRequest): Promise<RouteDecision> => {
+      const router = routers.get(request.router ?? DEFAULT_ROUTER);
+      if (!router) throw new Error(`router "${request.router ?? DEFAULT_ROUTER}" is not configured`);
+      const candidates = await candidatesOf(request);
+      const asked = await router.route(
+        { input: request.input, candidates, ...(state.ctx.caller ? { caller: withoutCredential(state.ctx.caller) } : {}), bounds: state.ledger.bounds },
+        { ...state.ctx, ...(state.ctx.caller ? { caller: withoutCredential(state.ctx.caller) } : {}) },
+      );
+      if (asked.member !== undefined && !candidates.some((c) => c.id === asked.member)) throw new Error('router chose a member outside the candidates');
+      return asked;
+    };
+    const routes = new Map<string, number>();
+    const route = (request: RouteRequest): Promise<RouteDecision> => {
+      // A journal step, so a replay takes the path it took, whatever the router would answer now. Keyed by node path.
+      const key = nextStepKey(routes, 'route', request.node);
+      return host.telemetry.span(SPAN.route, { [ATTR.layer]: 'routing', [ATTR.system]: config.name, [ATTR.nodePath]: request.node }, async (span) => {
         let decision: RouteDecision;
         try {
-          const router = routers.get(request.router ?? DEFAULT_ROUTER);
-          if (!router) throw new Error(`router "${request.router ?? DEFAULT_ROUTER}" is not configured`);
-          const candidates = await candidatesOf(request);
-          const asked = await router.route(
-            { input: request.input, candidates, ...(state.ctx.caller ? { caller: withoutCredential(state.ctx.caller) } : {}), bounds: state.ledger.bounds },
-            { ...state.ctx, ...(state.ctx.caller ? { caller: withoutCredential(state.ctx.caller) } : {}) },
-          );
-          decision = asked.member !== undefined && !candidates.some((c) => c.id === asked.member) ? { reason: 'router chose a member outside the candidates' } : asked;
+          decision = await state.execution.step(key, () => decide(request));
         } catch (err) {
-          decision = { reason: errorMessage(err) };
+          decision = { reason: errorMessage(err), failed: true };
         }
         span.set({ [ATTR.routeChoice]: decision.member ?? '' });
-        if (decision.member === undefined) recordNoRoute(state, request.node, decision);
+        if (decision.failed || (decision.member === undefined && !request.optional)) recordNoRoute(state, request.node, decision);
         return decision;
       });
+    };
+    // With registry.requireListed, one registry lookup per member and run.
+    const listed = new Map<string, Promise<boolean>>();
+    const env: MemberCallEnv = registry && config.registry.requireListed
+      ? {
+        ...callEnv,
+        listed: (id) => {
+          let found = listed.get(id);
+          if (!found) {
+            found = registry.get(id).then((e) => e !== undefined);
+            listed.set(id, found);
+          }
+          return found;
+        },
+      }
+      : callEnv;
     const { caller } = state.ctx;
     return {
       ctx: { ...state.ctx, ...(caller ? { caller: withoutCredential(caller) } : {}) },
@@ -160,7 +293,7 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
         maxIterations: limitNumber(limits.maxIterations),
         maxHandoffs: limitNumber(limits.maxHandoffs),
       },
-      call: (member, text, options) => memberCall(callEnv, state, member, text, options),
+      call: (member, text, options) => memberCall(env, state, member, text, options),
       route,
       matches: (condition, result) => matchesCondition(condition, result, fns),
       abandon: (hopId) => {
@@ -170,17 +303,83 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
     };
   }
 
-  async function execute(input: RunInput, ctx: RunContext, rootRunId: string): Promise<SystemResult> {
-    const record = (result: MemberResult, records: HopRecord[] = []): SystemResult => ({ ...result, runId: ctx.runId, record: records });
-    let run;
-    try {
-      run = await journal.begin(ctx.runId);
-    } catch (err) {
-      return record(failed('error', 'execution', errorMessage(err)));
+  /**
+   * Asks the gate whether the caller of `ctx` may continue the run that `owner` started (null: started without a
+   * caller). Undefined when allowed; otherwise the result of the refused invocation: `denied`, or `waiting` on `ask`.
+   */
+  async function mayResume(ctx: RunContext, owner: CallerIdentity | null, waiting: WaitingCall | undefined, answer?: GateAnswer): Promise<MemberResult | undefined> {
+    let member: AgentEntry | undefined;
+    if (waiting && members.has(waiting.member)) {
+      try {
+        member = await entry(waiting.member);
+      } catch { /* asked without the member */ }
     }
+    const question: ResumeQuestion = {
+      action: 'resume', runId: ctx.runId, ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
+      ...(ctx.caller ? { caller: withoutCredential(ctx.caller) } : {}), ...(owner ? { owner } : {}),
+      ...(member ? { member } : {}), ...(answer ? { answer } : {}),
+    };
+    const refusal = (code: string, status: RunStatus, detail?: string): MemberResult =>
+      ({ status, output: '', reason: { code, layer: 'host', by: host.name, ...(detail ? { detail } : {}) } });
+    try {
+      const decision = await host.gate.allow(question);
+      if (decision.effect === 'allow') return undefined;
+      return decision.effect === 'ask' ? refusal('needs_input', 'waiting', decision.reason) : refusal('denied', 'stopped', decision.reason);
+    } catch (err) {
+      return refusal('denied', 'stopped', errorMessage(err));
+    }
+  }
+
+  function traced(ctx: RunContext, open: (run: Execution, kept: Kept) => Promise<Opening>): Promise<SystemResult> {
+    return host.telemetry.span(SPAN.run, { [ATTR.layer]: 'topology', [ATTR.system]: config.name }, async (span) => {
+      const result = await execute(ctx, open);
+      span.set({ [ATTR.runStatus]: result.status, ...(result.reason ? { [ATTR.runReason]: result.reason.code } : {}) });
+      return result;
+    });
+  }
+
+  /** One invocation of a run: refused, without touching the journal, while another holds the run. */
+  async function execute(start: RunContext, open: (run: Execution, kept: Kept) => Promise<Opening>): Promise<SystemResult> {
+    let held = holds.get(journal);
+    if (!held) holds.set(journal, (held = new Set()));
+    if (held.has(start.runId)) return { ...failed('error', 'execution', `run ${start.runId} is in progress`), runId: start.runId, record: [] };
+    held.add(start.runId);
+    try {
+      return await executeHeld(start, open);
+    } finally {
+      held.delete(start.runId);
+    }
+  }
+
+  async function executeHeld(start: RunContext, open: (run: Execution, kept: Kept) => Promise<Opening>): Promise<SystemResult> {
+    const record = (result: MemberResult, records: HopRecord[] = []): SystemResult => ({ ...result, runId: start.runId, record: records });
+    let run: Execution;
+    try {
+      run = await journal.begin(start.runId);
+    } catch (err) {
+      // Another process holds the run: the same answer as for one in this process.
+      return record(failed('error', 'execution', isRunBusy(err) ? `run ${start.runId} is in progress` : errorMessage(err)));
+    }
+    let opening: Opening;
+    let fresh = false;
+    try {
+      const kept: Kept = { input: await run.recall(RUN_KEYS.input), owner: await run.recall(RUN_KEYS.owner) };
+      fresh = kept.input === undefined && kept.owner === undefined;
+      opening = await open(run, kept);
+    } catch (err) {
+      opening = { refused: failed('error', 'execution', errorMessage(err)) };
+    }
+    if ('refused' in opening) {
+      // Nothing changes: a run that kept nothing (begun here) ends failed so the journal may drop it; any other is let go.
+      if (fresh) await end(run, 'failed');
+      else await release(run);
+      return record(opening.refused);
+    }
+    const { input, ctx, resuming } = opening;
+    const rootRunId = ctx.lineage?.rootRunId ?? ctx.runId;
     const now = Date.now();
     const ledger = new Ledger(openBounds(ctx, limits, now), Date.now, deadlineBy(ctx, limits, now));
-    const state: RunState = { ctx, rootRunId, ledger, execution: run, steps: 0, recent: [], records: [] };
+    const state: RunState = { ctx, rootRunId, ledger, execution: run, steps: 0, recent: [], records: [], ...(resuming ? { resuming } : {}) };
     let result: MemberResult;
     if (!bound) result = failed('error', 'topology', bindError ?? 'topology is not bound');
     else if (Date.now() >= deadlineMs(ledger.bounds)) result = { status: 'stopped', output: '', reason: { code: 'timeout', layer: 'topology' } };
@@ -191,23 +390,91 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
         result = failed('error', 'topology', errorMessage(err));
       }
     }
-    try { await run.end(result.status); } catch { /* the result stands */ }
+    // A resume answers the wait the result reports, and the result names the wait the run keeps.
+    const waiting = result.status === 'waiting' ? keptWait(result, state.waits) : undefined;
+    const { wait: _wait, ...rest } = result;
+    const final: MemberResult = { ...rest, ...(waiting ? { wait: waitRef(waiting) } : {}) };
+    if (await keep(run, RUN_KEYS.waiting, waiting ?? null)) await keep(run, RUN_KEYS.status, result.status);
+    await end(run, result.status);
     const records = [...state.records].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
     history.push({ rootRunId, record: records });
     if (history.length > limitNumber(limits.historyRuns)) history.shift();
-    return record(result, records);
+    return record(final, records);
   }
 
   return {
     name: config.name,
     tier: config.tier,
     run(input, partial = {}) {
-      const runId = typeof partial.runId === 'string' && partial.runId.length > 0 && partial.runId.length <= MAX_RUN_ID ? partial.runId : randomUUID();
+      const runId = isRunId(partial.runId) ? partial.runId : randomUUID();
       const ctx: RunContext = { ...partial, runId, system: config.name };
-      return host.telemetry.span(SPAN.run, { [ATTR.layer]: 'topology', [ATTR.system]: config.name }, async (span) => {
-        const result = await execute(input, ctx, partial.lineage?.rootRunId ?? runId);
-        span.set({ [ATTR.runStatus]: result.status, ...(result.reason ? { [ATTR.runReason]: result.reason.code } : {}) });
-        return result;
+      const unkept = (): Opening => ({ refused: failed('error', 'execution', `run ${runId} could not be kept`) });
+      return traced(ctx, async (run, kept): Promise<Opening> => {
+        if (kept.input === undefined && kept.owner === undefined) {
+          // A new run. Kept for a resume: the owner's identity, the input and the lineage, never the caller's credential.
+          // Without its owner or its input the run does not start: anyone could take its id over later.
+          if (!(await keep(run, RUN_KEYS.owner, ctx.caller ? callerIdentity(ctx.caller) : null)) || !(await keep(run, RUN_KEYS.input, input))) return unkept();
+          if (ctx.lineage) await keep(run, RUN_KEYS.lineage, ctx.lineage);
+          return { input, ctx };
+        }
+        // A run the journal knows: continued by its owner, or by another caller the gate lets resume it, with the same input.
+        const owner = ownerOf(kept.owner);
+        if (owner === undefined) return { refused: failed('error', 'execution', `run ${runId} has no kept owner`) };
+        if (!sameIdentity(owner ?? undefined, ctx.caller ? callerIdentity(ctx.caller) : undefined)) {
+          const refused = await mayResume(ctx, owner, waitingCall(await run.recall(RUN_KEYS.waiting)));
+          if (refused) return { refused };
+        }
+        if (kept.input !== undefined && !(isRunInput(kept.input) && sameInput(kept.input, input))) {
+          return { refused: failed('error', 'execution', `run ${runId} exists with a different input`) };
+        }
+        // A run that could not keep its input when it started keeps it now, or does not go on.
+        if (kept.input === undefined && !(await keep(run, RUN_KEYS.input, input))) return unkept();
+        // A reply a resume claimed before it could finish is read by the call it answers.
+        const claimed = waitingCall(await run.recall(RUN_KEYS.claimed));
+        return { input, ctx, ...(claimed ? { resuming: claimed } : {}) };
+      });
+    },
+    resume(runId, reply, partial = {}) {
+      const answer = resumeReply(reply);
+      const asked = replyWait(reply);
+      if (!isRunId(runId) || !answer || asked === false) {
+        const detail = !answer ? 'invalid reply: give either input or approved' : asked === false ? 'invalid reply: wait must be a wait token' : 'invalid run id';
+        return Promise.resolve({ ...failed('error', 'execution', detail), runId: String(runId), record: [] });
+      }
+      const ctx: RunContext = { ...partial, runId, system: config.name };
+      return traced(ctx, async (run, kept): Promise<Opening> => {
+        const waiting = waitingCall(await run.recall(RUN_KEYS.waiting));
+        if (!waiting) return { refused: failed('error', 'execution', `run ${runId} is not waiting`) };
+        // A reply that names its wait answers only that one: a late or repeated resume cannot answer a later wait.
+        if (asked !== undefined && asked !== waitToken(waiting)) return { refused: failed('error', 'execution', `run ${runId} waits on another step`) };
+        if ('input' in answer !== (waiting.kind === 'member')) {
+          return { refused: failed('error', 'execution', `run ${runId} waits for ${waiting.kind === 'member' ? 'input' : 'an approval'}`) };
+        }
+        const { input } = kept;
+        if (!isRunInput(input)) return { refused: failed('error', 'execution', `run ${runId} has no kept input`) };
+        const owner = ownerOf(kept.owner);
+        if (owner === undefined) return { refused: failed('error', 'execution', `run ${runId} has no kept owner`) };
+        // An approval records who gave it.
+        const by = ctx.caller?.id;
+        const given: ResumeReply | GateAnswer = 'approved' in answer && by !== undefined ? { ...answer, by } : answer;
+        // Asked before anything is delivered: a refused resume leaves the run as it was.
+        const refused = await mayResume(ctx, owner, waiting, 'approved' in given ? given : undefined);
+        if (refused) return { refused };
+        const lineage = partial.lineage ?? lineageOf(await run.recall(RUN_KEYS.lineage));
+        let delivered: boolean;
+        try {
+          delivered = await journal.signal(runId, replyName(waiting.key, waiting.attempt), given);
+        } catch (err) {
+          return { refused: failed('error', 'execution', errorMessage(err)) };
+        }
+        // This invocation alone holds the run, so a reply already there was delivered by an earlier resume that did not
+        // finish. The first reply wins: the run goes on with it, and this one is not used.
+        if (!delivered) host.telemetry.event(EVENT.replyKept, { [ATTR.layer]: 'execution', [ATTR.system]: config.name, [ATTR.member]: waiting.member });
+        // The run no longer waits on that call. Should this invocation not finish, a `run` with the same id reads the claimed reply.
+        await keep(run, RUN_KEYS.claimed, waiting);
+        await keep(run, RUN_KEYS.waiting, null);
+        await keep(run, RUN_KEYS.status, null);
+        return { input, ctx: { ...ctx, ...(lineage ? { lineage } : {}) }, resuming: waiting };
       });
     },
     entries,

@@ -124,11 +124,54 @@ An agent served over A2A, in any language or framework, is a member through `a2a
   restart of the same run resumes that task instead of sending the request again. On abort or deadline the member
   cancels the remote task.
 - The remaining time, hops, budget and lineage go along in the [bounds extension](../spec/extensions/bounds-v1.md).
-  A remote task that waits for input ends the call as `waiting` with code `needs_input` (or `needs_auth`).
+  A remote task that waits for input ends the call as `waiting` with code `needs_input` (or `needs_auth`); answer it
+  with [resume](#resume-a-waiting-run).
 - Limits (`timeoutMs`, `pollMs`, `maxCardBytes`, `cardTtlMs`, `cancelTimeoutMs`) are in [limits](limits.md#a2a-member--memberport).
 
 All options, the state mapping and what is not done are in the
 [adapter README](../adapters/a2a-member/README.md).
+
+## Resume a waiting run
+
+A run ends `waiting` when the host's gate answers `ask` (a person must approve the call) or a member asks for more
+input. `resume` answers it under the same run id: finished steps replay from the journal and the waiting call gets the
+reply. Across processes the journal must outlive the process, so the system needs a durable execution adapter, such as
+[`sqlite-execution`](../adapters/sqlite-execution); `memory-execution` resumes only within the process that ran the run.
+The swap example's [`file-execution`](../examples/swap/adapters/file-execution.ts) keeps it in JSON files:
+
+```json
+{
+  "ports": {
+    "execution": { "adapter": "./adapters/file-execution.ts", "options": { "dir": "./journal" } }
+  }
+}
+```
+
+```text
+$ agent-plexus run "change the delivery address"
+[waiting] needs_input member
+waiting: agent-plexus resume 3f0c... --input <text> --wait 'call:root.steps[0]:0#0'
+$ agent-plexus resume 3f0c... --input "order 42, new address: 1 Main St" --wait 'call:root.steps[0]:0#0'
+Shipping: the address of order 42 is changed
+```
+
+The hint names the reply the run's wait needs and the wait itself. `--wait <token>` is optional but recommended: a
+reply that names its wait answers only that one, so a repeated or late resume fails ("waits on another step") instead
+of answering a wait the run reached since.
+
+| Waits on (`wait.kind`) | Reply | What happens |
+|---|---|---|
+| The host's gate (`approval`: `needs_input`, layer `host`) | `--approve` or `--deny`, optional `--reason <text>` | `gate.allow` is asked again with `answer: { approved, reason?, by? }` (`by`: who resumes); the host decides |
+| A member (`input`: `needs_input` or `needs_auth`, layer `member`) | `--input <text>` | The text passes the send check, then the member's `resume(taskRef, input)` continues its task |
+
+In code: `system.resume(runId, { input, wait: result.wait.token })` or `system.resume(runId, { approved: true, wait:
+result.wait.token })` (`wait` optional), with an optional context whose `caller` is who resumes. A waiting result's
+`wait` (`{ token, kind, member }`) says which call the run waits on and which reply it takes. The host's gate is asked
+first whether that caller may resume the run (action `resume`, with the run's owner); the prototype host allows only
+the caller that started it. The resume is a new invocation with its own deadline and budget, and its result counts
+only what it spent. A run that is not waiting, a reply of the other kind or for another wait, or a `run` or `resume`
+while another invocation runs the same run ("in progress") gives `failed` with code `error`. Details:
+[execution](layers/execution.md#waiting-and-resume).
 
 ## Write an adapter
 
@@ -371,6 +414,7 @@ Schema file is planned.
 | `topology` | A `TopologySpec`: a member id or a node; see [spec/language.md](../spec/language.md#topologyspec) |
 | `limits` | `system`, `registry`, `router`, `attribution` groups; every limit is in [limits.md](limits.md) |
 | `registry.requireSigned` | `true`: every member needs a signed card or a pinned endpoint |
+| `registry.requireListed` | `true`: every member call needs `ports.registry` to return the member, also for a member the topology names; one it does not return is `denied`, layer `registry`. Without it a registry only supplies route candidates |
 | `tier` | `prototype` (default) or `production` |
 | `profiles.<name>` | An overlay of any other key, applied with `--profile`; objects merge, arrays replace, `null` removes |
 | `$schema` | Accepted and ignored |
@@ -408,12 +452,12 @@ check failed: 2 FAIL, 0 WARN
 | Finding | Fix | Status |
 |---|---|---|
 | `$.host` | A host adapter backed by real identity, policy and telemetry; the agent-layers adapter | Available: [`agent-layers`](#a-real-host-agent-layers) |
-| `$.ports.execution` | A durable ExecutionPort: `sqlite-execution`, `host-execution` (planned); DBOS, Temporal, Hatchet (candidates) | Planned or candidate |
+| `$.ports.execution` | A durable ExecutionPort: `sqlite-execution`; `host-execution` (planned); DBOS, Temporal, Hatchet (candidates) | Available: [`sqlite-execution`](../adapters/sqlite-execution) |
 | `$.members.<id>` | Members behind `a2a-member` with signed cards (`keys`, `requireSigned`) or pinned endpoints | Available: [`a2a-member`](#call-a-remote-agent) |
 | limits | Set `limits.system.*` explicitly and keep them in the safe range | Implemented |
 
-No execution adapter is tiered for production yet, so the production profile of the offline example fails by
-design. A custom adapter can fill the gap today.
+The production profile of the offline example fails by design: it uses `memory-execution`, which is prototype only.
+Swap in `sqlite-execution` to pass that finding.
 
 ## Eval and attribution
 
@@ -460,7 +504,8 @@ The attribution rules are in [layers/attribution.md](layers/attribution.md).
 | Command | What it does |
 |---|---|
 | `check` | Load the config, assemble the system, apply the readiness gate of the profile's tier; print `FAIL` and `WARN` lines and a summary |
-| `run <text>` | One run: the output on stdout, one line per hop on stderr (`<member> <status> <code?> <ms>ms`); `--json` prints the result with the hop record, `--quiet` drops the hop lines |
+| `run <text>` | One run: the output on stdout, one line per hop on stderr (`<member> <status> <code?> <ms>ms`); `--json` prints the result with the hop record, `--quiet` drops the hop lines; a waiting run ends with the `resume` command that answers it |
+| `resume <runId>` | Answer a waiting run and run it again: `--input <text>`, or `--approve` / `--deny` with `--reason <text>`, and `--wait <token>` to answer only that wait; output as `run`. Needs a durable execution adapter across processes; see [Resume a waiting run](#resume-a-waiting-run) |
 | `dev` | Terminal loop: each line of input is one run; `/exit` or end of input quits; `--quiet` |
 | `eval <cases.json>` | Run, score and attribute a file of cases; `--json` prints counts and, per case, status, output, scores and attributions |
 

@@ -413,3 +413,33 @@ test('checkpoint ignores an empty, oversized or non-string handle with an event'
   assert.equal(s.events.filter((e) => e.name === 'plexus.checkpoint.ignored').length, 3);
   assert.equal((s.execution.kept.get('run-1')?.get('call:root:0:task') as string).length, 1024);
 });
+
+test('a registry that does not return the member denies the call before the gate; an error is a denial too', async () => {
+  for (const listed of [async () => false, async () => { throw new Error('registry down'); }]) {
+    const s = await setup({ bounds: { tokens: 100 } });
+    const out = await memberCall({ ...s.env, listed }, s.run, 'm', 'hello', { node: 'root' });
+    assert.deepEqual([out.result.status, out.result.reason?.code, out.result.reason?.layer], ['stopped', 'denied', 'registry']);
+    assert.deepEqual(s.log, []);
+    assert.deepEqual(s.run.ledger.remaining(), { tokens: 100 });
+  }
+  const s = await setup();
+  const out = await memberCall({ ...s.env, listed: async () => true }, s.run, 'm', 'hello', { node: 'root' });
+  assert.equal(out.result.status, 'completed');
+});
+
+test('a resumed call reads its reply, runs as a step of its own and is flagged in the record', async () => {
+  const journal = memoryExecution([], true);
+  const members = { m: () => ({ status: 'waiting' as const, output: '', reason: { code: 'needs_input' }, taskRef: 'task-1' }) };
+  const resumes = { m: (ref: string, input: unknown) => completed(`${ref}:${String(input)}`) };
+  const first = await setup({ members, resumes, execution: journal });
+  await memberCall(first.env, first.run, 'm', 'hello', { node: 'root' });
+  assert.deepEqual(first.run.waits, [{ key: 'call:root:0', attempt: 0, kind: 'member', member: 'm', node: 'root' }]);
+  await journal.signal('run-1', 'call:root:0:reply:0', { input: 'more' });
+  const second = await setup({ members, resumes, execution: journal });
+  second.run.resuming = first.run.waits![0]!;
+  const out = await memberCall(second.env, second.run, 'm', 'hello', { node: 'root' });
+  assert.equal(out.result.output, 'task-1:more');
+  assert.deepEqual(journal.steps, ['call:root:0', 'call:root:0#1']);
+  assert.equal(second.run.records.at(-1)?.attempt, 1);
+  assert.equal(second.run.waits, undefined);
+});

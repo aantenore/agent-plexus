@@ -84,14 +84,22 @@ sequenceDiagram
 - The audience comes from config (`audience` option), never from a card.
 - Bounds reach the member as `ctx.outbound`: time as remaining milliseconds, never a clock time. A member can only
   tighten them.
-- A member that throws, or returns an unknown status, becomes `failed` with code `error`; the core never rejects.
+- A member that throws, or returns an unknown status, becomes `failed` with code `error`; the core never rejects. What
+  the member returned is journaled as the call's result; a throw, a timeout or an abort is not, so a run begun again
+  calls the member again.
 - A remote call is two-phase. The member calls `ctx.checkpoint(taskRef)` as soon as the remote side has the work; the
-  core keeps the handle in the run's journal next to the step (`call:<node path>:<index>:task`). If the run is begun
+  core keeps the handle in the run's journal next to the step (`call:<node path>:<n>:task`). If the run is begun
   again with the same run id before the step finished, a member with `resume` is asked to wait for that task through
   `resume(taskRef, undefined, ctx)` instead of being sent the request again. A finished step replays its stored result
   and calls nobody.
 - A crash between sending the request and the checkpoint can still send the request twice, so a member should
   tolerate a repeated request. A member without `resume`, or one that never checkpoints, is invoked again.
+- A member that waits for input returns `waiting` (`needs_input`, or `needs_auth`) with its handle, checkpointed or in
+  `taskRef`. `System.resume(runId, { input })` answers it: the input goes through the send check like any outbound
+  text, then `resume(taskRef, input, ctx)` continues the same remote task as a new attempt of the call (step
+  `call:<node path>:<n>#<attempt>`, hop record `attempt`). The receive check, the budget and the hop record work as
+  for any call. A member without `resume`, or without a kept handle, stops with code `rejected`, layer `member`. See
+  [execution](execution.md#waiting-and-resume).
 - On abort or deadline the adapter cancels the remote task itself (`a2a-member` sends `CancelTask`); the core does not
   call `cancel` yet.
 - Bounds travel to a remote agent in the [bounds extension](../../spec/extensions/bounds-v1.md) of A2A: time left, hops,
@@ -119,7 +127,7 @@ records and in `plexus.member`.
 |---|---|
 | span | `plexus.hop`, with `plexus.layer` = `member`, `plexus.system`, `plexus.member`, `plexus.hop`, `plexus.node.path`, then `plexus.run.status` and `plexus.run.reason` |
 | event | `plexus.parts.dropped` when an input carried `parts` that did not cross |
-| event | `plexus.member.resumed` when the call continued journaled remote work through `resume` (no content) |
+| event | `plexus.member.resumed` when the call continued remote work through `resume`: journaled work after a restart, or a reply to a waiting member (no content) |
 | event | `plexus.checkpoint.ignored` when a member checkpointed a handle that is not a non-empty string of at most 1024 characters |
 | metric | `plexus.hops` by member and status |
 

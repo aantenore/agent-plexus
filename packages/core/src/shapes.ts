@@ -13,6 +13,12 @@ export type Part = { type: 'text'; text: string } | { type: 'media'; mediaType: 
 /** What a system or a member receives. A string is shorthand for `{ text }`. */
 export type RunInput = string | { text: string; parts?: Part[] };
 
+/**
+ * The answer to a waiting run: the input a member asked for, or a person's answer to the host's `ask`. `wait` is the
+ * token of the wait it answers (`SystemResult.wait.token`): given, the resume fails unless the run still waits there.
+ */
+export type ResumeReply = ({ input: RunInput } | { approved: boolean; reason?: string }) & { wait?: string };
+
 /** The host's verified caller, carried through. The core reads only `id`, `kind` and `actors`. */
 export interface Caller {
   id: string;
@@ -25,6 +31,29 @@ export interface Caller {
   /** In memory only: never serialised, logged or traced. */
   credential?: string;
   ext?: Ext;
+}
+
+/** Who a caller is, without what it may do or how it proves it: what a run keeps as its owner (`run:owner`). */
+export type CallerIdentity = Pick<Caller, 'id' | 'kind' | 'name' | 'actors'>;
+
+/** The identity fields of a caller; never its credential, roles, scopes or `ext`. */
+export function callerIdentity(caller: Caller | CallerIdentity): CallerIdentity {
+  return {
+    id: caller.id,
+    kind: caller.kind,
+    ...(caller.name !== undefined ? { name: caller.name } : {}),
+    ...(caller.actors?.length ? { actors: caller.actors.map((a) => ({ id: a.id, kind: a.kind, ...(a.name !== undefined ? { name: a.name } : {}) })) } : {}),
+  };
+}
+
+/**
+ * Whether two callers are the same identity: same `id` and `kind`, and the same `actors` (id and kind, in order), so a
+ * caller reached through other delegates is someone else. Two absent callers are the same; one absent is not.
+ */
+export function sameIdentity(a: CallerIdentity | undefined, b: CallerIdentity | undefined): boolean {
+  if (!a || !b) return !a && !b;
+  const chain = (c: CallerIdentity) => (c.actors ?? []).map((x) => `${x.kind}:${x.id}`).join('\n');
+  return a.id === b.id && a.kind === b.kind && chain(a) === chain(b);
 }
 
 /** Deadline, budget and hop count of a run. Carried across hops so every agent in a chain works within the same limits. */
@@ -102,7 +131,19 @@ export interface MemberResult {
   taskRef?: string;
   usage?: Usage;
   costUsd?: number;
+  /** Set by the core on a `waiting` result of a member call: the wait a resume answers. A member's own is dropped. */
+  wait?: WaitRef;
   ext?: Ext;
+}
+
+/**
+ * A wait of a run. `token` is `<step key>#<attempt>` of the call that waits; `kind` is what answers it: `input` for a
+ * member that waits (`needs_input`, `needs_auth`), `approval` for the host's `ask`. Carries no text.
+ */
+export interface WaitRef {
+  token: string;
+  kind: 'input' | 'approval';
+  member: string;
 }
 
 export interface Skill {
@@ -146,6 +187,11 @@ export interface RouteDecision {
   ranked?: { member: string; score: number }[];
   /** Internal, never parsed. */
   reason?: string;
+  /**
+   * Set by the core when routing failed (the router or the registry threw, or the router chose outside the
+   * candidates): not the same as choosing nobody. `reason` carries the error.
+   */
+  failed?: true;
 }
 
 /** Declarative condition on a node's result; `fn` is `"<module>#<export>"`, a synchronous pure function. */
@@ -200,6 +246,13 @@ export interface HopRecord {
   outputRef?: string;
   /** True when the topology abandoned the branch (a `parallel` with `join: "first"`). */
   abandoned?: boolean;
+  /** Attempt of a call continued by `System.resume` (1 for the first resume); absent on the first attempt. */
+  attempt?: number;
+  /**
+   * True when the call's journal step replayed: an earlier invocation of the run made the call and spent its `usage`
+   * and `costUsd`, which this invocation's result does not count again.
+   */
+  replayed?: boolean;
 }
 
 export interface Score {
@@ -232,9 +285,14 @@ export interface Attribution {
 }
 
 /** A system's result is a member result plus its hop record, so a system can be a member of another. */
+/** `wait`, on a `waiting` result only, is the wait the run keeps for `System.resume`. */
 export interface SystemResult extends MemberResult {
   runId: string;
   record: HopRecord[];
 }
 
 export const inputText = (input: RunInput): string => (typeof input === 'string' ? input : input.text);
+
+/** A string, or an object with a string `text`. */
+export const isRunInput = (value: unknown): value is RunInput =>
+  typeof value === 'string' || (!!value && typeof value === 'object' && typeof (value as { text?: unknown }).text === 'string');

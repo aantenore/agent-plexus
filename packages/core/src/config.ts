@@ -35,7 +35,7 @@ export interface SystemConfig {
   ports: PortsConfig;
   topology: TopologySpec;
   limits?: LimitsConfig;
-  registry?: { requireSigned?: boolean };
+  registry?: { requireSigned?: boolean; requireListed?: boolean };
   tier?: Tier;
   profiles?: Record<string, ProfileConfig>;
 }
@@ -62,7 +62,8 @@ export interface ResolvedConfig {
   };
   topology: TopologySpec;
   limits: SystemLimits;
-  registry: { requireSigned: boolean };
+  /** `requireListed`: every member call needs the registry to return the member. */
+  registry: { requireSigned: boolean; requireListed: boolean };
   /** Directory of the config file; relative paths resolve against it. */
   cwd: string;
 }
@@ -102,7 +103,7 @@ const CONFIG_SCHEMA: JsonSchema = {
     },
     topology: { type: 'object' },
     limits: { type: 'object' },
-    registry: { type: 'object', properties: { requireSigned: { type: 'boolean' } }, additionalProperties: false },
+    registry: { type: 'object', properties: { requireSigned: { type: 'boolean' }, requireListed: { type: 'boolean' } }, additionalProperties: false },
     tier: { enum: [...TIERS] },
   },
   additionalProperties: false,
@@ -263,7 +264,7 @@ export function resolveConfig(raw: unknown, opts: ResolveOptions): ResolvedConfi
     },
     topology: config.topology,
     limits,
-    registry: { requireSigned: config.registry?.requireSigned ?? false },
+    registry: { requireSigned: config.registry?.requireSigned ?? false, requireListed: config.registry?.requireListed ?? false },
     cwd: opts.cwd,
   };
 }

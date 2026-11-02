@@ -16,8 +16,9 @@ the agent runs (a function, a remote agent, a whole stack).
   Run the member on the input and return its result. Never called directly by a topology: only `memberCall` calls it.
 - `resume?(taskRef: String, input: RunInput?, ctx: MemberCallContext) → MemberResult`
   Continue remote work: with `input` undefined, wait for the work behind `taskRef` and return its result; with an
-  input, send what a waiting member asked for. The core calls it with `input` undefined, and only to continue a call
-  whose `taskRef` an earlier attempt checkpointed (see "Two-phase call").
+  input, send what a waiting member asked for. The core calls it with `input` undefined to continue a call whose
+  `taskRef` an earlier attempt checkpointed (see "Two-phase call"), and with an input when `System.resume` answers a
+  member that waits (see "Waiting for input").
 - `cancel?(taskRef: String, ctx: MemberCallContext) → ()`
   Cancel the member's work for a `taskRef`. Not called by the core yet.
 - `native?() → Any`
@@ -44,17 +45,26 @@ the agent runs (a function, a remote agent, a whole stack).
 A member that starts remote work (a task on another server) can make the call resumable:
 
 1. Right after the remote side accepts the work, the member calls `ctx.checkpoint(taskRef)`. The core keeps the
-   handle in the journal of the run, under `call:<node path>:<index>:task`. A handle that is not a non-empty string of
+   handle in the journal of the run, under `call:<node path>:<n>:task`. A handle that is not a non-empty string of
    at most 1024 characters is ignored (event `plexus.checkpoint.ignored`).
 2. Before calling, the core looks for a handle kept for this step. With one, and a member that has `resume`, it calls
    `resume(taskRef, undefined, ctx)` instead of `invoke` and records the event `plexus.member.resumed` on the hop span
    (no content). Without a handle, or for a member with no `resume`, it calls `invoke`.
-3. Only the step as a whole is journaled when the member returns. A finished step replays its stored result and neither
-   `invoke` nor `resume` runs.
+3. Only the step as a whole is journaled when the member returns, whatever the status it returned. A call that throws,
+   times out or is aborted journals nothing, so a run begun again calls the member again (through `resume` when a
+   handle was kept). A finished step replays its stored result and neither `invoke` nor `resume` runs.
 
 A crash between sending the request and the checkpoint leaves no handle, so the request can be sent twice. A member
 should tolerate a repeated request (an idempotency key, or work that is safe to repeat). A member that does not
 checkpoint is always invoked again after a crash.
+
+### Waiting for input
+
+A member that needs more from a person returns `waiting` with code `needs_input` (or `needs_auth`) and its handle,
+checkpointed or in `taskRef`. The run ends `waiting`. `System.resume(runId, {input})` runs it again: completed steps
+replay, and the waiting call checks the input with the gate (`check`, stage `send`) and calls
+`resume(taskRef, input, ctx)` as the step `call:<node path>:<n>#<attempt>`. A member without `resume`, or without a kept
+handle, stops with code `rejected`, layer `member`. The hop record carries `attempt: n`.
 
 ## Errors
 

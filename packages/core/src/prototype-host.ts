@@ -1,6 +1,9 @@
 import type { Attributes, Host, ScoreHook, SpanHandle, TelemetryHook } from './hooks.ts';
 import { ATTR, SPAN } from './names.ts';
-import type { EvalCase, HopRecord, Score, SystemResult } from './shapes.ts';
+import { sameIdentity, type EvalCase, type HopRecord, type Score, type SystemResult } from './shapes.ts';
+
+/** Why the prototype host refuses a resume by anyone but the run's owner. */
+export const RESUME_OWNER_ONLY = 'only the caller that started the run may resume it';
 
 export interface PrototypeHostOptions {
   /** Print nothing. */
@@ -88,8 +91,9 @@ function scoreHook(read: PrototypeHostOptions['read']): ScoreHook {
 }
 
 /**
- * The host for prototypes and tests: every call allowed, no tokens, no content checks, one line per hop, and scoring
- * limited to the `expected` fields of a case. The readiness gate refuses it on a production tier.
+ * The host for prototypes and tests: every call allowed, a resume only by the caller that started the run, no tokens,
+ * no content checks, one line per hop, and scoring limited to the `expected` fields of a case. The readiness gate
+ * refuses it on a production tier.
  */
 export function prototypeHost(options: PrototypeHostOptions = {}): Host {
   const write = options.write ?? ((line: string) => { process.stderr.write(`${line}\n`); });
@@ -97,7 +101,10 @@ export function prototypeHost(options: PrototypeHostOptions = {}): Host {
     name: 'prototype',
     tier: 'prototype',
     gate: {
-      allow: async () => ({ effect: 'allow' }),
+      // Every call is allowed; a run is continued only by the caller that started it.
+      allow: async (q) => (q.action === 'resume' && !sameIdentity(q.caller, q.owner)
+        ? { effect: 'deny', reason: RESUME_OWNER_ONLY }
+        : { effect: 'allow' }),
       token: async () => undefined,
       check: async () => ({ action: 'allow' }),
     },

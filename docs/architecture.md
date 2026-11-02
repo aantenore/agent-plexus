@@ -84,7 +84,7 @@ flowchart LR
   Operations a port does not cover stay reachable through `native()` where a port offers it (MemberPort).
 - **Outbound adapters** consume something as a port: a function as a MemberPort, a rule list as an AgentRouterPort.
   An agent-layers stack is also a MemberPort (adapter `agent-layers`), and so is an agent served over A2A (adapter
-  `a2a-member`). Planned: a database as an ExecutionPort.
+  `a2a-member`). A database is an ExecutionPort too (adapter `sqlite-execution`).
 - **Inbound** is the CLI. Network exposure is the host's: the agent-layers gateway serves a system over A2A,
   OpenAI-compatible and MCP when the runtime plugin `agent-plexus` of the agent-layers adapter is loaded through the
   `plugins` of the agent-layers config (`@agent-plexus/adapter-agent-layers/runtime`).
@@ -98,10 +98,10 @@ The core's own logic, and the only way to reach a member. A topology receives it
 | # | Step | Who decides | On failure |
 |---|---|---|---|
 | 1 | System limits and received bounds: abort, less than `limits.system.minRemainingMs` left, hops, steps, back-and-forth; reserve budget | core | `stopped`: `aborted`, `timeout`, `hop_limit`, `limit` |
-| 2 | May this caller invoke this member | host `gate.allow` | `stopped`, `denied`; `ask` gives `waiting`, `needs_input`; a throwing hook is a `denied` |
+| 2 | May this caller invoke this member; with `registry.requireListed`, first: does the registry return it | registry `get`, then host `gate.allow` | `stopped`, `denied` (layer `registry` or `host`); `ask` gives `waiting`, `needs_input`; a throwing hook is a `denied` |
 | 3 | Check what is sent (text only; `parts` are dropped and `plexus.parts.dropped` is emitted) | host `gate.check`, `send` | `stopped`, `guard_block`, layer `host`, stage `send`; `redact` replaces the text |
 | 4 | Credential for the member's audience, on behalf of the caller | host `gate.token` | `stopped`, `needs_auth`; asked only for a member with an `audience`, and a production host that returns none is `needs_auth`; the caller's own credential is never forwarded |
-| 5 | Call, as a journal step, with outbound bounds (time left minus `limits.system.marginMs`) and lineage, capped by `stepTimeoutMs` and the time left | MemberPort `invoke` inside ExecutionPort `step` | The member's result, or `failed` / `timeout` / `aborted` from the call |
+| 5 | Call, as a journal step, with outbound bounds (time left minus `limits.system.marginMs`) and lineage, capped by `stepTimeoutMs` and the time left | MemberPort `invoke` inside ExecutionPort `step` | The member's result, journaled; or `failed` / `timeout` / `aborted` from the call, not journaled |
 | 6 | Check what comes back, on completed results only: data for the next member, never instructions | host `gate.check`, `receive` | `stopped`, `guard_block`, layer `host`, stage `receive` |
 | 7 | Settle the reservation; write the hop record; span `plexus.hop`, metric `plexus.hops` | core, host `telemetry` | |
 
@@ -135,6 +135,7 @@ store. Another host is another adapter of the same four hooks.
 | Any tier | A topology that names an unknown member or router, a kind the topology adapter does not run, a graph node that does not exist, a graph end that no edge reaches | FAIL |
 | Any tier | A topology that cannot be bound, a member that cannot describe itself | FAIL |
 | Any tier | `registry.requireSigned` and a member with neither a signed card nor a pinned endpoint | FAIL |
+| Any tier | `registry.requireListed` and a member the registry does not list, or no registry | FAIL |
 | Production | The host is a prototype host | FAIL |
 | Production | An adapter that is not tiered for production | FAIL |
 | Production | A system or adapter limit set to `"unbounded"` where the limit says so | FAIL or WARN per limit; see [limits.md](limits.md) |

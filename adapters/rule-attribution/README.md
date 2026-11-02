@@ -11,10 +11,10 @@ the record source reads texts, it also traces a `guard_block` past members that 
 |---|---|---|---|---|
 | 1 | The candidate is the earliest hop that did not complete, or whose member failed an expectation (a score with `member` below 1); hops the topology abandoned are skipped | | | |
 | 1 | Completed hop of a member that failed an expectation | `member` | The hop | medium |
-| 2 | A route node that chose no member (a hop with `route` and no member) | `routing` | none | high |
+| 2 | A route node that chose no member or whose routing failed (a hop with `route` and no member) | `routing` | none | high |
 | 3 | `hop_limit` | `topology`, `routing` when a router chose the call | none | high |
 | 3 | `timeout`, `limit` with `reason.layer` `topology` (the system's own limit or deadline) | `topology` | none; evidence has the code and `by:<reason.by>` | high |
-| 3 | `timeout`, `limit` otherwise | `member` | `limit`: the hop with the most tokens (input + output) when any hop reports usage, else the highest `costUsd`, else the longest duration. `timeout`: the longest duration | medium |
+| 3 | `timeout`, `limit` otherwise | `member` | `limit`: the hop with the most tokens (input + output) when any hop reports usage, else the highest `costUsd`, else the longest duration; a `replayed` hop's usage and cost count for nothing (an earlier invocation spent them). `timeout`: the longest duration | medium |
 | 3 | `reason.layer` is `host`: `denied`, `needs_auth` | `host` | none | high |
 | 3 | `reason.layer` is `host`: `guard_block` | `host` | `stage` `receive`: the hop's own member (its output was blocked); `send` or absent: the first upstream member that added text (see Echo); none when every upstream member only repeated the caller's input (evidence `origin:input`) | high |
 | 3 | `guard_block` from a member, with an earlier completed hop | `member` | The first upstream member that added text (see Echo) | medium |

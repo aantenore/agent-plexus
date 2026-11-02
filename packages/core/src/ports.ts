@@ -71,6 +71,7 @@ export interface CallOptions {
 
 export interface CallOutcome {
   hopId: string;
+  /** Without `usage` and `costUsd` when the call replayed from the journal: an earlier invocation spent them. */
   result: MemberResult;
 }
 
@@ -79,6 +80,11 @@ export interface RouteRequest {
   candidates: string[] | CandidateFilter;
   router?: string;
   node: string;
+  /**
+   * Choosing nobody is an expected answer (a handoff that ends): no hop record is written for it. A route that failed
+   * (`RouteDecision.failed`) writes one all the same.
+   */
+  optional?: boolean;
 }
 
 /** Limits a topology must respect; the core enforces maxSteps, time and hops itself in `call`. */
@@ -123,7 +129,7 @@ export interface TopologyPort {
 
 export interface Execution {
   runKey: string;
-  /** Runs `fn` once; on resume returns its stored result. Results must be JSON-serialisable. */
+  /** Runs `fn` once; on resume returns its stored result. A `fn` that throws stores nothing. Results must be JSON-serialisable. */
   step<T>(name: string, fn: () => Promise<T>): Promise<T>;
   /** Suspends until `signal(runKey, name, value)` or `untilAt`; returns the value, or undefined at the deadline. */
   wait(name: string, untilAt: string): Promise<unknown>;
@@ -133,14 +139,26 @@ export interface Execution {
   remember(key: string, value: unknown): Promise<void>;
   /** The value kept under a key, or undefined. */
   recall(key: string): Promise<unknown>;
+  /** Ends the run with a status and lets go of the hold `begin` took. */
   end(status: MemberResult['status']): Promise<void>;
+  /** Lets go of the hold `begin` took without ending the run: its status stays what it was. */
+  release?(): Promise<void>;
 }
 
 export interface ExecutionPort {
   name: string;
-  /** Durable adapters resume an existing run with the same key. */
+  /**
+   * Opens the run with the key, creating it when it is new; durable adapters resume an existing run with the same key.
+   * An adapter that is exclusive across processes holds the run until `end`, `release` or `close`, and rejects a
+   * `begin` while another live hold has it with an error whose `code` is `RUN_BUSY` (`RunBusyError`). The core never
+   * runs two invocations of one run in its own process.
+   */
   begin(runKey: string): Promise<Execution>;
-  signal(runKey: string, name: string, value: unknown): Promise<void>;
+  /**
+   * Delivers `value` to the wait `name` of the run, or keeps it for that wait. First wins: true when this signal was
+   * kept or delivered; false when the name was already signalled or its wait already settled. Unknown run: rejects.
+   */
+  signal(runKey: string, name: string, value: unknown): Promise<boolean>;
   /** Reads a stored text by key (for attribution and replay). */
   read?(key: string): Promise<string | undefined>;
 }

@@ -43,7 +43,7 @@ latency or SLA fields, so richer metadata is agent-plexus' own and rides in the 
 ## Decision flow
 
 The core reads the candidates and checks the answer, so a router only picks among what it is given. A route that chose
-nobody is a hop record of its own; the topology decides what happens next.
+nobody, or that failed, is a hop record of its own; the topology decides what happens next.
 
 ```mermaid
 flowchart TB
@@ -51,10 +51,12 @@ flowchart TB
   cands --> ask["AgentRouterPort.route<br/>input, candidates, caller, bounds"]:::model
   ask --> valid{"A member among<br/>the candidates?"}:::model
   valid -->|"yes"| call["memberCall<br/>the chosen member"]:::external
-  valid -->|"none, outside, or the router threw"| none["Decision with no member<br/>hop record: rejected, layer routing"]:::external
+  valid -->|"none"| none["Decision with no member<br/>hop record: rejected, layer routing"]:::external
+  valid -->|"outside, or the router or registry threw"| broke["Decision with failed<br/>hop record: failed, error, layer routing"]:::external
   none --> fb{"fallback<br/>in the node?"}:::agent
+  broke --> fb
   fb -->|"yes"| fallback["fallback node<br/>node path .fallback"]:::agent
-  fb -->|"no"| stop["stopped, rejected<br/>layer routing"]:::external
+  fb -->|"no"| stop["stopped, rejected; or failed, error<br/>layer routing"]:::external
   classDef model fill:#ffd8a8,stroke:#a85400,color:#1f2328
   classDef agent fill:#a5d8ff,stroke:#1864ab,color:#1f2328
   classDef external fill:#ffffff,stroke:#57606a,color:#1f2328,stroke-dasharray:4 3
@@ -63,12 +65,16 @@ flowchart TB
 ## Boundaries
 
 - Routing picks; [topology](topology.md) decides what a missing choice means (`fallback`, else `rejected`).
-- The core validates the answer: a member outside the candidates, or a router that throws, becomes a decision with no
-  member.
+- The core validates the answer: a member outside the candidates, or a router or registry that throws, becomes a
+  decision with `failed: true` and no member. Not the same as choosing nobody: a failed decision always writes a
+  routing hop (`failed`, code `error`, layer `routing`), also for an `optional` request, and a handoff stops on it.
 - The router sees the caller without its credential and the run's bounds.
 - A route that chose nobody is written as a hop record of its own (no member, a `route` field), so attribution can see
   it. It does not count as a step.
 - The candidates are read from the registry and cut at `limits.router.maxCandidates`.
+- Each decision is a journal step, `route:<node path>:<n>`: a run begun again with the same run id (a restart, a
+  resume) replays the decision instead of asking the router, so it takes the path it took. A failed decision is not
+  journaled: the router is asked again.
 
 ## Configuration
 

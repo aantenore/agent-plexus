@@ -43,6 +43,8 @@ interface Run {
   textCount: number;
   endedSeq?: number;
   status?: MemberResult['status'];
+  /** Invocations that began the run and have not ended or let go of it: a held run is never dropped. */
+  holds: number;
 }
 
 const MAX_TIMER_MS = 2_147_483_647;
@@ -64,8 +66,8 @@ export function createMemoryExecution(options: MemoryExecutionOptions = {}, ctx:
 
   const evict = () => {
     while (runs.size > maxRuns) {
-      // Ended runs only; a run that ended waiting may still resume, so it goes last.
-      const ended = [...runs.values()].filter((r) => r.endedSeq !== undefined);
+      // Ended runs that nobody holds; a run that ended waiting may still resume, so it goes last.
+      const ended = [...runs.values()].filter((r) => r.endedSeq !== undefined && r.holds === 0);
       const order = (r: Run) => (r.status === 'waiting' ? 1 : 0);
       ended.sort((a, b) => order(a) - order(b) || (a.endedSeq as number) - (b.endedSeq as number));
       const oldest = ended[0];
@@ -142,6 +144,11 @@ export function createMemoryExecution(options: MemoryExecutionOptions = {}, ctx:
     async end(status) {
       run.status = status;
       run.endedSeq = ++endSeq;
+      run.holds = Math.max(0, run.holds - 1);
+      evict();
+    },
+    async release() {
+      run.holds = Math.max(0, run.holds - 1);
       evict();
     },
   });
@@ -150,12 +157,12 @@ export function createMemoryExecution(options: MemoryExecutionOptions = {}, ctx:
     name: ctx.name,
     async begin(runKey) {
       if (typeof runKey !== 'string' || !runKey) throw new TypeError('memory-execution: runKey must be a non-empty string');
+      // Held, not exclusive: one invocation per run in the process is the core's to ensure.
       let run = runs.get(runKey);
       if (run) {
-        delete run.endedSeq;
-        delete run.status;
+        run.holds++;
       } else {
-        run = { key: runKey, steps: new Map(), inflight: new Map(), waits: new Map(), pending: new Map(), signals: new Map(), kept: new Map(), texts: new Map(), textCount: 0 };
+        run = { key: runKey, steps: new Map(), inflight: new Map(), waits: new Map(), pending: new Map(), signals: new Map(), kept: new Map(), texts: new Map(), textCount: 0, holds: 1 };
         runs.set(runKey, run);
         evict();
       }
@@ -165,9 +172,11 @@ export function createMemoryExecution(options: MemoryExecutionOptions = {}, ctx:
       const run = runs.get(runKey);
       if (!run) throw new Error(`memory-execution: unknown run "${runKey}"`);
       const stored = store(value);
-      if (run.waits.has(name)) return;
+      // First wins: a name already signalled, or whose wait settled, takes no other value.
+      if (run.waits.has(name) || run.signals.has(name)) return false;
       if (run.pending.has(name)) settle(run, name, stored);
       else run.signals.set(name, stored);
+      return true;
     },
     async read(key) {
       const at = key.lastIndexOf(':t');

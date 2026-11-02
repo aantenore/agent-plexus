@@ -3,12 +3,13 @@ import { test } from 'node:test';
 import { defineAdapter, type AdapterContext, type AdapterDescriptor, type Tier } from '../src/adapter.ts';
 import { assemble } from '../src/assemble.ts';
 import { resolveConfig } from '../src/config.ts';
-import { AdapterError, ConfigError } from '../src/errors.ts';
-import type { AgentRouterPort, AttributionPort, BoundTopology, ExecutionPort, RegistryPort, RunScope, TopologyPort } from '../src/ports.ts';
+import { AdapterError, ConfigError, RunBusyError } from '../src/errors.ts';
+import type { AgentRouterPort, AttributionPort, BoundTopology, ExecutionPort, MemberPort, RegistryPort, RunScope, TopologyPort } from '../src/ports.ts';
 import { prototypeHost } from '../src/prototype-host.ts';
-import type { AgentEntry, Attribution, MemberResult, RunInput, TopologyNode } from '../src/shapes.ts';
+import type { GateQuestion } from '../src/hooks.ts';
+import type { AgentEntry, Attribution, MemberResult, RouteDecision, RunInput, TopologyNode } from '../src/shapes.ts';
 import { inputText } from '../src/shapes.ts';
-import { recordingHost, member as fakeMemberPort, memoryExecution } from './fakes.ts';
+import { recordingHost, member as fakeMemberPort, memoryExecution, type FakeExecution } from './fakes.ts';
 
 const maps = { standard: 'none' };
 const both: Tier[] = ['prototype', 'production'];
@@ -148,11 +149,13 @@ test('entries come from the members, with the config id', async () => {
   assert.deepEqual((await system.entries()).map((e) => [e.id, e.audience]), [['triage', undefined], ['billing', 'billing']]);
 });
 
-test('a router that picks outside the candidates is ignored: the fallback runs', async () => {
+test('a router that picks outside the candidates is a routing failure: a failed routing hop, then the fallback runs', async () => {
   const { system } = await build({ ports: { ...rawConfig().ports, router: { adapter: 'fake-router', options: { pick: 'triage' } } } });
   const res = await system.run('hi');
   assert.deepEqual(res.record.map((r) => r.member), ['triage', '', 'triage']);
-  assert.deepEqual(res.record[1], { ...res.record[1], status: 'stopped', reason: { code: 'rejected', layer: 'routing' }, node: 'root.steps[1]', durationMs: 0, route: {} });
+  assert.deepEqual(res.record[1], {
+    ...res.record[1], status: 'failed', reason: { code: 'error', layer: 'routing', detail: 'router chose a member outside the candidates' }, node: 'root.steps[1]', durationMs: 0, route: {},
+  });
 });
 
 test('lineage keeps the root run id; the journal is keyed by the run, never by the session', async () => {
@@ -192,7 +195,7 @@ test('the system limits cap the run: maxSteps', async () => {
 });
 
 test('the host gate applies to every call and attribution reads past runs', async () => {
-  const h = recordingHost({ allow: (q) => (q.member.id === 'billing' ? { effect: 'deny' } : { effect: 'allow' }) });
+  const h = recordingHost({ allow: (q) => (q.member?.id === 'billing' ? { effect: 'deny' } : { effect: 'allow' }) });
   const { system } = await build({}, { host: h.host });
   const res = await system.run('hi');
   assert.equal(res.status, 'stopped');
@@ -296,6 +299,34 @@ test('a route that chose nobody writes a routing hop and does not count as a ste
   assert.equal(res.record[1]?.member, '');
 });
 
+test('an optional route that chose nobody writes no hop; a plain one writes a rejected routing hop', async () => {
+  const routing = (optional: boolean) => defineAdapter({
+    fills: 'TopologyPort', name: 'ending-topology', maps, tiers: both, portVersion: '0.1.0',
+    create: (): TopologyPort => ({
+      name: 'ending-topology',
+      kinds: ['sequence'],
+      bind: (): BoundTopology => ({
+        async run(input, scope) {
+          const first = (await scope.call('triage', input, { node: 'root.turns[0]' })).result;
+          const next = await scope.route({ input: first.output, candidates: ['ghost'], node: 'root.turns[1]', ...(optional ? { optional } : {}) });
+          assert.equal(next.member, undefined);
+          return first;
+        },
+      }),
+    }),
+  }) as unknown as AdapterDescriptor;
+  const over = { topology: { kind: 'sequence', steps: ['triage'] }, ports: { ...rawConfig().ports, topology: { adapter: 'ending-topology' } } };
+  const quiet = await build(over, { extra: [routing(true)] });
+  const ended = await quiet.system.run('hi');
+  assert.equal(ended.status, 'completed');
+  assert.deepEqual(ended.record.map((h) => [h.member, h.status]), [['triage', 'completed']]);
+  const plain = await build(over, { extra: [routing(false)] });
+  const rejected = await plain.system.run('hi');
+  assert.deepEqual(rejected.record.map((h) => [h.member, h.status, h.reason?.code, h.reason?.layer]), [
+    ['triage', 'completed', undefined, undefined], ['', 'stopped', 'rejected', 'routing'],
+  ]);
+});
+
 test('${env:...} in adapter options is filled in; a missing variable names its path', async () => {
   const probe: Probe = { closed: 0, begun: [], scopes: [] };
   const all = descriptors(probe);
@@ -386,4 +417,711 @@ test('limits.attribution.historyRuns bounds the runs kept for attribution', asyn
   await kept.system.run('x');
   const again = await kept.system.attribute({ ...one, status: 'stopped', record: one.record.map((r) => ({ ...r, status: 'stopped' as const })) });
   assert.equal(again[0]?.evidence[0], 'source:1');
+});
+
+// Waiting runs and resume -------------------------------------------------------------------------------------------
+
+interface AskingOptions { ask?: boolean; resume?: boolean; tokens?: number; slow?: number; slowResume?: number; flaky?: boolean }
+
+/**
+ * Members that complete with `<id>:<input>`, or wait for input (`ask`) and continue through `resume`. `slow` delays the
+ * answer by that many milliseconds, `slowResume` the answer to `resume`; `flaky` throws on the first call.
+ */
+const askingMember = (calls: string[]) => defineAdapter({
+  fills: 'MemberPort', name: 'asking-member', maps, tiers: both, portVersion: '0.1.0',
+  create: (o: AskingOptions, ctx): MemberPort => {
+    let broke = false;
+    const port = fakeMemberPort(ctx.name, async (input) => {
+      calls.push(`invoke:${ctx.name}`);
+      if (o.slow) await new Promise((done) => setTimeout(done, o.slow));
+      if (o.flaky && !broke) {
+        broke = true;
+        throw new Error('transient 503');
+      }
+      if (o.ask) return { status: 'waiting', output: '', reason: { code: 'needs_input', layer: 'member' }, taskRef: `task-${ctx.name}` };
+      return { status: 'completed', output: `${ctx.name}:${inputText(input as RunInput)}`, ...(o.tokens ? { usage: { inputTokens: o.tokens, outputTokens: 0 } } : {}) };
+    });
+    if (o.resume !== false) {
+      port.resume = async (ref, input) => {
+        calls.push(`resume:${ctx.name}:${ref}:${input === undefined ? '-' : inputText(input)}`);
+        if (o.slowResume) await new Promise((done) => setTimeout(done, o.slowResume));
+        return { status: 'completed', output: `${ctx.name}:${input === undefined ? '-' : inputText(input)}` };
+      };
+    }
+    return port;
+  },
+}) as unknown as AdapterDescriptor;
+
+const durableExecution = (journal: FakeExecution) => defineAdapter({
+  fills: 'ExecutionPort', name: 'durable-execution', maps, tiers: both, portVersion: '0.1.0', create: (): ExecutionPort => journal,
+}) as unknown as AdapterDescriptor;
+
+/** A system over asking members and a durable journal; `ports` overrides the default ports. */
+async function resumable(members: Record<string, AskingOptions>, topology: unknown, o: { host?: ReturnType<typeof recordingHost>['host']; ports?: Record<string, unknown>; extra?: AdapterDescriptor[] } = {}) {
+  const calls: string[] = [];
+  const journal = memoryExecution([], true);
+  const { system } = await build(
+    {
+      members: Object.fromEntries(Object.entries(members).map(([id, options]) => [id, { adapter: 'asking-member', options }])),
+      topology,
+      ports: { ...rawConfig().ports, execution: { adapter: 'durable-execution' }, ...o.ports },
+    },
+    { extra: [askingMember(calls), durableExecution(journal), ...(o.extra ?? [])], ...(o.host ? { host: o.host } : {}) },
+  );
+  return { system, calls, journal };
+}
+
+const boss = { id: 'boss', kind: 'user' as const, roles: [], scopes: [], credential: 'BOSS-CREDENTIAL' };
+
+/** A gate that lets anyone resume, asks before billing until it has an answer, then follows the answer. */
+const askingGate = (questions: unknown[] = []) => recordingHost({
+  allow: (q) => {
+    questions.push(q);
+    if (q.action === 'resume' || q.member.id !== 'billing') return { effect: 'allow' };
+    if (!q.answer) return { effect: 'ask', reason: 'approval pending' };
+    return q.answer.approved ? { effect: 'allow' } : { effect: 'deny', reason: q.answer.reason ?? 'refused' };
+  },
+});
+
+test('a gate ask waits; resume with an approval asks the gate again with the answer and completes', async () => {
+  const questions: { caller?: { id: string }; answer?: unknown; member: { id: string } }[] = [];
+  const { system, calls, journal } = await resumable({ triage: {}, billing: {} }, { kind: 'sequence', steps: ['triage', 'billing'] }, { host: askingGate(questions).host });
+  const first = await system.run('hi', { runId: 'r1', caller: { id: 'u1', kind: 'user', roles: [], scopes: [], credential: 'SECRET-CREDENTIAL' } });
+  assert.equal(first.status, 'waiting');
+  assert.deepEqual(first.reason, { code: 'needs_input', layer: 'host', by: 'test-host', detail: 'approval pending' });
+  assert.ok(!JSON.stringify([...journal.kept.get('r1')!]).includes('SECRET-CREDENTIAL'));
+  assert.deepEqual(journal.kept.get('r1')!.get('run:input'), 'hi');
+
+  const res = await system.resume('r1', { approved: true, reason: 'ok' }, { caller: boss });
+  assert.equal(res.status, 'completed', JSON.stringify(res.reason));
+  assert.equal(res.output, 'billing:triage:hi');
+  assert.equal(res.runId, 'r1');
+  assert.deepEqual(calls, ['invoke:triage', 'invoke:billing']);
+  const asked = questions.at(-1)!;
+  assert.deepEqual([asked.member.id, asked.caller?.id, asked.answer], ['billing', 'boss', { approved: true, reason: 'ok', by: 'boss' }]);
+  assert.deepEqual(res.record.map((h) => [h.member, h.status, h.attempt]), [['triage', 'completed', undefined], ['billing', 'completed', 1]]);
+  assert.equal(journal.kept.get('r1')!.get('run:waiting'), null);
+});
+
+test('resume with a denial stops denied in the host layer', async () => {
+  const { system, calls } = await resumable({ triage: {}, billing: {} }, { kind: 'sequence', steps: ['triage', 'billing'] }, { host: askingGate().host });
+  assert.equal((await system.run('hi', { runId: 'r2' })).status, 'waiting');
+  const res = await system.resume('r2', { approved: false, reason: 'not today' });
+  assert.equal(res.status, 'stopped');
+  assert.deepEqual([res.reason?.code, res.reason?.layer, res.reason?.detail], ['denied', 'host', 'not today']);
+  assert.deepEqual(calls, ['invoke:triage']);
+  assert.equal((await system.resume('r2', { approved: true })).reason?.detail, 'run r2 is not waiting');
+});
+
+test('a member waiting for input continues its task through resume with the reply, after the send check', async () => {
+  const checked: string[] = [];
+  const h = recordingHost({ check: (c) => { if (c.stage === 'send') checked.push(c.text); return { action: 'allow' }; } });
+  const { system, calls } = await resumable({ triage: {}, billing: { ask: true } }, { kind: 'sequence', steps: ['triage', 'billing'] }, { host: h.host });
+  const first = await system.run('hi', { runId: 'r3' });
+  assert.deepEqual([first.status, first.reason?.code, first.reason?.layer], ['waiting', 'needs_input', 'member']);
+  const res = await system.resume('r3', { input: 'my order is 42' });
+  assert.equal(res.status, 'completed', JSON.stringify(res.reason));
+  assert.equal(res.output, 'billing:my order is 42');
+  assert.deepEqual(calls, ['invoke:triage', 'invoke:billing', 'resume:billing:task-billing:my order is 42']);
+  assert.deepEqual(checked, ['hi', 'triage:hi', 'hi', 'my order is 42']);
+  assert.equal(res.record.at(-1)?.attempt, 1);
+  assert.ok(h.events.some((e) => e.name === 'plexus.member.resumed'));
+});
+
+test('a reply the send check blocks stops the resumed call; the member is not resumed', async () => {
+  const h = recordingHost({ check: (c) => (c.stage === 'send' && c.text.includes('forbidden') ? { action: 'block' } : { action: 'allow' }) });
+  const { system, calls } = await resumable({ billing: { ask: true } }, { kind: 'sequence', steps: ['billing'] }, { host: h.host });
+  assert.equal((await system.run('hi', { runId: 'r4' })).status, 'waiting');
+  const res = await system.resume('r4', { input: 'forbidden words' });
+  assert.deepEqual([res.status, res.reason?.code, res.reason?.stage], ['stopped', 'guard_block', 'send']);
+  assert.deepEqual(calls, ['invoke:billing']);
+});
+
+test('a run begun again without a reply still waits and calls nobody again', async () => {
+  const { system, calls } = await resumable({ triage: {}, billing: { ask: true } }, { kind: 'sequence', steps: ['triage', 'billing'] });
+  assert.equal((await system.run('hi', { runId: 'r5' })).status, 'waiting');
+  const again = await system.run('hi', { runId: 'r5' });
+  assert.deepEqual([again.status, again.reason?.code], ['waiting', 'needs_input']);
+  assert.deepEqual(calls, ['invoke:triage', 'invoke:billing']);
+  assert.equal((await system.resume('r5', { input: 'more' })).status, 'completed');
+});
+
+test('resume refuses a run that is not waiting, a reply of the wrong kind and an invalid reply', async () => {
+  const { system } = await resumable({ triage: {}, billing: { ask: true } }, { kind: 'sequence', steps: ['triage', 'billing'] });
+  const unknown = await system.resume('nobody', { input: 'x' });
+  assert.deepEqual([unknown.status, unknown.reason?.code, unknown.reason?.layer, unknown.reason?.detail], ['failed', 'error', 'execution', 'run nobody is not waiting']);
+  assert.equal((await system.run('hi', { runId: 'r6' })).status, 'waiting');
+  assert.equal((await system.resume('r6', { approved: true })).reason?.detail, 'run r6 waits for input');
+  assert.match((await system.resume('r6', { input: 'a', approved: true } as never)).reason?.detail ?? '', /invalid reply/);
+  assert.match((await system.resume('', { input: 'a' })).reason?.detail ?? '', /invalid run id/);
+  assert.equal((await system.resume('r6', { input: 'more' })).status, 'completed');
+  assert.equal((await system.resume('r6', { input: 'again' })).reason?.detail, 'run r6 is not waiting');
+});
+
+test('a resume that cannot start leaves the stored status and the kept wait of the run as they were', async () => {
+  const { system, journal } = await resumable({ triage: {}, billing: { ask: true } }, { kind: 'sequence', steps: ['triage', 'billing'] });
+  assert.equal((await system.run('hi', { runId: 'r10' })).status, 'waiting');
+  const kept = journal.kept.get('r10')!;
+  const waiting = kept.get('run:waiting');
+  assert.equal(journal.statuses.get('r10'), 'waiting');
+  assert.equal((await system.resume('r10', { approved: true })).reason?.detail, 'run r10 waits for input');
+  assert.equal(journal.statuses.get('r10'), 'waiting');
+  assert.deepEqual(kept.get('run:waiting'), waiting);
+
+  assert.equal((await system.resume('r10', { input: 'more' })).status, 'completed');
+  assert.equal(journal.statuses.get('r10'), 'completed');
+  const late = await system.resume('r10', { input: 'again' });
+  assert.deepEqual([late.status, late.reason?.code, late.reason?.layer, late.reason?.detail], ['failed', 'error', 'execution', 'run r10 is not waiting']);
+  assert.equal(journal.statuses.get('r10'), 'completed', 'a completed run is not relabelled failed');
+
+  // A run in progress (input kept, never ended) stays in progress; a run the journal did not know is closed.
+  const busy = await journal.begin('busy');
+  await busy.remember('run:input', 'hi');
+  assert.equal((await system.resume('busy', { input: 'x' })).reason?.detail, 'run busy is not waiting');
+  assert.ok(journal.statuses.has('busy') && journal.statuses.get('busy') === undefined);
+  await system.resume('nobody', { input: 'x' });
+  assert.equal(journal.statuses.get('nobody'), 'failed');
+});
+
+test('a waiting member without resume stops with rejected in the member layer', async () => {
+  const { system } = await resumable({ billing: { ask: true, resume: false } }, { kind: 'sequence', steps: ['billing'] });
+  assert.equal((await system.run('hi', { runId: 'r7' })).status, 'waiting');
+  const res = await system.resume('r7', { input: 'more' });
+  assert.deepEqual([res.status, res.reason?.code, res.reason?.layer, res.reason?.detail], ['stopped', 'rejected', 'member', 'member billing cannot resume']);
+});
+
+test('after a resume a replay calls nobody again and replayed steps spend no budget', async () => {
+  const { system, calls } = await resumable({ triage: { tokens: 50 }, billing: {} }, { kind: 'sequence', steps: ['triage', 'billing'] }, { host: askingGate().host });
+  const bounds = (tokens: number) => ({ deadlineAt: new Date(Date.now() + 60_000).toISOString(), hops: 0, maxHops: 5, tokens });
+  assert.equal((await system.run('hi', { runId: 'r8', bounds: bounds(100) })).status, 'waiting');
+  const res = await system.resume('r8', { approved: true }, { bounds: bounds(50) });
+  assert.equal(res.status, 'completed', JSON.stringify(res.reason));
+  const replay = await system.run('hi', { runId: 'r8', bounds: bounds(50) });
+  assert.equal(replay.status, 'completed');
+  assert.equal(replay.output, 'billing:triage:hi');
+  assert.deepEqual(calls, ['invoke:triage', 'invoke:billing']);
+  assert.deepEqual(replay.record.map((h) => h.attempt), [undefined, 1]);
+});
+
+test('route decisions are journal steps: a resumed run takes the path it took', async () => {
+  let asked = 0;
+  const fickle = defineAdapter({
+    fills: 'AgentRouterPort', name: 'fickle-router', maps, tiers: both, portVersion: '0.1.0',
+    create: (): AgentRouterPort => ({ name: 'fickle-router', route: async (q) => ({ member: q.candidates[asked++ % 2]!.id }) }),
+  }) as unknown as AdapterDescriptor;
+  const { system, calls } = await resumable(
+    { billing: {}, triage: {} }, { kind: 'route', candidates: ['billing', 'triage'] },
+    { host: askingGate().host, ports: { router: { adapter: 'fickle-router' } }, extra: [fickle] },
+  );
+  assert.equal((await system.run('hi', { runId: 'r9' })).status, 'waiting');
+  const res = await system.resume('r9', { approved: true });
+  assert.equal(res.output, 'billing:hi');
+  assert.equal(asked, 1);
+  assert.deepEqual(calls, ['invoke:billing']);
+});
+
+const emptyRegistry = (gets: { n: number }) => defineAdapter({
+  fills: 'RegistryPort', name: 'empty-registry', maps, tiers: both, portVersion: '0.1.0',
+  create: (): RegistryPort => ({ name: 'empty-registry', list: async () => [], get: async () => { gets.n++; return undefined; } }),
+}) as unknown as AdapterDescriptor;
+
+test('registry.requireListed: a member the registry does not return is denied before the gate, with one lookup per run', async () => {
+  const gets = { n: 0 };
+  const h = recordingHost();
+  const { system } = await build(
+    { registry: { requireListed: true }, topology: { kind: 'sequence', steps: ['triage'] }, ports: { ...rawConfig().ports, registry: { adapter: 'empty-registry' } } },
+    { host: h.host, extra: [emptyRegistry(gets)] },
+  );
+  const res = await system.run('hi');
+  assert.deepEqual([res.status, res.reason?.code, res.reason?.layer], ['stopped', 'denied', 'registry']);
+  assert.deepEqual(h.log, []);
+  assert.equal(gets.n, 1);
+  assert.deepEqual((await system.check()).map((f) => [f.path, f.message]), [
+    ['$.members.triage', 'member "triage" is not listed by the registry (registry.requireListed)'],
+    ['$.members.billing', 'member "billing" is not listed by the registry (registry.requireListed)'],
+  ]);
+});
+
+test('without registry.requireListed a registry that lists only routable members does not stop direct calls', async () => {
+  const gets = { n: 0 };
+  const { system } = await build({ topology: { kind: 'sequence', steps: ['triage'] }, ports: { ...rawConfig().ports, registry: { adapter: 'empty-registry' } } }, { extra: [emptyRegistry(gets)] });
+  assert.equal((await system.run('hi')).status, 'completed');
+  assert.equal(gets.n, 0);
+});
+
+test('registry.requireListed: the registry is asked once per member and run; without a registry it is a FAIL finding', async () => {
+  let gets = 0;
+  const counting = defineAdapter({
+    fills: 'RegistryPort', name: 'counting-registry', maps, tiers: both, portVersion: '0.1.0',
+    create: (_o, ctx): RegistryPort => ({ name: 'counting-registry', list: async () => ctx.members!(), get: async (id) => { gets++; return (await ctx.members!()).find((e) => e.id === id); } }),
+  }) as unknown as AdapterDescriptor;
+  const twice = { kind: 'sequence', steps: ['triage', 'triage'] };
+  const listed = await build({ registry: { requireListed: true }, topology: twice, ports: { ...rawConfig().ports, registry: { adapter: 'counting-registry' } } }, { extra: [counting] });
+  assert.equal((await listed.system.run('hi')).status, 'completed');
+  assert.equal(gets, 1);
+  assert.deepEqual(await listed.system.check(), []);
+  const { registry: _registry, router: _router, ...ports } = rawConfig().ports;
+  const bare = await build({ registry: { requireListed: true }, topology: twice, ports });
+  assert.equal((await bare.system.run('hi')).status, 'completed');
+  assert.deepEqual((await bare.system.check()).map((f) => f.path), ['$.registry.requireListed']);
+});
+
+// Resume authorization, step keys, reply claims and what is journaled ---------------------------------------------
+
+type Branch = string | { kind: 'sequence'; steps: string[] };
+
+/** Runs `branches` side by side; the result is the first branch, in order, that did not complete, with usage summed over every call. */
+const branchingTopology = defineAdapter({
+  fills: 'TopologyPort', name: 'branching-topology', maps, tiers: both, portVersion: '0.1.0',
+  create: (): TopologyPort => ({
+    name: 'branching-topology',
+    kinds: ['parallel', 'sequence'],
+    bind: (spec): BoundTopology => ({
+      async run(input, scope) {
+        const all: MemberResult[] = [];
+        const call = async (id: string, path: string) => {
+          const { result } = await scope.call(id, input, { node: path });
+          all.push(result);
+          return result;
+        };
+        const branch = async (b: Branch, path: string): Promise<MemberResult> => {
+          if (typeof b === 'string') return call(b, path);
+          let last: MemberResult = { status: 'completed', output: '' };
+          for (const [i, step] of b.steps.entries()) {
+            last = await call(step, `${path}.steps[${i}]`);
+            if (last.status !== 'completed') break;
+          }
+          return last;
+        };
+        const branches = (spec as { branches: Branch[] }).branches;
+        const results = await Promise.all(branches.map((b, i) => branch(b, `root.branches[${i}]`)));
+        const tokens = all.reduce((n, r) => n + (r.usage?.inputTokens ?? 0), 0);
+        const base = results.find((r) => r.status !== 'completed') ?? { status: 'completed' as const, output: results.map((r) => r.output).join('|') };
+        const { usage: _usage, ...rest } = base;
+        return { ...rest, ...(tokens ? { usage: { inputTokens: tokens, outputTokens: 0 } } : {}) };
+      },
+    }),
+  }),
+}) as unknown as AdapterDescriptor;
+
+const branching = { ports: { topology: { adapter: 'branching-topology' } }, extra: [branchingTopology] };
+
+const alice = { id: 'alice', kind: 'user' as const, roles: ['staff'], scopes: ['orders'], credential: 'ALICE-CREDENTIAL' };
+const mallory = { id: 'mallory', kind: 'user' as const, roles: [], scopes: [], credential: 'MALLORY-CREDENTIAL' };
+
+test('resume by someone else than the run owner is denied before any reply is delivered; the owner can still resume', async () => {
+  const { system, calls, journal } = await resumable({ billing: { ask: true } }, { kind: 'sequence', steps: ['billing'] });
+  assert.equal((await system.run('secret of alice', { runId: 'own1', caller: alice })).status, 'waiting');
+  const kept = journal.kept.get('own1')!;
+  assert.deepEqual(kept.get('run:owner'), { id: 'alice', kind: 'user' });
+  assert.ok(!JSON.stringify([...kept]).includes('ALICE-CREDENTIAL'));
+
+  const stolen = await system.resume('own1', { input: 'reply of mallory' }, { caller: mallory });
+  assert.deepEqual([stolen.status, stolen.reason?.code, stolen.reason?.layer, stolen.reason?.detail], ['stopped', 'denied', 'host', 'only the caller that started the run may resume it']);
+  assert.equal(stolen.output, '');
+  assert.deepEqual(stolen.record, []);
+  assert.deepEqual([...(journal.signals.get('own1') ?? new Map()).keys()], [], 'no reply was delivered');
+  assert.equal(journal.statuses.get('own1'), 'waiting');
+  const anonymous = await system.resume('own1', { input: 'no one' });
+  assert.equal(anonymous.reason?.code, 'denied');
+
+  const res = await system.resume('own1', { input: 'reply of alice' }, { caller: { ...alice, credential: 'ANOTHER-TOKEN' } });
+  assert.equal(res.status, 'completed', JSON.stringify(res.reason));
+  assert.deepEqual(calls, ['invoke:billing', 'resume:billing:task-billing:reply of alice']);
+});
+
+test('the gate is asked resume with the owner, the waiting member and the resumer without credential; ask keeps the run waiting', async () => {
+  const questions: GateQuestion[] = [];
+  let effect: 'ask' | 'allow' = 'ask';
+  const h = recordingHost({ allow: (q) => { questions.push(q); return q.action === 'resume' ? { effect, reason: 'second person' } : { effect: 'allow' }; } });
+  const { system, journal } = await resumable({ triage: {}, billing: { ask: true } }, { kind: 'sequence', steps: ['triage', 'billing'] }, { host: h.host });
+  assert.equal((await system.run('hi', { runId: 'own2', caller: alice, sessionId: 's1' })).status, 'waiting');
+  const asked = await system.resume('own2', { input: 'x' }, { caller: mallory, sessionId: 's1' });
+  assert.deepEqual([asked.status, asked.reason?.code, asked.reason?.layer, asked.reason?.detail], ['waiting', 'needs_input', 'host', 'second person']);
+  const question = questions.at(-1)!;
+  assert.equal(question.action, 'resume');
+  assert.deepEqual({ ...question, member: question.member?.id }, {
+    action: 'resume', runId: 'own2', sessionId: 's1', caller: { id: 'mallory', kind: 'user', roles: [], scopes: [] },
+    owner: { id: 'alice', kind: 'user' }, member: 'billing',
+  });
+  assert.equal(journal.signals.get('own2')?.size ?? 0, 0);
+  assert.equal(journal.statuses.get('own2'), 'waiting');
+  effect = 'allow';
+  assert.equal((await system.resume('own2', { input: 'x' }, { caller: mallory })).status, 'completed');
+});
+
+test('an approval kept for the next attempt records who gave it, and the gate sees it', async () => {
+  const questions: GateQuestion[] = [];
+  const { system, journal } = await resumable({ triage: {}, billing: {} }, { kind: 'sequence', steps: ['triage', 'billing'] }, { host: askingGate(questions).host });
+  assert.equal((await system.run('hi', { runId: 'own3', caller: alice })).status, 'waiting');
+  assert.equal((await system.resume('own3', { approved: true, reason: 'fine' }, { caller: boss })).status, 'completed');
+  const resume = questions.find((q) => q.action === 'resume')!;
+  assert.deepEqual(resume.answer, { approved: true, reason: 'fine', by: 'boss' });
+  assert.deepEqual(journal.kept.get('own3')!.get('call:root.steps[1]:0:attempt'), { n: 1, answer: { approved: true, reason: 'fine', by: 'boss' } });
+});
+
+test('run with the id of a known run: the owner continues it; anyone else asks the gate; a different input fails and is never kept', async () => {
+  const { system, calls, journal } = await resumable({ triage: {}, billing: { ask: true } }, { kind: 'sequence', steps: ['triage', 'billing'] });
+  assert.equal((await system.run('secret of alice', { runId: 'own4', caller: alice })).status, 'waiting');
+  const other = await system.run('secret of alice', { runId: 'own4', caller: mallory });
+  assert.deepEqual([other.status, other.reason?.code, other.reason?.layer], ['stopped', 'denied', 'host']);
+  assert.deepEqual(other.record, []);
+  const changed = await system.run('another input', { runId: 'own4', caller: alice });
+  assert.deepEqual([changed.status, changed.reason?.code, changed.reason?.layer, changed.reason?.detail], ['failed', 'error', 'execution', 'run own4 exists with a different input']);
+  assert.equal(journal.kept.get('own4')!.get('run:input'), 'secret of alice');
+  assert.equal(journal.statuses.get('own4'), 'waiting');
+  const again = await system.run({ text: 'secret of alice' }, { runId: 'own4', caller: alice });
+  assert.deepEqual([again.status, again.reason?.code], ['waiting', 'needs_input']);
+  assert.deepEqual(calls, ['invoke:triage', 'invoke:billing']);
+});
+
+test('parallel branches keep their step keys on replay: a resume continues the waiting call once and invokes nobody again', async () => {
+  const { system, calls, journal } = await resumable(
+    { A: { slow: 40 }, B: {}, C: {}, D: { ask: true } },
+    { kind: 'parallel', branches: [{ kind: 'sequence', steps: ['A', 'B'] }, { kind: 'sequence', steps: ['C', 'D'] }] },
+    branching,
+  );
+  const first = await system.run('hi', { runId: 'par1' });
+  assert.equal(first.status, 'waiting');
+  assert.deepEqual(journal.kept.get('par1')!.get('run:waiting'), { key: 'call:root.branches[1].steps[1]:0', attempt: 0, kind: 'member', member: 'D', node: 'root.branches[1].steps[1]' });
+  const res = await system.resume('par1', { input: 'reply' });
+  assert.equal(res.status, 'completed', JSON.stringify(res.reason));
+  assert.deepEqual(calls.filter((c) => c.startsWith('invoke:')).sort(), ['invoke:A', 'invoke:B', 'invoke:C', 'invoke:D']);
+  assert.deepEqual(calls.filter((c) => c.startsWith('resume:')), ['resume:D:task-D:reply']);
+});
+
+test('the same node path called twice gets one step key per call', async () => {
+  const { system, journal } = await resumable({ triage: {} }, { kind: 'sequence', steps: ['triage', 'triage'] });
+  assert.equal((await system.run('hi', { runId: 'twice' })).status, 'completed');
+  assert.deepEqual(journal.steps.filter((k) => k.startsWith('call:')), ['call:root.steps[0]:0', 'call:root.steps[1]:0']);
+  const same = defineAdapter({
+    fills: 'TopologyPort', name: 'same-path', maps, tiers: both, portVersion: '0.1.0',
+    create: (): TopologyPort => ({
+      name: 'same-path', kinds: ['sequence'],
+      bind: (): BoundTopology => ({
+        async run(input, scope) {
+          const one = (await scope.call('triage', input, { node: 'root' })).result;
+          return (await scope.call('triage', one.output, { node: 'root' })).result;
+        },
+      }),
+    }),
+  }) as unknown as AdapterDescriptor;
+  const again = await resumable({ triage: {} }, { kind: 'sequence', steps: ['triage'] }, { ports: { topology: { adapter: 'same-path' } }, extra: [same] });
+  assert.equal((await again.system.run('hi', { runId: 'twice' })).output, 'triage:triage:hi');
+  assert.deepEqual(again.journal.steps, ['call:root:0', 'call:root:1']);
+});
+
+test('a reply delivered by a resume that died before keeping its claim: the next resume continues with that reply', async () => {
+  const h = recordingHost();
+  const { system, calls, journal } = await resumable({ billing: { ask: true } }, { kind: 'sequence', steps: ['billing'] }, { host: h.host });
+  assert.equal((await system.run('hi', { runId: 'claim1' })).status, 'waiting');
+  // An earlier resume signalled the wait, then its process ended before it kept run:claimed.
+  assert.equal(await journal.signal('claim1', 'call:root.steps[0]:0:reply:0', { input: 'first' }), true);
+  const next = await system.resume('claim1', { input: 'second' });
+  assert.deepEqual([next.status, next.output], ['completed', 'billing:first'], JSON.stringify(next.reason));
+  assert.deepEqual(calls, ['invoke:billing', 'resume:billing:task-billing:first'], 'the first reply wins; the second is not used');
+  assert.deepEqual(h.events.filter((e) => e.name === 'plexus.execution.reply_kept').map((e) => e.attrs['plexus.member']), ['billing']);
+  assert.equal(journal.statuses.get('claim1'), 'completed');
+});
+
+test('a reply delivered but never claimed: a run with the same id also continues with it instead of waiting forever', async () => {
+  const { system, calls, journal } = await resumable({ billing: { ask: true } }, { kind: 'sequence', steps: ['billing'] });
+  assert.equal((await system.run('hi', { runId: 'claim3' })).status, 'waiting');
+  await journal.signal('claim3', 'call:root.steps[0]:0:reply:0', { input: 'first' });
+  const past = { deadlineAt: new Date(Date.now() - 1000).toISOString(), hops: 0, maxHops: 5 };
+  assert.equal((await system.resume('claim3', { input: 'second' }, { bounds: past })).reason?.code, 'timeout');
+  assert.deepEqual(journal.kept.get('claim3')!.get('run:claimed'), { key: 'call:root.steps[0]:0', attempt: 0, kind: 'member', member: 'billing', node: 'root.steps[0]' });
+  const again = await system.run('hi', { runId: 'claim3' });
+  assert.deepEqual([again.status, again.output], ['completed', 'billing:first']);
+  assert.deepEqual(calls, ['invoke:billing', 'resume:billing:task-billing:first']);
+});
+
+test('a resume that claimed the reply but did not reach the call: a run with the same id continues with that reply', async () => {
+  const { system, calls, journal } = await resumable({ billing: { ask: true } }, { kind: 'sequence', steps: ['billing'] });
+  assert.equal((await system.run('hi', { runId: 'claim2' })).status, 'waiting');
+  const past = { deadlineAt: new Date(Date.now() - 1000).toISOString(), hops: 0, maxHops: 5 };
+  const cut = await system.resume('claim2', { input: 'kept reply' }, { bounds: past });
+  assert.deepEqual([cut.status, cut.reason?.code], ['stopped', 'timeout']);
+  const kept = journal.kept.get('claim2')!;
+  assert.equal(kept.get('run:waiting'), null);
+  assert.equal((await system.resume('claim2', { input: 'other' })).reason?.detail, 'run claim2 is not waiting');
+  const res = await system.run('hi', { runId: 'claim2' });
+  assert.equal(res.status, 'completed', JSON.stringify(res.reason));
+  assert.deepEqual(calls, ['invoke:billing', 'resume:billing:task-billing:kept reply']);
+});
+
+test('a member that throws is not journaled: a resume calls it again, while the waiting branch continues', async () => {
+  const { system, calls } = await resumable({ D: { ask: true }, E: { flaky: true } }, { kind: 'parallel', branches: ['D', 'E'] }, branching);
+  const first = await system.run('hi', { runId: 'flaky1' });
+  assert.equal(first.status, 'waiting');
+  assert.deepEqual(first.record.map((h) => [h.member, h.status]).sort(), [['D', 'waiting'], ['E', 'failed']]);
+  const res = await system.resume('flaky1', { input: 'ok' });
+  assert.equal(res.status, 'completed', JSON.stringify(res.reason));
+  assert.deepEqual(calls.slice(0, 2), ['invoke:D', 'invoke:E']);
+  assert.deepEqual(calls.slice(2).sort(), ['invoke:E', 'resume:D:task-D:ok']);
+  assert.deepEqual(res.record.map((h) => [h.member, h.status, h.replayed]).sort(), [['D', 'completed', undefined], ['E', 'completed', undefined]]);
+});
+
+test('replayed hops are marked and their usage is not counted again in the resumed result', async () => {
+  const { system } = await resumable({ triage: { tokens: 50 }, billing: { tokens: 7 } }, { kind: 'parallel', branches: ['triage', 'billing'] }, { ...branching, host: askingGate().host });
+  const first = await system.run('hi', { runId: 'used1' });
+  assert.equal(first.status, 'waiting');
+  assert.deepEqual(first.usage, { inputTokens: 50, outputTokens: 0 });
+  const res = await system.resume('used1', { approved: true });
+  assert.equal(res.status, 'completed', JSON.stringify(res.reason));
+  assert.deepEqual(res.usage, { inputTokens: 7, outputTokens: 0 });
+  const triage = res.record.find((h) => h.member === 'triage')!;
+  assert.deepEqual([triage.replayed, triage.usage], [true, { inputTokens: 50, outputTokens: 0 }]);
+  assert.equal(res.record.find((h) => h.member === 'billing')!.replayed, undefined);
+});
+
+test('a router that throws is a failed routing hop, even on an optional route, and its failure is not journaled', async () => {
+  let down = true;
+  const flaky = defineAdapter({
+    fills: 'AgentRouterPort', name: 'flaky-router', maps, tiers: both, portVersion: '0.1.0',
+    create: (): AgentRouterPort => ({ name: 'flaky-router', route: async (q) => { if (down) throw new Error('router down'); return { member: q.candidates[0]!.id }; } }),
+  }) as unknown as AdapterDescriptor;
+  const decisions: RouteDecision[] = [];
+  const probing = defineAdapter({
+    fills: 'TopologyPort', name: 'optional-route', maps, tiers: both, portVersion: '0.1.0',
+    create: (): TopologyPort => ({
+      name: 'optional-route', kinds: ['sequence'],
+      bind: (): BoundTopology => ({
+        async run(input, scope) {
+          const decision = await scope.route({ input, candidates: ['billing'], node: 'root.turns[1]', optional: true });
+          decisions.push(decision);
+          return decision.member ? (await scope.call(decision.member, input, { node: 'root.turns[1]' })).result : { status: 'failed', output: '', reason: { code: 'error', layer: 'routing' } };
+        },
+      }),
+    }),
+  }) as unknown as AdapterDescriptor;
+  const { system } = await resumable({ billing: {} }, { kind: 'sequence', steps: ['billing'] }, {
+    ports: { router: { adapter: 'flaky-router' }, topology: { adapter: 'optional-route' } }, extra: [flaky, probing],
+  });
+  const res = await system.run('hi', { runId: 'route1' });
+  assert.deepEqual(decisions[0], { reason: 'router down', failed: true });
+  assert.deepEqual(res.record.map((h) => [h.member, h.status, h.reason?.code, h.reason?.layer, h.reason?.detail]), [['', 'failed', 'error', 'routing', 'router down']]);
+  down = false;
+  const again = await system.run('hi', { runId: 'route1' });
+  assert.equal(again.status, 'completed', JSON.stringify(again.reason));
+  assert.equal(again.output, 'billing:hi');
+});
+
+test('a failed write of a run value is reported as plexus.execution.write_failed with the key, never the value', async () => {
+  const h = recordingHost();
+  const { system, journal } = await resumable({ triage: {} }, { kind: 'sequence', steps: ['triage'] }, { host: h.host });
+  const begin = journal.begin.bind(journal);
+  journal.begin = async (key) => {
+    const run = await begin(key);
+    return { ...run, remember: async (k, v) => { if (k === 'run:status') throw new Error('disk full'); return run.remember(k, v); } };
+  };
+  assert.equal((await system.run('the secret input', { runId: 'w1' })).status, 'completed');
+  const failedWrites = h.events.filter((e) => e.name === 'plexus.execution.write_failed');
+  assert.deepEqual(failedWrites.map((e) => [e.attrs['plexus.execution.key'], e.attrs['plexus.error.message'], e.attrs['plexus.layer']]), [['run:status', 'disk full', 'execution']]);
+  assert.ok(!JSON.stringify(failedWrites).includes('the secret input'));
+});
+
+test('a failed end of the run and a failed keep of a waiting member\'s handle are reported as write_failed', async () => {
+  const h = recordingHost();
+  const { system, journal } = await resumable({ billing: { ask: true } }, { kind: 'sequence', steps: ['billing'] }, { host: h.host });
+  const begin = journal.begin.bind(journal);
+  journal.begin = async (key) => {
+    const run = await begin(key);
+    return {
+      ...run,
+      remember: async (k, v) => { if (k.endsWith(':task')) throw new Error('disk full'); return run.remember(k, v); },
+      end: async () => { throw new Error('disk gone'); },
+    };
+  };
+  assert.equal((await system.run('hi', { runId: 'w2' })).status, 'waiting', 'the result stands');
+  const failedWrites = h.events.filter((e) => e.name === 'plexus.execution.write_failed');
+  assert.deepEqual(failedWrites.map((e) => [e.attrs['plexus.execution.key'], e.attrs['plexus.error.message']]), [['call:root.steps[0]:0:task', 'disk full'], ['end', 'disk gone']]);
+});
+
+// One invocation per run ---------------------------------------------------------------------------------------------
+
+const tick = (ms = 10) => new Promise((done) => setTimeout(done, ms));
+
+test('a run or resume of a run another invocation holds fails as in progress and touches nothing', async () => {
+  const { system, calls, journal } = await resumable({ billing: { ask: true, slowResume: 40 } }, { kind: 'sequence', steps: ['billing'] });
+  assert.equal((await system.run('hi', { runId: 'busy1', caller: alice })).status, 'waiting');
+  const begun: string[] = [];
+  const begin = journal.begin.bind(journal);
+  journal.begin = async (key) => { begun.push(key); return begin(key); };
+  const first = system.resume('busy1', { input: 'one' }, { caller: alice });
+  await tick();
+  const inProgress = ['failed', 'error', 'execution', 'run busy1 is in progress'];
+  const second = await system.resume('busy1', { input: 'two' }, { caller: alice });
+  assert.deepEqual([second.status, second.reason?.code, second.reason?.layer, second.reason?.detail], inProgress);
+  const denied = await system.resume('busy1', { input: 'evil' }, { caller: mallory });
+  assert.deepEqual([denied.status, denied.reason?.code, denied.reason?.layer, denied.reason?.detail], inProgress);
+  const rerun = await system.run('hi', { runId: 'busy1', caller: alice });
+  assert.deepEqual([rerun.status, rerun.reason?.detail, rerun.record], ['failed', 'run busy1 is in progress', []]);
+  assert.deepEqual(begun, ['busy1'], 'the refused invocations never began the run');
+  assert.equal(journal.signals.get('busy1')?.size, 1);
+  const done = await first;
+  assert.deepEqual([done.status, done.output], ['completed', 'billing:one']);
+  assert.equal(journal.statuses.get('busy1'), 'completed');
+  assert.deepEqual(calls, ['invoke:billing', 'resume:billing:task-billing:one']);
+  // Once it let go, the run can be invoked again.
+  assert.equal((await system.run('hi', { runId: 'busy1', caller: alice })).status, 'completed');
+});
+
+test('systems that share one journal instance share the hold on its runs', async () => {
+  const calls: string[] = [];
+  const journal = memoryExecution([], true);
+  const one = async () => (await build(
+    { members: { billing: { adapter: 'asking-member', options: { ask: true, slowResume: 40 } } }, topology: { kind: 'sequence', steps: ['billing'] }, ports: { ...rawConfig().ports, execution: { adapter: 'durable-execution' } } },
+    { extra: [askingMember(calls), durableExecution(journal)] },
+  )).system;
+  const [a, b] = [await one(), await one()];
+  assert.equal((await a.run('hi', { runId: 'shared1' })).status, 'waiting');
+  const first = a.resume('shared1', { input: 'one' });
+  await tick();
+  assert.equal((await b.resume('shared1', { input: 'two' })).reason?.detail, 'run shared1 is in progress');
+  assert.equal((await first).status, 'completed');
+});
+
+test('a begin the journal refuses with RUN_BUSY fails as in progress and is not let go of', async () => {
+  const { system, journal } = await resumable({ billing: { ask: true } }, { kind: 'sequence', steps: ['billing'] });
+  assert.equal((await system.run('hi', { runId: 'busy2' })).status, 'waiting');
+  journal.begin = async (key) => { throw new RunBusyError(key); };
+  const res = await system.resume('busy2', { input: 'x' });
+  assert.deepEqual([res.status, res.reason?.code, res.reason?.layer, res.reason?.detail], ['failed', 'error', 'execution', 'run busy2 is in progress']);
+  journal.begin = async () => { throw Object.assign(new Error('locked elsewhere'), { code: 'RUN_BUSY' }); };
+  assert.equal((await system.run('hi', { runId: 'busy2' })).reason?.detail, 'run busy2 is in progress');
+  assert.deepEqual(journal.released, []);
+  assert.equal(journal.statuses.get('busy2'), 'waiting');
+});
+
+test('a refused invocation lets go of the run without a status; one that kept nothing ends failed', async () => {
+  const { system, journal } = await resumable({ billing: { ask: true } }, { kind: 'sequence', steps: ['billing'] });
+  assert.equal((await system.run('hi', { runId: 'let1', caller: alice })).status, 'waiting');
+  assert.equal((await system.resume('let1', { input: 'x' }, { caller: mallory })).reason?.code, 'denied');
+  assert.equal((await system.run('other', { runId: 'let1', caller: alice })).reason?.detail, 'run let1 exists with a different input');
+  assert.deepEqual(journal.released, ['let1', 'let1']);
+  assert.equal(journal.statuses.get('let1'), 'waiting');
+  await system.resume('never', { input: 'x' });
+  assert.equal(journal.statuses.get('never'), 'failed');
+  assert.deepEqual(journal.released, ['let1', 'let1']);
+});
+
+// The wait a result reports ------------------------------------------------------------------------------------------
+
+/** A topology that goes on past a wait: X, then Y when X waits; the result is Y's. */
+const pastWait = defineAdapter({
+  fills: 'TopologyPort', name: 'past-wait', maps, tiers: both, portVersion: '0.1.0',
+  create: (): TopologyPort => ({
+    name: 'past-wait', kinds: ['sequence'],
+    bind: (): BoundTopology => ({
+      async run(input, scope) {
+        const x = (await scope.call('X', input, { node: 'root.x' })).result;
+        return x.status === 'waiting' ? (await scope.call('Y', input, { node: 'root.y' })).result : x;
+      },
+    }),
+  }),
+}) as unknown as AdapterDescriptor;
+
+/** A topology that calls D and G at once and returns the first that did not complete in that order, else both outputs. */
+const bothAtOnce = defineAdapter({
+  fills: 'TopologyPort', name: 'both-at-once', maps, tiers: both, portVersion: '0.1.0',
+  create: (): TopologyPort => ({
+    name: 'both-at-once', kinds: ['parallel'],
+    bind: (): BoundTopology => ({
+      async run(input, scope) {
+        const results = (await Promise.all([scope.call('D', input, { node: 'root.d' }), scope.call('G', input, { node: 'root.g' })])).map((o) => o.result);
+        return results.find((r) => r.status !== 'completed') ?? { status: 'completed', output: results.map((r) => r.output).join('+') };
+      },
+    }),
+  }),
+}) as unknown as AdapterDescriptor;
+
+test('a run that went past a wait to a second one keeps the wait its result reports; the resume answers that one', async () => {
+  const { system, calls, journal } = await resumable({ X: { ask: true }, Y: { ask: true } }, { kind: 'sequence', steps: ['X', 'Y'] }, {
+    ports: { topology: { adapter: 'past-wait' } }, extra: [pastWait],
+  });
+  const first = await system.run('hi', { runId: 'past1' });
+  assert.equal(first.status, 'waiting');
+  assert.deepEqual(first.wait, { token: 'call:root.y:0#0', kind: 'input', member: 'Y' });
+  assert.equal((journal.kept.get('past1')!.get('run:waiting') as { member: string }).member, 'Y');
+  const res = await system.resume('past1', { input: 'for-Y', wait: first.wait!.token });
+  assert.deepEqual([res.status, res.output, res.wait], ['completed', 'Y:for-Y', undefined], JSON.stringify(res.reason));
+  assert.deepEqual(calls, ['invoke:X', 'invoke:Y', 'resume:Y:task-Y:for-Y']);
+});
+
+test('a member wait and a gate ask at once: the result, the kept wait and the reply agree; a stale or wrong wait token is refused', async () => {
+  const h = recordingHost({
+    allow: (q) => (q.action === 'invoke' && q.member.id === 'G' && !q.answer ? { effect: 'ask', reason: 'approve G' } : { effect: 'allow' }),
+  });
+  const { system, calls, journal } = await resumable({ D: { ask: true, slow: 30 }, G: {} }, { kind: 'parallel', branches: ['D', 'G'] }, {
+    host: h.host, ports: { topology: { adapter: 'both-at-once' } }, extra: [bothAtOnce],
+  });
+  const first = await system.run('hi', { runId: 'par2' });
+  assert.deepEqual([first.status, first.reason?.layer, first.wait], ['waiting', 'member', { token: 'call:root.d:0#0', kind: 'input', member: 'D' }]);
+  assert.deepEqual(journal.kept.get('par2')!.get('run:waiting'), { key: 'call:root.d:0', attempt: 0, kind: 'member', member: 'D', node: 'root.d' });
+
+  const wrong = await system.resume('par2', { input: 'x', wait: 'call:root.g:0#0' });
+  assert.deepEqual([wrong.status, wrong.reason?.code, wrong.reason?.layer, wrong.reason?.detail], ['failed', 'error', 'execution', 'run par2 waits on another step']);
+  assert.equal(journal.signals.get('par2')?.size ?? 0, 0, 'no reply was delivered');
+  assert.match((await system.resume('par2', { input: 'x', wait: 7 } as never)).reason?.detail ?? '', /invalid reply/);
+
+  const second = await system.resume('par2', { input: 'for-D', wait: first.wait!.token });
+  assert.deepEqual([second.status, second.reason?.layer, second.wait], ['waiting', 'host', { token: 'call:root.g:0#0', kind: 'approval', member: 'G' }]);
+  // The first reply again, delayed or repeated: it names a wait the run no longer has.
+  assert.equal((await system.resume('par2', { input: 'for-D', wait: first.wait!.token })).reason?.detail, 'run par2 waits on another step');
+  const done = await system.resume('par2', { approved: true, wait: second.wait!.token });
+  assert.deepEqual([done.status, done.output], ['completed', 'D:for-D+G:hi'], JSON.stringify(done.reason));
+  assert.deepEqual(calls.filter((c) => c.startsWith('resume:')), ['resume:D:task-D:for-D']);
+});
+
+test('a member cannot name a wait; a waiting result without one keeps the latest wait, reported', async () => {
+  const h = recordingHost();
+  const forged = defineAdapter({
+    fills: 'TopologyPort', name: 'forged', maps, tiers: both, portVersion: '0.1.0',
+    create: (): TopologyPort => ({
+      name: 'forged', kinds: ['sequence'],
+      bind: (): BoundTopology => ({
+        async run(input, scope) {
+          const { wait: _wait, ...result } = (await scope.call('X', input, { node: 'root' })).result;
+          return result;
+        },
+      }),
+    }),
+  }) as unknown as AdapterDescriptor;
+  const naming = defineAdapter({
+    fills: 'MemberPort', name: 'naming-member', maps, tiers: both, portVersion: '0.1.0',
+    create: (_o, ctx): MemberPort => fakeMemberPort(ctx.name, async () => ({ status: 'waiting', output: '', reason: { code: 'needs_input', layer: 'member' }, taskRef: 't', wait: { token: 'mine', kind: 'approval', member: 'Z' } }) as MemberResult),
+  }) as unknown as AdapterDescriptor;
+  const built = await build(
+    { members: { X: { adapter: 'naming-member' } }, topology: { kind: 'sequence', steps: ['X'] }, ports: { ...rawConfig().ports, topology: { adapter: 'forged' }, execution: { adapter: 'durable-execution' } } },
+    { host: h.host, extra: [forged, naming, durableExecution(memoryExecution([], true))] },
+  );
+  const res = await built.system.run('hi', { runId: 'forged1' });
+  assert.deepEqual([res.status, res.wait], ['waiting', { token: 'call:root:0#0', kind: 'input', member: 'X' }]);
+  assert.deepEqual(h.events.filter((e) => e.name === 'plexus.execution.wait_inferred').map((e) => e.attrs['plexus.member']), ['X']);
+});
+
+// A run that cannot keep its owner or input does not start -------------------------------------------------------------
+
+test('a run whose owner or input cannot be kept fails before its topology runs; nobody can replay it later', async () => {
+  for (const key of ['run:owner', 'run:input']) {
+    const h = recordingHost();
+    const { system, calls, journal } = await resumable({ A: {}, B: { ask: true } }, { kind: 'sequence', steps: ['A', 'B'] }, { host: h.host });
+    const begin = journal.begin.bind(journal);
+    let failing = true;
+    journal.begin = async (k) => {
+      const run = await begin(k);
+      return { ...run, remember: async (name, v) => { if (failing && name === key) throw new Error('SQLITE_BUSY'); return run.remember(name, v); } };
+    };
+    const res = await system.run('secret of alice', { runId: 'own9', caller: alice });
+    assert.deepEqual([res.status, res.reason?.code, res.reason?.layer, res.reason?.detail, res.record], ['failed', 'error', 'execution', 'run own9 could not be kept', []], key);
+    assert.deepEqual(calls, [], `${key}: the topology never ran`);
+    assert.equal(journal.statuses.get('own9'), 'failed');
+    assert.deepEqual(h.events.filter((e) => e.name === 'plexus.execution.write_failed').map((e) => e.attrs['plexus.execution.key']), [key]);
+    failing = false;
+    const again = await system.run('secret of alice', { runId: 'own9', caller: alice });
+    assert.equal(again.status, 'waiting', key);
+    assert.equal(journal.kept.get('own9')!.get('run:input'), 'secret of alice');
+    assert.deepEqual(calls, ['invoke:A', 'invoke:B']);
+  }
 });

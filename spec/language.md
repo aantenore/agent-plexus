@@ -47,13 +47,28 @@ Every shape has an optional `ext` unless noted. Required fields are marked; the 
 | `HopRecord` | [AttributionPort](ports/AttributionPort.md), `SystemResult` |
 | `Score`, `EvalCase` | [`score`](hooks.md#score), [AttributionPort](ports/AttributionPort.md) |
 | `Attribution` | [AttributionPort](ports/AttributionPort.md) |
-| `SystemResult` | `System.run` |
+| `SystemResult` | `System.run`, `System.resume` |
+| `ResumeReply` | `System.resume` |
 
 ### RunInput
 
 A string, or `{ text, parts? }`. A string is shorthand for `{ text }`. A part is `{ type: "text", text }` or
 `{ type: "media", mediaType, url?, data? }`. Only `text` crosses to a member: the gate checks text alone, so `parts`
 are dropped by the pipeline and a `plexus.parts.dropped` event is emitted.
+
+### ResumeReply
+
+The answer to a run that ended `waiting`, given to `System.resume(runId, reply, ctx?)`: `{ input: RunInput }` for a
+member that waits for input, or `{ approved: Boolean, reason?: String }` for the host's `ask`, each with an optional
+`wait: String`. Exactly one of `input` and `approved`; a reply of the other kind than the wait is refused (`failed`,
+code `error`, layer `execution`). `wait` is the token of the wait the reply answers (`SystemResult.wait.token`): when
+the run now waits elsewhere the resume is refused ("run <id> waits on another step") and delivers nothing, so a late
+or repeated reply never answers a later wait. Without `wait` the reply answers whatever the run waits on. The host's
+gate is asked `resume` first (see [hooks](hooks.md#gate)): a resume by anyone the gate does not allow is `stopped`,
+code `denied`, layer `host`, and delivers nothing. A resume while another invocation runs the run is `failed`, code
+`error`, layer `execution` ("run <id> is in progress"). One reply per wait, the first delivered wins: a reply already
+delivered by a resume that did not finish answers the wait, and the new one is not used. An approval is kept with
+`by`, the id of the caller that resumed.
 
 ### Caller
 
@@ -67,6 +82,10 @@ The host's verified caller, carried through. The core reads only `id`, `kind` an
 | `name?` | String | |
 | `actors?` | [`{id, kind, name?}`] | Agents that acted for the caller, first delegate first, as the host verified them. |
 | `credential?` | String | In memory only: never serialised, logged or traced. The pipeline strips it before any port sees the caller. |
+
+A `CallerIdentity` is `{id, kind, name?, actors?}`: who a caller is, without roles, scopes, `ext` or credential. A run
+keeps the identity of the caller that started it as its owner. Two identities are the same when `id`, `kind` and the
+`actors` (id and kind, in order) are equal; two absent callers are the same.
 
 ### Bounds, lineage and the run context
 
@@ -91,9 +110,15 @@ are the host's; without `maxHops` the run may add `limits.system.maxDepth` hops.
 | `taskRef?` | String | Opaque handle to resume or cancel the member's work (an A2A task and context). |
 | `usage?` | `{inputTokens, outputTokens}` | |
 | `costUsd?` | Number, >= 0 | Present when the member reports it; absent means unknown, and the budget treats it as fully spent. |
+| `wait?` | `WaitRef` | On a `waiting` result of a member call only, set by the core: the wait a resume answers. A member's own is dropped; a topology passes it on with the result. |
 | `ext?` | Ext | |
 
+A `WaitRef` is `{token, kind, member}`: `token` is `<step key>#<attempt>` of the call that waits (`call:<node
+path>:<n>#<attempt>`, opaque to a caller), `kind` is `input` for a member that waits (`needs_input`, `needs_auth`) or
+`approval` for the host's `ask`, and `member` the member id. It carries no text.
+
 A `SystemResult` is a `MemberResult` plus `runId` and `record: [HopRecord]`, so a system can be a member of another.
+Its `wait` is present exactly when it is `waiting` on a wait the run keeps, and names that wait.
 
 ### AgentEntry
 
@@ -112,20 +137,24 @@ A `SystemResult` is a `MemberResult` plus `runId` and `record: [HopRecord]`, so 
 ### Routing
 
 `RouteQuestion` is `{input, candidates: [AgentEntry], caller?, bounds?}`. `RouteDecision` is
-`{member?, ranked?: [{member, score}], reason?}`. No `member` means no candidate fits. `reason` is internal text,
-never parsed.
+`{member?, ranked?: [{member, score}], reason?, failed?: true}`. No `member` means no candidate fits. `failed` is set by
+the core when routing failed (the router or the registry threw, or the router chose outside the candidates), which is
+not the same as choosing nobody; `reason` then carries the error. `reason` is internal text, never parsed.
 
 ### HopRecord
 
-One per member call, written for every call including refusals, and one for a route that chose nobody (no `member`).
+One per member call, written for every call including refusals, and one for a route that chose nobody or failed (no
+`member`).
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `hopId`, `member`, `node`, `rootRunId`, `hops`, `startedAt`, `durationMs`, `status` | required | `member` is empty for a route that chose nobody. `node` is the topology path, such as `root.steps[1]`. |
+| `hopId`, `member`, `node`, `rootRunId`, `hops`, `startedAt`, `durationMs`, `status` | required | `member` is empty for a route that chose nobody (`stopped`, `rejected`) or failed (`failed`, `error`). `node` is the topology path, such as `root.steps[1]`. |
 | `parentHopId?`, `runId?`, `reason?`, `usage?`, `costUsd?` | | |
 | `route?` | `{member?, ranked?}` | The router's decision that chose this member. |
 | `inputRef?`, `outputRef?` | String | Keys of the texts in the execution journal. Records never carry the texts. |
 | `abandoned?` | Boolean | The topology abandoned the branch (a `parallel` with `join: "first"`). |
+| `attempt?` | Integer, >= 1 | The call was continued by `System.resume`: 1 after the first resume. Absent on the first attempt. |
+| `replayed?` | Boolean | The call's journal step replayed: an earlier invocation of the run made the call and spent its `usage` and `costUsd`, which stay on the record but are not counted again in this invocation's result. |
 
 ### Score, EvalCase, Attribution
 
@@ -169,15 +198,15 @@ the block yet.
 | Code | Meaning | Where it comes from |
 | --- | --- | --- |
 | `guard_block` | The host's check blocked the text | `gate.check`, layer `host`, with `stage`; or a member |
-| `denied` | The host refused the call | `gate.allow`, layer `host` |
+| `denied` | The call is not allowed | `gate.allow`, layer `host` (also a `resume` the host refuses); with `registry.requireListed`, a member the registry does not return, layer `registry` |
 | `aborted` | The run was cancelled | the signal of the run or of a branch |
 | `timeout` | A deadline passed | layer `topology` (run deadline, `by` names who set it) or `member` (`limits.system.stepTimeoutMs`) |
 | `limit` | A system limit stopped the call | layer `topology`, `by` names the limit; or a member's own limit |
 | `hop_limit` | The chain is too deep | layer `topology` |
-| `needs_input` | The run waits for a person | `gate.allow` returned `ask`, or a member |
+| `needs_input` | The run waits for a person | `gate.allow` returned `ask` (also for a `resume`), or a member |
 | `needs_auth` | No credential for the member's audience | `gate.token`, layer `host`; or a member |
-| `rejected` | A remote member declined or stopped | a member; over A2A today every remote stop except a cancellation |
-| `error` | Something failed | a member that threw or answered an unknown status; the topology; the journal |
+| `rejected` | A remote member declined or stopped | a member; over A2A today every remote stop except a cancellation; layer `member` for a resume with input to a member without `resume` or without a kept task handle |
+| `error` | Something failed | a member that threw or answered an unknown status; the topology; routing, layer `routing`, when the router or the registry failed; the journal, also a `System.resume` of a run that is not waiting or waits on another step, a `run` or `resume` of a run in progress, a run whose owner or input could not be kept, and a `run` with the id of a known run and a different input |
 
 ## Extensions (`ext`)
 
@@ -229,8 +258,8 @@ The core names its spans, events and metrics `plexus.*` only, and sets `plexus.l
 | Kind | Name |
 | --- | --- |
 | span | `plexus.run`, `plexus.hop`, `plexus.route`; `plexus.node` is declared but not emitted yet |
-| attribute | `plexus.layer`, `plexus.system`, `plexus.member`, `plexus.hop`, `plexus.node.path`, `plexus.node.kind`, `plexus.route.choice`, `plexus.run.status`, `plexus.run.reason`, `plexus.parts.count`; `plexus.node.kind` is declared but not emitted yet |
-| event | `plexus.limit`, `plexus.parts.dropped`, `plexus.member.resumed`, `plexus.checkpoint.ignored` |
+| attribute | `plexus.layer`, `plexus.system`, `plexus.member`, `plexus.hop`, `plexus.node.path`, `plexus.node.kind`, `plexus.route.choice`, `plexus.run.status`, `plexus.run.reason`, `plexus.parts.count`, `plexus.execution.key`, `plexus.error.message`; `plexus.node.kind` is declared but not emitted yet |
+| event | `plexus.limit`, `plexus.parts.dropped`, `plexus.member.resumed`, `plexus.checkpoint.ignored`, `plexus.execution.write_failed` (a value the core keeps, or the run's `end` or `release`, could not be written: the key and the error, never the value), `plexus.execution.reply_kept` (a resume went on with the reply an earlier resume delivered), `plexus.execution.wait_inferred` (a `waiting` result named no wait of the run: the latest is kept) |
 | metric | `plexus.hops`, `plexus.attributions` |
 
 Credentials never appear in attributes.

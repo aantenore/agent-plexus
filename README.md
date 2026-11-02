@@ -12,7 +12,7 @@ reference host, through one adapter. The core defines a port for each layer; ada
 protocol or a technology onto a port; a system config picks one adapter per port, per profile. The core depends on
 nothing and runs offline with prototype defaults for the hooks.
 
-Status: implemented are the core, the CLI, seven reference adapters (including `a2a-member`), the `agent-layers` adapter and two examples
+Status: implemented are the core, the CLI, eight reference adapters (including `a2a-member` and `sqlite-execution`), the `agent-layers` adapter and two examples
 (`offline`, `swap`). Planned work is listed in [docs/adapters.md](docs/adapters.md#planned); technologies without
 scheduled work are marked candidate.
 
@@ -128,7 +128,7 @@ node --conditions=@agent-plexus/source packages/cli/src/cli.ts eval --config exa
 ```
 spec/            language-neutral contracts: language.md, hooks.md, ports/ (JSON schemas are planned)
 packages/core    @agent-plexus/core: ports, host hooks, memberCall, assemble, system config, limits (zero dependencies)
-packages/cli     @agent-plexus/cli: check, run, dev, eval
+packages/cli     @agent-plexus/cli: check, run, resume, dev, eval
 adapters/<name>  @agent-plexus/adapter-<name>: one package per framework, protocol or technology
 examples/        sample systems: offline (reference adapters), swap (each layer replaced by one config value)
 docs/            product, architecture, stack, guide, adapters, limits, layers/<id>.md, cross-cutting/, decisions/, research/, proposals/

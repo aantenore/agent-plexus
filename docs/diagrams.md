@@ -77,7 +77,7 @@ The command renders every Mermaid block of a Markdown file and fails on a syntax
 | Request through the system | [README](../README.md#request-through-the-system) | A run across the layers, with the host's gate, telemetry and score around it |
 | Planes at a glance | [stack.md](stack.md#planes-at-a-glance) | How the member, discovery, flow and insight planes relate to the host |
 | Request flow | [stack.md](stack.md#request-flow) | Which layer calls which, in more detail |
-| Ports and adapters | [stack.md](stack.md#ports-and-adapters) | Core ports, implemented adapters, planned adapters, candidates |
+| Ports and adapters | [stack.md](stack.md#ports-and-adapters) | Core ports, implemented adapters, candidates |
 | Developer journey | [product.md](product.md#the-developer-journey) | Members, config, `check`, `run`, `eval`, production check |
 | Profile ladder | [product.md](product.md#profile-ladder) | What changes from the prototype to the production profile |
 | Hexagonal model | [architecture.md](architecture.md#hexagonal-model) | Inbound, core, outbound adapters and host hooks |
@@ -85,7 +85,7 @@ The command renders every Mermaid block of a Markdown file and fails on a syntax
 
 ### Layers
 
-Each layer page has a **Where it sits** diagram: its port, what calls it and what it calls. Some pages add one more.
+Each layer page has a **Where it sits** diagram: its port, what calls it and what it calls. Some pages add more.
 
 | Layer | Where it sits | Additional diagram |
 |---|---|---|
@@ -93,7 +93,7 @@ Each layer page has a **Where it sits** diagram: its port, what calls it and wha
 | `registry` (L1) | [registry.md](layers/registry.md#where-it-sits) | |
 | `routing` (L2) | [routing.md](layers/routing.md#where-it-sits) | [Decision flow](layers/routing.md#decision-flow): candidates, the router's answer checked, no member to fallback or `rejected` |
 | `topology` (L3) | [topology.md](layers/topology.md#where-it-sits) | [Reference topology](layers/topology.md#reference-topology): the offline example with the node path of each hop |
-| `execution` (L4) | [execution.md](layers/execution.md#where-it-sits) | [Step and replay](layers/execution.md#step-and-replay): replay a stored result, resume a kept task handle, or invoke |
+| `execution` (L4) | [execution.md](layers/execution.md#where-it-sits) | [Step and replay](layers/execution.md#step-and-replay): replay a stored result, resume a kept task handle, or invoke; [Waiting and resume](layers/execution.md#waiting-and-resume): sequence of a run that ends `waiting`, the reply, and the call that continues |
 | `attribution` (L5) | [attribution.md](layers/attribution.md#where-it-sits) | [Rules at a glance](layers/attribution.md#rules-at-a-glance): which stop code points to which layer |
 
 ### Cross-cutting

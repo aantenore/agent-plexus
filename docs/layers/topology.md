@@ -49,12 +49,12 @@ default; `"original"`, the system's input) and `ext?`.
 | Kind | Meaning | `basic-topology` |
 |---|---|---|
 | `sequence` | Each step gets the previous step's output; stops at the first step that is not `completed` | implemented |
-| `route` | The router picks one candidate; none chosen runs `fallback` or stops with `rejected` (layer `routing`) | implemented |
+| `route` | The router picks one candidate; none chosen runs `fallback` or stops with `rejected` (layer `routing`); a routing failure runs `fallback` or ends `failed`, code `error` (layer `routing`) | implemented |
 | `loop` | `body` runs until `until` holds; bounded by `maxIterations`, else `limits.system.maxIterations`; never holding stops with `limit` | implemented |
 | `parallel` | Fan out and join (`all` or `first`), with an optional `merge` node; branches share the budget evenly | implemented |
-| `handoff` | After each answer the router picks the next member or ends | planned |
+| `handoff` | After each answer the member (`ext.handoff`) or the router picks the next member, or it ends; bounded by `maxHandoffs`, else `limits.system.maxHandoffs`; exceeding stops with `limit`. When the router chooses nobody, the handoff ends with the last member's result and no routing hop is written; when routing fails, it stops `failed`, code `error` (layer `routing`) | implemented |
 | `supervise` | A supervisor chooses whom to call, through the system | planned |
-| `graph` | Explicit state machine with conditional edges | planned |
+| `graph` | Explicit state machine: the first edge from a node that applies (`when` holds, or `completed` without `when`) is followed; a `waiting` result follows only an edge whose `when` names `status: "waiting"`, otherwise the graph ends `waiting`; a node visited more than `limits.system.maxIterations` times stops with `limit` | implemented |
 
 `check` refuses a topology that uses a kind the adapter does not run, an unknown member or router, a graph node that
 does not exist and a graph end that no edge reaches.
@@ -88,7 +88,7 @@ flowchart LR
   [execution](execution.md).
 - A topology adapter does not read the registry or the host. It receives everything through the scope.
 - Node paths identify where a hop was made: `root`, `root.steps[i]`, `root.branches[i]`, `root.merge`, `root.fallback`,
-  `root.body#<iteration>`.
+  `root.body#<iteration>`, `root.turns[i]` (handoff), `root.nodes.<id>` (graph; `#<visit>` from the second visit).
 - Usage and `costUsd` of every call under a node are summed into its result.
 - With `join: "first"` the other branches are aborted and their hops marked `abandoned`; attribution skips them.
 
@@ -134,8 +134,8 @@ ADK-TS and Strands TS are candidates when a team already runs that engine.
 
 | Adapter | Maps | Status |
 |---|---|---|
-| [`basic-topology`](../../adapters/basic-topology) | An in-process executor: `sequence`, `route`, `loop`, `parallel` (prototype, production) | implemented |
-| `basic-topology`: `handoff`, `supervise`, `graph` | The same executor | planned |
+| [`basic-topology`](../../adapters/basic-topology) | An in-process executor: `sequence`, `route`, `loop`, `parallel`, `handoff`, `graph` (prototype, production) | implemented |
+| `basic-topology`: `supervise` | The same executor | planned |
 
 Full list: [adapters.md](../adapters.md).
 

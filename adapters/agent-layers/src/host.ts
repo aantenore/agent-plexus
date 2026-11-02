@@ -1,15 +1,21 @@
 import { createHash } from 'node:crypto';
 import { stableStringify, runGuards } from '@agent-layers/core';
 import type { AccessQuestion, ApprovalPort, ComposeOptions, Risk, Stack } from '@agent-layers/core';
-import { defineAdapter } from '@agent-plexus/core';
-import type { AgentEntry, GateCheck, GateDecision, GateHook, GateQuestion, GateVerdict, Host, ScoreHook, TelemetryHook } from '@agent-plexus/core';
-import { evalRunOf, guardStageOf, layersCaller, layersEvalCase, plexusScore, questionCaller } from './map.ts';
+import { defineAdapter, RESUME_OWNER_ONLY, sameIdentity } from '@agent-plexus/core';
+import type {
+  AgentEntry, GateCheck, GateDecision, GateHook, GateQuestion, GateVerdict, Host, ResumeQuestion, ScoreHook, TelemetryHook,
+} from '@agent-plexus/core';
+import { evalRunOf, guardStageOf, layersCaller, layersEvalCase, NAMESPACE, plexusScore, questionCaller } from './map.ts';
 import { openStack, type StackOptions } from './stack.ts';
 
 /** Agent name used in guard checks and access questions when a host is built in code without one. */
 export const DEFAULT_AGENT = 'agent-plexus';
 const DEFAULT_RISK: Risk = 'exec';
 const HARNESS = 'harness';
+/** Action of the access question for continuing a waiting run; `call` is the one for calling a member. */
+export const RESUME_ACTION = 'resume';
+/** `ext` key of a resume question that carries the identity of the caller that started the run. */
+export const OWNER_KEY = `${NAMESPACE}.owner`;
 
 export interface HostOptions extends StackOptions {
   /** Agent name used in guard checks and access questions; the system name when absent. */
@@ -69,20 +75,40 @@ function gateOf(stack: Stack, options: StackHostOptions): GateHook {
     },
   });
 
+  /**
+   * The access question of a resume: the call's question with action `resume`, about the member the run waits on (or
+   * the run itself when it waits on none), and the owner's identity under `ext`.
+   */
+  const resumeQuestion = ({ caller, member, owner, runId }: ResumeQuestion): AccessQuestion => ({
+    ...(member ? question(member, caller) : {
+      caller: questionCaller(caller),
+      target: { kind: 'run', id: runId, layer: HARNESS, risk: DEFAULT_RISK, agent },
+    }),
+    action: RESUME_ACTION,
+    ...(owner ? { ext: { [OWNER_KEY]: { id: owner.id, kind: owner.kind } } } : {}),
+  });
+
+  /** Undefined when authorization allows the question; otherwise the deny. */
+  const authorize = async (asked: AccessQuestion): Promise<GateDecision | undefined> => {
+    const { authorization } = stack.ports;
+    if (!authorization) return production ? deny('no authorization adapter on a production tier') : undefined;
+    try {
+      const decision = await authorization.evaluate(asked);
+      return decision.allowed === true ? undefined : deny(decision.reason ?? 'denied');
+    } catch (err) {
+      return deny(`authorization unavailable: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   return {
-    async allow({ caller, member, runId }) {
+    async allow(q) {
+      // A run is continued only by its owner, whatever the policy; the policy may still refuse the owner.
+      if (q.action === 'resume') return sameIdentity(q.caller, q.owner) ? (await authorize(resumeQuestion(q))) ?? allow() : deny(RESUME_OWNER_ONLY);
+      const { caller, member, runId } = q;
       const asked = question(member, caller);
-      const { authorization, approval } = stack.ports;
-      if (authorization) {
-        try {
-          const decision = await authorization.evaluate(asked);
-          if (decision.allowed !== true) return deny(decision.reason ?? 'denied');
-        } catch (err) {
-          return deny(`authorization unavailable: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      } else if (production) {
-        return deny('no authorization adapter on a production tier');
-      }
+      const denied = await authorize(asked);
+      if (denied) return denied;
+      const { approval } = stack.ports;
       if (!approvals.has(member.id)) return allow();
       if (!approval) return deny('approval required but no approval adapter is configured');
       try {

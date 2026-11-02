@@ -22,13 +22,15 @@ another adapter of the same four hooks.
 
 ## gate
 
-Authorization, credentials and content checks for every member call.
+Authorization, credentials and content checks for every member call, and authorization of a resume.
 
 ### Operations
 
 - `allow(question: GateQuestion) → GateDecision`
-  May this caller invoke this member? `GateQuestion` is `{runId, sessionId?, caller?, action: "invoke", member: AgentEntry}`;
-  `GateDecision` is `{effect: "allow" | "deny" | "ask", reason?}`.
+  May this caller invoke this member, or continue this run? `GateQuestion` is one of
+  `{runId, sessionId?, caller?, action: "invoke", member: AgentEntry, answer?: GateAnswer}` and
+  `{runId, sessionId?, caller?, action: "resume", owner?: CallerIdentity, member?: AgentEntry, answer?: GateAnswer}`;
+  `GateAnswer` is `{approved, reason?, by?}`; `GateDecision` is `{effect: "allow" | "deny" | "ask", reason?}`.
 - `token(caller: Caller?, audience: String) → String?`
   A credential for the member's audience, on behalf of the caller. Absent when none is needed.
 - `check(check: GateCheck) → GateVerdict`
@@ -40,6 +42,20 @@ Authorization, credentials and content checks for every member call.
 - Called for every member call, in the order of the [pipeline](../docs/architecture.md#the-membercall-pipeline):
   `allow`, `check` on `send`, `token`, then after the call `check` on `receive` (completed results only).
 - `ask` ends the call as `waiting` with code `needs_input`; any effect other than `allow` or `ask` is a deny.
+- `System.resume(runId, {approved, reason?})` answers an `ask`: the call is made again and `allow` gets the same
+  question plus `answer`, with `caller` set to who resumes and `answer.by` to that caller's id. The host decides again
+  (allow, deny or ask); the core never takes an approval as a permission by itself. A host whose approvals live
+  elsewhere (the `agent-layers` host reads its ApprovalPort) may ignore `answer`.
+- Action `resume` is asked before a resume delivers anything: by `System.resume`, and by `run` with the id of a run the
+  journal knows when its caller is not the run's owner. `caller` is who resumes, `owner` the identity of the caller
+  that started the run (`{id, kind, name?, actors?}`, absent when it started without one), `member` the member the run
+  waits on (absent when it waits on none or cannot describe itself), and `answer` the approval the resume gives, if
+  any. `allow` lets the resume go on; `deny` stops it `stopped`, code `denied`, layer `host`; `ask` returns it
+  `waiting`, code `needs_input`, layer `host`. In both cases the run stays as it was. A `run` or `resume` of a run
+  that another invocation holds is refused before the gate is asked (see [ExecutionPort](ports/ExecutionPort.md#hold)),
+  as is a resume whose `wait` token names another wait. The prototype host allows a
+  resume only when the resumer is the owner (same `id`, `kind` and `actors`; two absent callers are the same) and
+  denies anyone else with "only the caller that started the run may resume it".
 - `redact` replaces the text that goes on. A verdict that is not one of the three actions, or a `redact` without
   `text`, is a block.
 - `token` is called only for a member with an `audience`. A failure is `needs_auth`. A production-tier host that

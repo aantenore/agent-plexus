@@ -67,6 +67,12 @@ export interface FakeExecution extends ExecutionPort {
   kept: Map<string, Map<string, unknown>>;
   /** Durable mode: stored step results survive `begin`; `crash` makes the next steps die after running, storing nothing. */
   crash: boolean;
+  /** Signals per run key, as JSON; a wait reads the one of its name, or nothing. */
+  signals: Map<string, Map<string, string>>;
+  /** Status per run key: undefined until `end` sets it; `begin` keeps the last one, as durable adapters do. */
+  statuses: Map<string, string | undefined>;
+  /** Run keys let go of with `release`, in order. */
+  released: string[];
 }
 
 export function memoryExecution(log: string[] = [], durable = false): FakeExecution {
@@ -74,13 +80,25 @@ export function memoryExecution(log: string[] = [], durable = false): FakeExecut
   const steps: string[] = [];
   const kept = new Map<string, Map<string, unknown>>();
   const done = new Map<string, Map<string, string>>();
+  const signals = new Map<string, Map<string, string>>();
+  const statuses = new Map<string, string | undefined>();
+  const released: string[] = [];
+  const signalsOf = (runKey: string) => {
+    const own = signals.get(runKey) ?? new Map<string, string>();
+    signals.set(runKey, own);
+    return own;
+  };
   const port: FakeExecution = {
     name: 'memory',
     texts,
     steps,
     kept,
     crash: false,
+    signals,
+    statuses,
+    released,
     async begin(runKey): Promise<Execution> {
+      if (!statuses.has(runKey)) statuses.set(runKey, undefined);
       const values = kept.get(runKey) ?? new Map<string, unknown>();
       kept.set(runKey, values);
       const stored = done.get(runKey) ?? new Map<string, string>();
@@ -97,14 +115,20 @@ export function memoryExecution(log: string[] = [], durable = false): FakeExecut
           if (durable) stored.set(name, JSON.stringify(value));
           return value;
         },
-        async wait() { return undefined; },
+        async wait(name) { const had = signalsOf(runKey).get(name); return had === undefined ? undefined : JSON.parse(had); },
         async put(text) { const key = `t${texts.size}`; texts.set(key, text); return key; },
         async remember(key, value) { values.set(key, JSON.parse(JSON.stringify(value))); },
         async recall(key) { return values.get(key); },
-        async end() {},
+        async end(status) { statuses.set(runKey, status); },
+        async release() { released.push(runKey); },
       };
     },
-    async signal() {},
+    async signal(runKey, name, value) {
+      const own = signalsOf(runKey);
+      if (own.has(name)) return false;
+      own.set(name, JSON.stringify(value));
+      return true;
+    },
     async read(key) { return texts.get(key); },
   };
   return port;

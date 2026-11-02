@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type {
-  CallOptions, Condition, MemberResult, RouteDecision, RouteRequest, RunInput, RunScope, TopologyLimits, TopologySpec,
+import {
+  assemble, defineAdapter, inputText, PORT_VERSIONS, prototypeHost, resolveConfig, type AdapterDescriptor, type CallOptions, type Condition,
+  type Execution, type MemberResult, type RouteDecision, type RouteRequest, type RunInput, type RunScope, type TopologyLimits, type TopologySpec,
 } from '@agent-plexus/core';
 import { adapter, createBasicTopology } from '../src/index.ts';
 
@@ -53,7 +54,7 @@ test('descriptor fills TopologyPort with the supported kinds', () => {
   assert.equal(adapter.name, 'basic-topology');
   assert.deepEqual(adapter.tiers, ['prototype', 'production']);
   assert.deepEqual(adapter.maps, { technology: 'in-process topology executor' });
-  assert.deepEqual([...createBasicTopology().kinds], ['sequence', 'route', 'loop', 'parallel']);
+  assert.deepEqual([...createBasicTopology().kinds], ['sequence', 'route', 'loop', 'parallel', 'handoff', 'graph']);
 });
 
 test('sequence chains outputs and reports step paths', async () => {
@@ -205,6 +206,21 @@ test('parallel join all returns the first non-completed branch by order', async 
   assert.equal(calls.some((c) => c.member === 'm'), false);
 });
 
+test('a waiting result keeps the wait the core named on it through sequence, parallel, loop and graph', async () => {
+  const waiting = (member: string): MemberResult => ({ status: 'waiting', output: '', reason: { code: 'needs_input' }, wait: { token: `call:${member}:0#0`, kind: 'input', member } });
+  const { scope } = fakeScope(async (member) => {
+    if (member === 'w1') await tick();
+    return member.startsWith('w') ? waiting(member) : ok(member);
+  });
+  const specs: TopologySpec[] = [
+    { kind: 'sequence', steps: ['a', 'w1', 'b'] },
+    { kind: 'parallel', branches: ['a', 'w1', 'w2'] },
+    { kind: 'loop', body: 'w1', until: { status: 'completed' } },
+    { kind: 'graph', start: 'w2', nodes: { w2: 'w2', w1: 'w1' }, edges: [{ from: 'w2', to: 'w1', when: { status: 'waiting' } }], end: ['w1'] },
+  ];
+  for (const spec of specs) assert.deepEqual((await run(spec, scope)).wait, { token: 'call:w1:0#0', kind: 'input', member: 'w1' }, spec.kind);
+});
+
 test('parallel join first returns the first completed, aborts and abandons the rest', async () => {
   const { scope, abandoned, calls } = fakeScope((member, _input, options) => {
     if (member === 'fast') return ok('fast');
@@ -258,12 +274,10 @@ test('parallel join first falls back to the first non-completed when none comple
 test('unsupported kinds are rejected at bind, naming the kind', () => {
   const topology = createBasicTopology();
   const info = { system: 'test', members: [] };
-  assert.throws(() => topology.bind({ kind: 'handoff', start: 'a', members: ['a'] }, info), /handoff/);
   assert.throws(() => topology.bind({ kind: 'supervise', supervisor: 's', members: ['a'] }, info), /supervise/);
-  assert.throws(() => topology.bind({ kind: 'graph', nodes: {}, start: 'a', edges: [], end: [] }, info), /graph/);
   assert.throws(
-    () => topology.bind({ kind: 'sequence', steps: ['a', { kind: 'handoff', start: 'a', members: ['a'] }] }, info),
-    /root\.steps\[1\].*handoff/,
+    () => topology.bind({ kind: 'sequence', steps: ['a', { kind: 'supervise', supervisor: 's', members: ['a'] }] }, info),
+    /root\.steps\[1\].*supervise/,
   );
 });
 
@@ -272,6 +286,17 @@ test('malformed specs are rejected at bind', () => {
   const info = { system: 'test', members: [] };
   assert.throws(() => topology.bind({ kind: 'sequence', steps: [] }, info), /steps/);
   assert.throws(() => topology.bind({ kind: 'loop', body: 'a', until: {}, maxIterations: 0 }, info), /maxIterations/);
+  assert.throws(() => topology.bind({ kind: 'handoff', start: '', members: ['a'] }, info), /start/);
+  assert.throws(() => topology.bind({ kind: 'handoff', start: 'a', members: [] }, info), /members/);
+  assert.throws(() => topology.bind({ kind: 'handoff', start: 'a', members: ['a'], maxHandoffs: 0 }, info), /maxHandoffs/);
+  assert.throws(() => topology.bind({ kind: 'graph', nodes: {}, start: 'a', edges: [], end: [] }, info), /nodes/);
+  assert.throws(() => topology.bind({ kind: 'graph', nodes: { a: 'a' }, start: 'b', edges: [], end: ['a'] }, info), /"start" names unknown node "b"/);
+  assert.throws(() => topology.bind({ kind: 'graph', nodes: { a: 'a' }, start: 'a', edges: [{ from: 'a', to: 'z' }], end: ['a'] }, info), /edges\[0\]\.to names unknown node "z"/);
+  assert.throws(() => topology.bind({ kind: 'graph', nodes: { a: 'a' }, start: 'a', edges: [], end: ['q'] }, info), /end\[0\]/);
+  assert.throws(
+    () => topology.bind({ kind: 'graph', nodes: { a: { kind: 'sequence', steps: [] } }, start: 'a', edges: [], end: ['a'] }, info),
+    /root\.nodes\.a.*steps/,
+  );
 });
 
 test('an aborted run stops with aborted and calls nothing', async () => {
@@ -293,4 +318,369 @@ test('aborting between steps stops the sequence', async () => {
   const result = await run({ kind: 'sequence', steps: ['a', 'b'] }, scope);
   assert.equal(result.reason?.code, 'aborted');
   assert.equal(calls.length, 1);
+});
+
+const handoffTo = (member: string): Partial<MemberResult> => ({ ext: { handoff: member } });
+
+test('handoff follows the member that names the next one, passing the output on', async () => {
+  const { scope, calls, routes } = fakeScope((member) => (member === 'a' ? ok('from a', handoffTo('b')) : member === 'b' ? ok('from b', handoffTo('c')) : ok('final')));
+  const result = await run({ kind: 'handoff', start: 'a', members: ['a', 'b', 'c'] }, scope);
+  assert.equal(result.status, 'completed');
+  assert.equal(result.output, 'final');
+  assert.deepEqual(calls.map((c) => c.member), ['a', 'b', 'c']);
+  assert.deepEqual(calls.map((c) => c.input), ['in', 'from a', 'from b']);
+  assert.deepEqual(calls.map((c) => c.options.node), ['root.turns[0]', 'root.turns[1]', 'root.turns[2]']);
+  assert.deepEqual(routes, []);
+});
+
+test('handoff uses the router when the member names nobody, without the current member', async () => {
+  const ranked = [{ member: 'b', score: 1 }];
+  const { scope, calls, routes } = fakeScope(
+    (member, _input, _options, n) => ok(`${member}${n}`),
+    { route: (r) => (r.input === 'a1' ? { member: 'b', ranked } : {}) },
+  );
+  const result = await run({ kind: 'handoff', start: 'a', members: ['a', 'b', 'c'], router: 'skills' }, scope);
+  assert.equal(result.output, 'b2');
+  assert.deepEqual(routes, [
+    { input: 'a1', candidates: ['b', 'c'], router: 'skills', node: 'root.turns[1]', optional: true },
+    { input: 'b2', candidates: ['a', 'c'], router: 'skills', node: 'root.turns[2]', optional: true },
+  ]);
+  assert.deepEqual(calls.map((c) => c.member), ['a', 'b']);
+  assert.deepEqual(calls[1]?.options.route, { member: 'b', ranked });
+  assert.equal(calls[1]?.options.node, 'root.turns[1]');
+});
+
+test('a member that names the next one takes precedence over the router', async () => {
+  const { scope, calls, routes } = fakeScope((member) => (member === 'a' ? ok('x', handoffTo('c')) : ok('end')), { route: () => ({}) });
+  await run({ kind: 'handoff', start: 'a', members: ['a', 'b', 'c'], router: 'skills' }, scope);
+  assert.deepEqual(calls.map((c) => c.member), ['a', 'c']);
+  assert.deepEqual(routes.map((r) => r.node), ['root.turns[2]'], 'only the turn without a named successor is routed');
+});
+
+test('handoff finishes when nobody is named and there is no router or no pick', async () => {
+  const plain = fakeScope();
+  const first = await run({ kind: 'handoff', start: 'a', members: ['a', 'b'] }, plain.scope);
+  assert.equal(first.output, 'a(in)');
+  assert.equal(plain.calls.length, 1);
+
+  const routed = fakeScope(echo, { route: () => ({}) });
+  const second = await run({ kind: 'handoff', start: 'a', members: ['a', 'b'], router: 'skills' }, routed.scope);
+  assert.equal(second.output, 'a(in)');
+  assert.equal(routed.calls.length, 1);
+
+  const alone = fakeScope(echo, { route: () => ({ member: 'a' }) });
+  await run({ kind: 'handoff', start: 'a', members: ['a'], router: 'skills' }, alone.scope);
+  assert.deepEqual(alone.routes, [], 'no candidates left, so nobody is asked');
+});
+
+test('handoff to something that is not a member is rejected, naming it', async () => {
+  const { scope, calls } = fakeScope((member) => ok(member, handoffTo('ghost')), { route: () => ({ member: 'b' }) });
+  const result = await run({ kind: 'handoff', start: 'a', members: ['a', 'b'], router: 'skills' }, scope);
+  assert.equal(result.status, 'stopped');
+  assert.equal(result.reason?.code, 'rejected');
+  assert.equal(result.reason?.layer, 'topology');
+  assert.match(result.reason?.detail ?? '', /ghost/);
+  assert.equal(calls.length, 1);
+
+  const odd = fakeScope(() => ok('x', { ext: { handoff: 7 } }));
+  const bad = await run({ kind: 'handoff', start: 'a', members: ['a'] }, odd.scope);
+  assert.equal(bad.reason?.code, 'rejected');
+});
+
+test('handoff is bounded by the system limit, then by its own maxHandoffs', async () => {
+  const pingPong = (member: string): MemberResult => ok(`${member}!`, handoffTo(member === 'a' ? 'b' : 'a'));
+  const system = fakeScope(pingPong, { limits: { maxHandoffs: 2 } });
+  const stoppedBySystem = await run({ kind: 'handoff', start: 'a', members: ['a', 'b'] }, system.scope);
+  assert.equal(stoppedBySystem.status, 'stopped');
+  assert.deepEqual(stoppedBySystem.reason, { code: 'limit', layer: 'topology', by: 'limits.system.maxHandoffs' });
+  assert.equal(system.calls.length, 3, 'the first turn plus two handoffs');
+
+  const own = fakeScope(pingPong);
+  const stoppedByNode = await run({ kind: 'sequence', steps: [{ kind: 'handoff', start: 'a', members: ['a', 'b'], maxHandoffs: 1 }] }, own.scope);
+  assert.deepEqual(stoppedByNode.reason, { code: 'limit', layer: 'topology', by: 'root.steps[0].maxHandoffs' });
+  assert.equal(own.calls.length, 2);
+});
+
+test('a turn that is not completed ends the handoff with its result', async () => {
+  const { scope, calls } = fakeScope((member) => (member === 'b' ? failed('broke') : ok(member, handoffTo('b'))));
+  const result = await run({ kind: 'handoff', start: 'a', members: ['a', 'b', 'c'] }, scope);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.output, 'broke');
+  assert.equal(calls.length, 2);
+});
+
+test('handoff sums usage and honours input "original"', async () => {
+  const { scope, calls } = fakeScope(
+    (member) => ok(member, { usage: { inputTokens: 1, outputTokens: 1 }, costUsd: 1, ...(member === 'a' ? handoffTo('b') : {}) }),
+    { input: 'ORIG' },
+  );
+  const result = await run({ kind: 'sequence', steps: ['pre', { kind: 'handoff', input: 'original', start: 'a', members: ['a', 'b'] }] }, scope);
+  assert.equal(calls[1]?.input, 'ORIG');
+  assert.deepEqual(result.usage, { inputTokens: 3, outputTokens: 3 });
+  assert.equal(result.costUsd, 3);
+});
+
+test('graph runs nodes along unconditional edges and finishes at an end node', async () => {
+  const { scope, calls } = fakeScope();
+  const result = await run({
+    kind: 'graph',
+    start: 'one',
+    nodes: { one: 'a', two: { kind: 'sequence', steps: ['b', 'c'] }, three: 'd' },
+    edges: [{ from: 'one', to: 'two' }, { from: 'two', to: 'three' }],
+    end: ['three'],
+  }, scope);
+  assert.equal(result.status, 'completed');
+  assert.equal(result.output, 'd(c(b(a(in))))');
+  assert.deepEqual(calls.map((c) => c.options.node), ['root.nodes.one', 'root.nodes.two.steps[0]', 'root.nodes.two.steps[1]', 'root.nodes.three']);
+});
+
+test('graph takes the first edge whose condition holds on the output', async () => {
+  const spec = (): TopologySpec => ({
+    kind: 'graph',
+    start: 'triage',
+    nodes: { triage: 'triage', billing: 'billing', manuals: 'manuals', other: 'other' },
+    edges: [
+      { from: 'triage', to: 'billing', when: { matches: 'invoice' } },
+      { from: 'triage', to: 'manuals', when: { matches: 'manual' } },
+      { from: 'triage', to: 'other' },
+    ],
+    end: ['billing', 'manuals', 'other'],
+  });
+  for (const [text, expected] of [['invoice and manual', 'billing'], ['a manual', 'manuals'], ['nothing', 'other']] as const) {
+    const { scope, calls } = fakeScope((member) => ok(member === 'triage' ? text : member));
+    const result = await run(spec(), scope);
+    assert.equal(result.output, expected);
+    assert.deepEqual(calls.map((c) => c.member), ['triage', expected]);
+    assert.equal(calls[1]?.input, text);
+  }
+});
+
+test('graph follows a failure edge to a recovery node, and unconditional edges ignore failures', async () => {
+  const spec: TopologySpec = {
+    kind: 'graph',
+    start: 'work',
+    nodes: { work: 'work', recover: 'recover', done: 'done' },
+    edges: [
+      { from: 'work', to: 'recover', when: { status: 'failed', code: 'error' } },
+      { from: 'work', to: 'done' },
+      { from: 'recover', to: 'done' },
+    ],
+    end: ['done'],
+  };
+  const failing = fakeScope((member) => (member === 'work' ? failed('boom') : ok(member)));
+  const recovered = await run(spec, failing.scope);
+  assert.equal(recovered.status, 'completed');
+  assert.deepEqual(failing.calls.map((c) => c.member), ['work', 'recover', 'done']);
+  assert.equal(failing.calls[1]?.input, 'boom');
+
+  const noRecovery = { ...spec, edges: spec.edges.slice(1) } as TopologySpec;
+  const plain = fakeScope((member) => (member === 'work' ? failed('boom') : ok(member)));
+  const result = await run(noRecovery, plain.scope);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.output, 'boom');
+  assert.equal(plain.calls.length, 1);
+});
+
+test('graph without an applicable edge finishes at an end node and is rejected elsewhere', async () => {
+  const spec = (end: string[]): TopologySpec => ({
+    kind: 'graph',
+    start: 'a',
+    nodes: { a: 'a', b: 'b' },
+    edges: [{ from: 'a', to: 'b', when: { matches: 'go' } }],
+    end,
+  });
+  const atEnd = await run(spec(['a', 'b']), fakeScope().scope);
+  assert.equal(atEnd.status, 'completed');
+  assert.equal(atEnd.output, 'a(in)');
+
+  const stuck = fakeScope();
+  const rejected = await run(spec(['b']), stuck.scope);
+  assert.equal(rejected.status, 'stopped');
+  assert.equal(rejected.reason?.code, 'rejected');
+  assert.equal(rejected.reason?.layer, 'topology');
+  assert.match(rejected.reason?.detail ?? '', /graph node a has no edge for this result/);
+  assert.equal(stuck.calls.length, 1);
+});
+
+test('graph returns a node result that is not completed, even at an end node', async () => {
+  const { scope } = fakeScope(() => failed('bad'));
+  const result = await run({ kind: 'graph', start: 'a', nodes: { a: 'a' }, edges: [], end: ['a'] }, scope);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.output, 'bad');
+});
+
+test('graph cycles are bounded by maxIterations visits per node', async () => {
+  const spec: TopologySpec = {
+    kind: 'graph',
+    start: 'a',
+    nodes: { a: 'a', b: 'b' },
+    edges: [{ from: 'a', to: 'b' }, { from: 'b', to: 'a' }],
+    end: ['b'],
+  };
+  const { scope, calls } = fakeScope(echo, { limits: { maxIterations: 3 } });
+  const result = await run(spec, scope);
+  assert.equal(result.status, 'stopped');
+  assert.deepEqual(result.reason, { code: 'limit', layer: 'topology', by: 'limits.system.maxIterations' });
+  assert.deepEqual(calls.map((c) => c.member), ['a', 'b', 'a', 'b', 'a', 'b']);
+});
+
+test('graph calls a node again when it is revisited, with its own path', async () => {
+  const spec: TopologySpec = {
+    kind: 'graph',
+    start: 'work',
+    nodes: { work: 'work', check: 'check', done: 'done' },
+    edges: [
+      { from: 'work', to: 'check' },
+      { from: 'check', to: 'work', when: { matches: 'retry' } },
+      { from: 'check', to: 'done' },
+    ],
+    end: ['done'],
+  };
+  let checks = 0;
+  const { scope, calls } = fakeScope((member) => (member === 'check' ? ok(++checks < 2 ? 'retry' : 'fine') : ok(member)));
+  const result = await run(spec, scope);
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(calls.map((c) => c.member), ['work', 'check', 'work', 'check', 'done']);
+  assert.deepEqual(calls.map((c) => c.options.node), ['root.nodes.work', 'root.nodes.check', 'root.nodes.work#2', 'root.nodes.check#2', 'root.nodes.done']);
+  assert.equal(new Set(calls.map((c) => c.options.node)).size, calls.length);
+});
+
+test('graph nodes honour input "original" and the graph sums usage', async () => {
+  const { scope, calls } = fakeScope((member) => ok(member, { usage: { inputTokens: 2, outputTokens: 1 }, costUsd: 0.25 }), { input: 'ORIG' });
+  const result = await run({
+    kind: 'graph',
+    start: 'a',
+    nodes: { a: 'a', b: { kind: 'sequence', input: 'original', steps: ['b'] } },
+    edges: [{ from: 'a', to: 'b' }],
+    end: ['b'],
+  }, scope);
+  assert.equal(calls[0]?.input, 'in');
+  assert.equal(calls[1]?.input, 'ORIG');
+  assert.deepEqual(result.usage, { inputTokens: 4, outputTokens: 2 });
+  assert.equal(result.costUsd, 0.5);
+});
+
+test('handoff and graph stop at once when the run is aborted', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const { scope, calls } = fakeScope(echo, { signal: controller.signal });
+  const handed = await run({ kind: 'handoff', start: 'a', members: ['a'] }, scope);
+  assert.equal(handed.reason?.code, 'aborted');
+  const walked = await run({ kind: 'graph', start: 'a', nodes: { a: 'a' }, edges: [], end: ['a'] }, scope);
+  assert.equal(walked.reason?.code, 'aborted');
+  assert.equal(calls.length, 0);
+});
+
+/** A system over basic-topology with in-process members, a registry of them, a router and a journal that keeps nothing. */
+async function assembled(topology: TopologySpec, router: (candidates: string[]) => RouteDecision) {
+  const tiers = ['prototype'] as const;
+  const maps = { technology: 'test' };
+  const member = defineAdapter<'MemberPort', { fail?: boolean }>({
+    fills: 'MemberPort', name: 'test-member', maps, tiers: [...tiers], portVersion: PORT_VERSIONS.MemberPort,
+    create: (o, ctx) => ({
+      name: ctx.name,
+      describe: async () => ({ id: ctx.name, name: ctx.name, description: ctx.name, skills: [], endpoint: { protocol: 'function' }, trust: { signed: false, pinned: false } }),
+      invoke: async (input) => (o.fail ? failed(`${ctx.name} broke`) : ok(`${ctx.name}(${inputText(input)})`)),
+    }),
+  });
+  const registry = defineAdapter({
+    fills: 'RegistryPort', name: 'test-registry', maps, tiers: [...tiers], portVersion: PORT_VERSIONS.RegistryPort,
+    create: (_o, ctx) => ({ name: 'test-registry', list: async () => ctx.members!(), get: async (id: string) => (await ctx.members!()).find((e) => e.id === id) }),
+  });
+  const routerAdapter = defineAdapter({
+    fills: 'AgentRouterPort', name: 'test-router', maps, tiers: [...tiers], portVersion: PORT_VERSIONS.AgentRouterPort,
+    create: () => ({ name: 'test-router', route: async (q) => router(q.candidates.map((c) => c.id)) }),
+  });
+  const execution = defineAdapter({
+    fills: 'ExecutionPort', name: 'test-execution', maps, tiers: [...tiers], portVersion: PORT_VERSIONS.ExecutionPort,
+    create: () => ({
+      name: 'test-execution',
+      begin: async (runKey): Promise<Execution> => ({
+        runKey, step: (_name, fn) => fn(), wait: async () => undefined, put: async () => 'text', remember: async () => {}, recall: async () => undefined, end: async () => {},
+      }),
+      signal: async () => false,
+    }),
+  });
+  const attribution = defineAdapter({
+    fills: 'AttributionPort', name: 'test-attribution', maps, tiers: [...tiers], portVersion: PORT_VERSIONS.AttributionPort,
+    create: () => ({ name: 'test-attribution', attribute: async () => [] }),
+  });
+  const all = [member, registry, routerAdapter, execution, attribution, adapter] as unknown as AdapterDescriptor[];
+  const config = resolveConfig({
+    system: { name: 'handoffs' },
+    members: { a: { adapter: 'test-member' }, b: { adapter: 'test-member' }, c: { adapter: 'test-member', options: { fail: true } } },
+    ports: {
+      registry: { adapter: 'test-registry' }, router: { adapter: 'test-router' }, topology: { adapter: 'basic-topology' },
+      execution: { adapter: 'test-execution' }, attribution: { adapter: 'test-attribution' },
+    },
+    topology,
+  }, { cwd: process.cwd() });
+  return assemble(config, {
+    host: prototypeHost({ quiet: true }),
+    resolveAdapter: async (fills, name) => {
+      const found = all.find((d) => d.fills === fills && d.name === name);
+      if (!found) throw new Error('is not installed');
+      return found;
+    },
+  });
+}
+
+test('a handoff whose router chooses nobody ends without a routing hop, so a later failure is not routing', async () => {
+  const handoff: TopologySpec = { kind: 'handoff', start: 'a', members: ['a', 'b'], router: 'router' };
+  const asked: string[][] = [];
+  const ended = await (await assembled(handoff, (candidates) => (asked.push(candidates), {}))).run('in');
+  assert.deepEqual(asked, [['b']]);
+  assert.equal(ended.status, 'completed');
+  assert.deepEqual(ended.record.map((h) => [h.member, h.status]), [['a', 'completed']]);
+
+  const later = await (await assembled({ kind: 'sequence', steps: [handoff, 'c'] }, () => ({}))).run('in');
+  assert.equal(later.status, 'failed');
+  assert.deepEqual(later.record.map((h) => [h.member, h.status]), [['a', 'completed'], ['c', 'failed']]);
+  assert.equal(later.record.find((h) => h.status !== 'completed')?.member, 'c', 'the earliest hop that did not complete is the failing member');
+  assert.ok(!later.record.some((h) => h.reason?.layer === 'routing'));
+});
+
+test('a route whose router failed runs the fallback, else fails in the routing layer', async () => {
+  const broken = (): RouteDecision => ({ reason: 'router down', failed: true });
+  const withFallback = fakeScope(echo, { route: broken });
+  assert.equal((await run({ kind: 'route', candidates: ['a'], fallback: 'triage' }, withFallback.scope)).output, 'triage(in)');
+  const none = fakeScope(echo, { route: broken });
+  const result = await run({ kind: 'route', candidates: ['a'] }, none.scope);
+  assert.deepEqual(result, { status: 'failed', output: '', reason: { code: 'error', layer: 'routing', detail: 'router down' } });
+  assert.equal(none.calls.length, 0);
+});
+
+test('a handoff whose router failed stops failed in the routing layer, with the usage of its turns', async () => {
+  const { scope, calls, routes } = fakeScope((m, input) => ok(`${m}(${typeof input === 'string' ? input : input.text})`, { usage: { inputTokens: 3, outputTokens: 1 } }), {
+    route: () => ({ reason: 'registry unavailable', failed: true }),
+  });
+  const result = await run({ kind: 'handoff', start: 'a', members: ['a', 'b'], router: 'router' }, scope);
+  assert.deepEqual(result, { status: 'failed', output: '', reason: { code: 'error', layer: 'routing', detail: 'registry unavailable' }, usage: { inputTokens: 3, outputTokens: 1 } });
+  assert.deepEqual(calls.map((c) => c.member), ['a']);
+  assert.equal(routes[0]?.optional, true);
+});
+
+test('a handoff whose router throws writes a failed routing hop and the run fails in routing', async () => {
+  const handoff: TopologySpec = { kind: 'handoff', start: 'a', members: ['a', 'b'], router: 'router' };
+  const res = await (await assembled(handoff, () => { throw new Error('router down'); })).run('in');
+  assert.deepEqual([res.status, res.reason?.code, res.reason?.layer], ['failed', 'error', 'routing']);
+  assert.deepEqual(res.record.map((h) => [h.member, h.status, h.reason?.code, h.reason?.layer]), [['a', 'completed', undefined, undefined], ['', 'failed', 'error', 'routing']]);
+});
+
+test('graph: a waiting result follows only an edge whose condition names waiting; otherwise the graph waits', async () => {
+  const waits = (m: string): MemberResult => (m === 'a' ? { status: 'waiting', output: '', reason: { code: 'needs_input', layer: 'member' } } : ok(m));
+  const matchesAll: Condition = { matches: '' };
+  const unnamed = fakeScope(waits);
+  unnamed.scope.matches = () => true;
+  const held = await run({ kind: 'graph', start: 'a', nodes: { a: 'a', b: 'b' }, edges: [{ from: 'a', to: 'b', when: matchesAll }], end: ['b'] }, unnamed.scope);
+  assert.equal(held.status, 'waiting');
+  assert.deepEqual(unnamed.calls.map((c) => c.member), ['a']);
+
+  for (const status of ['waiting', ['failed', 'waiting']] as const) {
+    const named = fakeScope(waits);
+    named.scope.matches = () => true;
+    const moved = await run({ kind: 'graph', start: 'a', nodes: { a: 'a', b: 'b' }, edges: [{ from: 'a', to: 'b', when: { status: status as Condition['status'] } }], end: ['b'] }, named.scope);
+    assert.equal(moved.status, 'completed');
+    assert.deepEqual(named.calls.map((c) => c.member), ['a', 'b']);
+  }
 });

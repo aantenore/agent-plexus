@@ -143,8 +143,8 @@ npm test -w @agent-plexus/core                       # tests of one package
 npm test -w @agent-plexus/adapter-skill-router       # tests of one adapter
 ```
 
-Contributions: [CONTRIBUTING.md](CONTRIBUTING.md). Core paths need a spec change first. Vulnerabilities: report them
-privately, see [SECURITY.md](SECURITY.md).
+Contributions: [CONTRIBUTING.md](CONTRIBUTING.md). Core paths need a spec change first. Releases:
+[RELEASING.md](RELEASING.md). Vulnerabilities: report them privately, see [SECURITY.md](SECURITY.md).
 
 ## Licenses of the reference technologies
 

@@ -3,3 +3,8 @@ dist/
 .DS_Store
 .env
 *.tsbuildinfo
+
+# package build output (LICENSE is copied in by prepack)
+packages/*/LICENSE
+adapters/*/LICENSE
+*.tgz

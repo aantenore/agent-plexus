@@ -42,6 +42,18 @@ with a spec change:
 Documentation follows the same rule: a changed layer, port, hook, limit or CLI option must be reflected in `docs/` and
 `spec/`. The core depends on nothing; keep it that way.
 
+## Build and release
+
+`npm run build` builds every package in dependency order (`scripts/build-packages.mjs`; `--clean` removes `dist/`
+first). Packages ship `dist/` (JavaScript and type declarations), `README.md` and `LICENSE`; the `@agent-plexus/source`
+export condition points at `src/` for development inside the repository only.
+
+- `npm run release:dry`: clean build, then `npm pack --dry-run` of every package, to review the tarball contents.
+- `npm run release`: clean build, typecheck, package tests, then `node scripts/publish-unpublished.mjs`.
+
+The steps for the maintainer, including the npm organization and the GitHub Actions workflow, are in
+[RELEASING.md](RELEASING.md).
+
 ## Style
 
 TypeScript, ESM, Node >= 22.18, `node --test`, small files, short JSDoc. Zero runtime dependencies in the core

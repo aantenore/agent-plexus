@@ -2,14 +2,24 @@
   "name": "@agent-plexus/cli",
   "version": "0.1.0",
   "description": "agent-plexus command line: check, run, dev, eval",
-  "keywords": ["agent-plexus", "cli", "agents", "multi-agent"],
-  "repository": { "type": "git", "url": "git+https://github.com/aantenore/agent-plexus.git", "directory": "packages/cli" },
+  "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "cli"],
+  "homepage": "https://github.com/aantenore/agent-plexus/tree/main/packages/cli#readme",
+  "bugs": {
+    "url": "https://github.com/aantenore/agent-plexus/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aantenore/agent-plexus.git",
+    "directory": "packages/cli"
+  },
   "license": "MIT",
   "author": "Antonio Antenore",
   "type": "module",
-  "engines": { "node": ">=22.18" },
+  "engines": {
+    "node": ">=22.18"
+  },
   "bin": {
-    "agent-plexus": "src/cli.ts"
+    "agent-plexus": "dist/cli.js"
   },
   "exports": {
     ".": {
@@ -20,9 +30,14 @@
   },
   "files": ["dist"],
   "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\""
+    "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\"",
+    "prepack": "npm run build && node ../../scripts/copy-license.mjs"
   },
   "dependencies": {
     "@agent-plexus/core": "^0.1.0"

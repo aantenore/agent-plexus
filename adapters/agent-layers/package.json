@@ -2,12 +2,22 @@
   "name": "@agent-plexus/adapter-agent-layers",
   "version": "0.1.0",
   "description": "Builds an agent-plexus host from an agent-layers stack, offers a stack as a member and runs a system as a stack's runtime",
-  "keywords": ["agent-plexus", "agent-plexus-adapter", "agent-layers"],
-  "repository": { "type": "git", "url": "git+https://github.com/aantenore/agent-plexus.git", "directory": "adapters/agent-layers" },
+  "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-plexus-adapter", "agent-layers"],
+  "homepage": "https://github.com/aantenore/agent-plexus/tree/main/adapters/agent-layers#readme",
+  "bugs": {
+    "url": "https://github.com/aantenore/agent-plexus/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aantenore/agent-plexus.git",
+    "directory": "adapters/agent-layers"
+  },
   "license": "MIT",
   "author": "Antonio Antenore",
   "type": "module",
-  "engines": { "node": ">=22.18" },
+  "engines": {
+    "node": ">=22.18"
+  },
   "exports": {
     ".": {
       "@agent-plexus/source": "./src/index.ts",
@@ -22,10 +32,14 @@
   },
   "files": ["dist"],
   "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\""
+    "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\"",
+    "prepack": "npm run build && node ../../scripts/copy-license.mjs"
   },
   "dependencies": {
     "@agent-layers/core": "^0.2.0"

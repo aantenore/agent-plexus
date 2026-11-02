@@ -2,7 +2,7 @@
   "name": "@agent-plexus/adapter-basic-topology",
   "version": "0.1.0",
   "description": "Reference in-process topology adapter for agent-plexus",
-  "keywords": ["agent-plexus", "agent-plexus-adapter"],
+  "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-plexus-adapter", "topology"],
   "homepage": "https://github.com/aantenore/agent-plexus/tree/main/adapters/basic-topology#readme",
   "bugs": {
     "url": "https://github.com/aantenore/agent-plexus/issues"
@@ -33,7 +33,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\""
+    "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\"",
+    "prepack": "npm run build && node ../../scripts/copy-license.mjs"
   },
   "peerDependencies": {
     "@agent-plexus/core": "^0.1.0"

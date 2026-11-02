@@ -1,0 +1,31 @@
+# Manual pipeline: nothing runs on push or pull request. Trigger it from the Actions tab or with
+#   gh workflow run ci.yml
+name: ci
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check (node --check)
+        run: |
+          set -e
+          find . -path ./node_modules -prune -o -name '*.mjs' -print0 | xargs -0 -n1 node --check
+      - name: Install dependencies
+        run: npm ci
+      - name: Clean build (dependency order)
+        run: node scripts/build-packages.mjs --clean
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Package tests
+        run: npm run test:packages

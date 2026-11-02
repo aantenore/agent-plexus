@@ -7,13 +7,31 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   assemble, loadConfig, loadDescriptor, prototypeHost, resolveConfig,
-  type Attribution, type EvalCase, type Fills, type ResolvedConfig, type System, type SystemResult,
+  type Attribution, type EvalCase, type Fills, type Host, type MemberResult, type ResolvedConfig, type RouteDecision, type RunScope, type System,
+  type SystemResult, type TopologySpec,
 } from '@agent-plexus/core';
 import { adapters as fileExecution, createFileExecution } from '../adapters/file-execution.ts';
+import { createLinearTopology } from '../adapters/linear-topology.ts';
+import { answer as billingAnswer } from '../members/billing.ts';
+import { startFakeAgent, type FakeAgent } from './a2a-fake.ts';
 
 const here = (name: string): string => fileURLToPath(new URL(`../${name}`, import.meta.url));
 const CONFIG = here('plexus.json');
 const CASES = JSON.parse(readFileSync(here('cases.json'), 'utf8')) as EvalCase[];
+
+/** One cell of the swap matrix (cells.json): a profile, and what is run against it. */
+interface Cell {
+  id: string;
+  layer: string;
+  profile: string | null;
+  /** `cases`: the three cases; `wait`: a run that waits on the gate, then `System.resume`; `check-fails`: check refuses it. */
+  run: 'cases' | 'wait' | 'check-fails';
+  /** For `wait`: resume from a new system on the same journal, as after a restart. */
+  restart?: boolean;
+  cli: boolean;
+  description: string;
+}
+const CELLS = JSON.parse(readFileSync(here('cells.json'), 'utf8')) as Cell[];
 
 /** The base profile (undefined) and what each swap profile changes: the unit of the resolved config and the adapter now in it. */
 const SWAPS = {
@@ -24,15 +42,13 @@ const SWAPS = {
   'swap-attribution': { unit: 'ports.attribution', adapter: 'last-failure-attribution', fills: 'AttributionPort' },
 } as const satisfies Record<string, { unit: string; adapter: string; fills: Fills }>;
 
-const PROFILES: (string | undefined)[] = [undefined, ...Object.keys(SWAPS), 'swap-member', 'swap-member-agent-layers', 'swap-host', 'swap-all'];
-
 /**
  * The stop code of the billing hop in the crash case. The agent-layers billing agent stops on "crash" through a guard of its own stack;
  * triage only restated the caller's input, so the block is traced to the input and the billing hop is named, as in every profile.
+ * The A2A agent rejects the task.
  */
-const CRASH_CODE: Record<string, string> = { 'swap-member-agent-layers': 'guard_block' };
+const CRASH_CODE: Record<string, string> = { 'swap-member-agent-layers': 'guard_block', 'swap-member-a2a': 'rejected' };
 const BASE_CODE = 'error';
-const label = (profile: string | undefined): string => profile ?? 'base';
 
 const caseOf = (id: string): EvalCase => {
   const found = CASES.find((c) => c.id === id);
@@ -40,13 +56,36 @@ const caseOf = (id: string): EvalCase => {
   return found;
 };
 
-/** A system with the host of its config, else the quiet prototype host. */
-function assembleWith(config: ResolvedConfig): Promise<System> {
-  return assemble(config, config.host ? {} : { host: prototypeHost({ quiet: true }) });
+/** A system with the given host, else the host of its config, else the quiet prototype host. */
+function assembleWith(config: ResolvedConfig, env: Env = process.env, host?: Host): Promise<System> {
+  return assemble(config, { env, ...(host ? { host } : config.host ? {} : { host: prototypeHost({ quiet: true }) }) });
 }
 
-async function open(profile?: string): Promise<System> {
-  return assembleWith(await loadConfig(CONFIG, profile ? { profile } : {}));
+type Env = Record<string, string | undefined>;
+
+/**
+ * What a profile needs around it: a temp directory whose `journal.db` is SWAP_SQLITE_PATH, and for `swap-member-a2a` a
+ * fake A2A billing agent on loopback that answers as `members/billing.ts` does and rejects the crash, at SWAP_BILLING_A2A_URL.
+ */
+async function fixture(profile: string | undefined): Promise<{ env: Env; dir: string; agent?: FakeAgent; close(): Promise<void> }> {
+  const dir = await mkdtemp(join(tmpdir(), 'swap-test-'));
+  const env: Env = { ...process.env, SWAP_SQLITE_PATH: join(dir, 'journal.db') };
+  const agent = profile === 'swap-member-a2a'
+    ? await startFakeAgent((text) => {
+      const result = billingAnswer(text);
+      return typeof result === 'string' ? { completed: result } : { rejected: true };
+    }, { name: 'Billing agent', description: 'Answers invoice, refund and charge questions', tags: ['billing'] })
+    : undefined;
+  if (agent) env.SWAP_BILLING_A2A_URL = agent.cardUrl;
+  return {
+    env,
+    dir,
+    ...(agent ? { agent } : {}),
+    close: async () => {
+      await agent?.close();
+      await rm(dir, { recursive: true, force: true });
+    },
+  };
 }
 
 /** Runs one case the way `eval` does: run, score, and attribute when it did not pass. */
@@ -57,25 +96,31 @@ async function evaluate(s: System, evalCase: EvalCase): Promise<{ passed: boolea
   return { passed, result, attributions: passed ? [] : await s.attribute(result, scores) };
 }
 
-/** Runs `fn` on the system of a profile and closes it. */
+/** Runs `fn` on the system of a profile, with its fixture, and closes both. */
 async function withSystem<T>(profile: string | undefined, fn: (s: System) => Promise<T>): Promise<T> {
-  const s = await open(profile);
+  const around = await fixture(profile);
   try {
-    return await fn(s);
+    const s = await assembleWith(await loadConfig(CONFIG, profile ? { profile } : {}), around.env);
+    try {
+      return await fn(s);
+    } finally {
+      await s.close();
+    }
   } finally {
-    await s.close();
+    await around.close();
   }
 }
 
 const members = (result: SystemResult): string[] => result.record.map((h) => h.member);
 
-for (const profile of PROFILES) {
-  test(`${label(profile)}: check has no FAIL`, async () => {
+/** The three cases against the profile of a cell: the test names start with `cell <id>:`, which the swap matrix selects. */
+function casesCell(id: string, profile: string | undefined): void {
+  test(`cell ${id}: check has no FAIL`, async () => {
     const failures = await withSystem(profile, async (s) => (await s.check()).filter((f) => f.severity === 'fail'));
     assert.deepEqual(failures, []);
   });
 
-  test(`${label(profile)}: the billing and product cases complete and route like the base`, async () => {
+  test(`cell ${id}: the billing and product cases complete and route like the base`, async () => {
     await withSystem(profile, async (s) => {
       const billing = await evaluate(s, caseOf('billing-refund'));
       assert.equal(billing.passed, true);
@@ -86,7 +131,7 @@ for (const profile of PROFILES) {
     });
   });
 
-  test(`${label(profile)}: the crash case fails and attribution names member billing`, async () => {
+  test(`cell ${id}: the crash case fails and attribution names member billing`, async () => {
     const code = CRASH_CODE[profile ?? ''] ?? BASE_CODE;
     await withSystem(profile, async (s) => {
       const crash = await evaluate(s, caseOf('billing-crash'));
@@ -102,17 +147,132 @@ for (const profile of PROFILES) {
   });
 }
 
+/** A host whose gate asks before `billing` until the call is approved; a resume is the prototype host's. */
+function askingHost(): Host {
+  const host = prototypeHost({ quiet: true });
+  return {
+    ...host,
+    gate: {
+      ...host.gate,
+      allow: async (q) => {
+        if (q.action === 'resume') return host.gate.allow(q);
+        if (q.member.id !== 'billing') return { effect: 'allow' };
+        if (!q.answer) return { effect: 'ask', reason: 'approval pending' };
+        return q.answer.approved ? { effect: 'allow' } : { effect: 'deny', reason: 'refused' };
+      },
+    },
+  };
+}
+
+/**
+ * A run of the billing case waits on the gate before billing; `System.resume` approves it, from the same system or, with
+ * `restart`, from a new system on the same journal. The file journal of `swap-execution` is given a directory that
+ * outlives one system (its default is a temp directory removed on close).
+ */
+function waitCell(id: string, profile: string | undefined, restart: boolean): void {
+  test(`cell ${id}: a run that waits on the gate is resumed${restart ? ' by a new system on the same journal' : ''} and completes`, async () => {
+    const around = await fixture(profile);
+    const raw = JSON.parse(readFileSync(CONFIG, 'utf8')) as { profiles: Record<string, { ports?: { execution?: { options?: unknown } } }> };
+    const execution = profile ? raw.profiles[profile]?.ports?.execution : undefined;
+    if (execution && profile === 'swap-execution') execution.options = { dir: join(around.dir, 'journal') };
+    const config = resolveConfig(raw, { cwd: dirname(CONFIG), ...(profile ? { profile } : {}) });
+    const runId = `wait-${id}`;
+    let s = await assembleWith(config, around.env, askingHost());
+    try {
+      const started = await s.run(caseOf('billing-refund').input, { runId });
+      assert.deepEqual([started.status, started.reason?.code, started.reason?.layer], ['waiting', 'needs_input', 'host']);
+      assert.deepEqual(members(started).filter((m) => m === 'triage'), ['triage']);
+      if (restart) {
+        await s.close();
+        s = await assembleWith(config, around.env, askingHost());
+      }
+      const resumed = await s.resume(runId, { approved: true });
+      assert.equal(resumed.status, 'completed', JSON.stringify(resumed.reason));
+      assert.match(resumed.output, /refunds are issued/);
+      const triage = resumed.record.filter((h) => h.member === 'triage');
+      assert.equal(triage.length, 1, 'triage is called once');
+      assert.equal(triage[0]?.replayed, true, 'the completed triage step replays from the journal');
+      assert.equal(resumed.record.find((h) => h.member === 'billing')?.status, 'completed');
+    } finally {
+      await s.close();
+      await around.close();
+    }
+  });
+}
+
+/** A profile whose topology the adapter cannot run is refused by check. */
+function checkFailsCell(id: string, profile: string | undefined): void {
+  test(`cell ${id}: a topology kind the adapter cannot run fails check with a clear finding`, async () => {
+    const failures = await withSystem(profile, async (s) => (await s.check()).filter((f) => f.severity === 'fail'));
+    const kind = failures.find((f) => /kind "loop" is not supported by the topology adapter/.test(f.message));
+    assert.ok(kind, `a finding names the kind (got: ${failures.map((f) => f.message).join('; ')})`);
+    assert.equal(kind.path, '$.topology');
+    assert.equal(failures.length, 1, 'the bind failure the finding explains is not reported twice');
+  });
+}
+
+for (const cell of CELLS) {
+  const profile = cell.profile ?? undefined;
+  if (cell.run === 'cases') casesCell(cell.id, profile);
+  else if (cell.run === 'wait') waitCell(cell.id, profile, cell.restart === true);
+  else checkFailsCell(cell.id, profile);
+}
+
+test('cells.json: unique ids, known profiles, and every swap profile of plexus.json is in a cell', () => {
+  const profiles = Object.keys((JSON.parse(readFileSync(CONFIG, 'utf8')) as { profiles: object }).profiles);
+  assert.equal(new Set(CELLS.map((c) => c.id)).size, CELLS.length);
+  for (const cell of CELLS) if (cell.profile !== null) assert.ok(profiles.includes(cell.profile), `${cell.id}: profile ${cell.profile} exists`);
+  assert.deepEqual(profiles.filter((p) => !CELLS.some((c) => c.profile === p)), []);
+  const waits = CELLS.filter((c) => c.run === 'wait').map((c) => c.profile);
+  assert.deepEqual(waits, [null, 'swap-execution', 'swap-execution-sqlite'], 'wait and resume run on the memory, file and sqlite journals');
+});
+
 test('last-failure-attribution says layer member; the reference adapter does too', async () => {
   const layers = await Promise.all(['swap-attribution', undefined].map((p) => withSystem(p, async (s) => (await evaluate(s, caseOf('billing-crash'))).attributions[0]?.layer)));
   assert.deepEqual(layers, ['member', 'member']);
 });
 
-test('a topology kind the adapter cannot run fails check with a clear finding', async () => {
-  const failures = await withSystem('unsupported-kind', async (s) => (await s.check()).filter((f) => f.severity === 'fail'));
-  const kind = failures.find((f) => /kind "loop" is not supported by the topology adapter/.test(f.message));
-  assert.ok(kind, `a finding names the kind (got: ${failures.map((f) => f.message).join('; ')})`);
-  assert.equal(kind.path, '$.topology');
-  assert.equal(failures.length, 1, 'the bind failure the finding explains is not reported twice');
+/** A run scope whose members answer with `reply` and whose router answers `decision`; `calls` lists the members called. */
+function linearScope(reply: (member: string) => MemberResult, decision: RouteDecision): { scope: RunScope; calls: string[] } {
+  const calls: string[] = [];
+  const scope: RunScope = {
+    ctx: { runId: 'r1', system: 'test' },
+    input: 'in',
+    limits: { maxParallel: 1, maxIterations: 1, maxHandoffs: 1 },
+    call: async (member) => (calls.push(member), { hopId: `h${calls.length}`, result: reply(member) }),
+    route: async () => decision,
+    matches: () => false,
+    abandon: () => {},
+  };
+  return { scope, calls };
+}
+
+const runLinear = async (spec: TopologySpec, scope: RunScope): Promise<MemberResult> => (await createLinearTopology().bind(spec, { system: 'test', members: [] })).run('in', scope);
+
+test('linear-topology: a route whose router failed runs the fallback, else fails in the routing layer', async () => {
+  const broken: RouteDecision = { reason: 'router down', failed: true };
+  const route: TopologySpec = { kind: 'route', candidates: ['billing'] };
+  const none = linearScope((m) => ({ status: 'completed', output: m }), broken);
+  assert.deepEqual(await runLinear(route, none.scope), { status: 'failed', output: '', reason: { code: 'error', layer: 'routing', detail: 'router down' } });
+  assert.deepEqual(none.calls, []);
+
+  const withFallback = linearScope((m) => ({ status: 'completed', output: m }), broken);
+  assert.equal((await runLinear({ ...route, fallback: 'triage' }, withFallback.scope)).output, 'triage');
+
+  const nobody = linearScope((m) => ({ status: 'completed', output: m }), {});
+  assert.deepEqual((await runLinear(route, nobody.scope)).reason, { code: 'rejected', layer: 'routing' });
+});
+
+test('linear-topology: a sequence result carries the usage and cost of all its calls', async () => {
+  const usage = { inputTokens: 4, outputTokens: 1 };
+  const spent = linearScope((m) => ({ status: 'completed', output: m, usage, costUsd: 0.5 }), { member: 'billing' });
+  const result = await runLinear({ kind: 'sequence', steps: ['triage', { kind: 'route', candidates: ['billing'] }] }, spent.scope);
+  assert.deepEqual(result, { status: 'completed', output: 'billing', usage: { inputTokens: 8, outputTokens: 2 }, costUsd: 1 });
+
+  const stopped = linearScope((m) => (m === 'billing' ? { status: 'stopped', output: '', reason: { code: 'error' }, costUsd: 2 } : { status: 'completed', output: m, costUsd: 0.5 }), { member: 'billing' });
+  const halted = await runLinear({ kind: 'sequence', steps: ['triage', 'billing', 'manuals'] }, stopped.scope);
+  assert.deepEqual([halted.status, halted.costUsd, 'usage' in halted], ['stopped', 2.5, false]);
+  assert.deepEqual(stopped.calls, ['triage', 'billing']);
 });
 
 test('file-execution: a second begin with the same runKey replays a stored step', async () => {
@@ -241,28 +401,64 @@ test('each swap profile writes one value and changes exactly one adapter', async
   }
 });
 
-test('swap-member changes one option of one member', async () => {
+/** The member profiles: each replaces the entry of `billing` with another member adapter, and nothing else. */
+const MEMBER_SWAPS = { 'swap-member': 'table-member', 'swap-member-agent-layers': 'agent-layers', 'swap-member-a2a': 'a2a-member' } as const;
+
+test('each member swap replaces the entry of one member with another member adapter, and nothing else', async () => {
   const base = await loadConfig(CONFIG);
-  const resolved = await loadConfig(CONFIG, { profile: 'swap-member' });
-  assert.equal(Object.keys(leaves(rawProfile('swap-member'))).length, 1);
-  assert.deepEqual(changedUnits(base, resolved), ['members.billing']);
-  const diff = (a: unknown, b: unknown): string[] => {
-    const [x, y] = [leaves(a), leaves(b)];
-    return [...new Set([...Object.keys(x), ...Object.keys(y)])].filter((k) => x[k] !== y[k]);
-  };
-  assert.deepEqual(diff(base.members.billing, resolved.members.billing), ['options.module']);
-  assert.equal(resolved.members.billing?.adapter, base.members.billing?.adapter);
+  assert.equal(base.members.billing?.adapter, 'function-member');
+  for (const [profile, adapter] of Object.entries(MEMBER_SWAPS)) {
+    const resolved = await loadConfig(CONFIG, { profile });
+    assert.deepEqual(Object.keys(rawProfile(profile) as object), ['members'], profile);
+    assert.deepEqual(Object.keys((rawProfile(profile) as { members: object }).members), ['billing'], profile);
+    assert.deepEqual(changedUnits(base, resolved), ['members.billing'], profile);
+    const ref = resolved.members.billing as { adapter: string };
+    assert.notEqual(ref.adapter, base.members.billing?.adapter, profile);
+    assert.equal((await loadDescriptor('MemberPort', ref.adapter, resolved.cwd)).name, adapter, profile);
+  }
 });
 
-test('swap-member-agent-layers replaces the entry of one member and nothing else', async () => {
+test('swap-execution-sqlite replaces the execution port with sqlite-execution, its path from SWAP_SQLITE_PATH', async () => {
   const base = await loadConfig(CONFIG);
-  const resolved = await loadConfig(CONFIG, { profile: 'swap-member-agent-layers' });
-  assert.deepEqual(Object.keys(rawProfile('swap-member-agent-layers') as object), ['members']);
-  assert.deepEqual(Object.keys((rawProfile('swap-member-agent-layers') as { members: object }).members), ['billing']);
-  assert.deepEqual(changedUnits(base, resolved), ['members.billing']);
-  assert.equal(resolved.members.billing?.adapter, 'agent-layers');
-  assert.equal(base.members.billing?.adapter, 'function-member');
-  assert.equal((await loadDescriptor('MemberPort', 'agent-layers', resolved.cwd)).name, 'agent-layers');
+  const resolved = await loadConfig(CONFIG, { profile: 'swap-execution-sqlite' });
+  assert.deepEqual(changedUnits(base, resolved), ['ports.execution']);
+  assert.deepEqual(resolved.ports.execution, { adapter: 'sqlite-execution', options: { path: '${env:SWAP_SQLITE_PATH:-:memory:}' } });
+  assert.equal((await loadDescriptor('ExecutionPort', 'sqlite-execution', resolved.cwd)).name, 'sqlite-execution');
+});
+
+test('swap-execution-sqlite writes its journal at SWAP_SQLITE_PATH', async () => {
+  const around = await fixture('swap-execution-sqlite');
+  try {
+    const s = await assembleWith(await loadConfig(CONFIG, { profile: 'swap-execution-sqlite' }), around.env);
+    try {
+      assert.equal((await s.run(caseOf('billing-refund').input)).status, 'completed');
+    } finally {
+      await s.close();
+    }
+    assert.ok((await readdir(around.dir)).includes('journal.db'));
+  } finally {
+    await around.close();
+  }
+});
+
+test('swap-member-a2a: billing is called over A2A, once per case that reaches it', async () => {
+  const around = await fixture('swap-member-a2a');
+  try {
+    assert.equal(new URL(around.env.SWAP_BILLING_A2A_URL as string).hostname, '127.0.0.1');
+    const s = await assembleWith(await loadConfig(CONFIG, { profile: 'swap-member-a2a' }), around.env);
+    try {
+      const result = await s.run(caseOf('billing-refund').input);
+      assert.equal(result.status, 'completed');
+      assert.match(result.output, /refunds are issued/);
+      assert.deepEqual(around.agent?.received, ['Request received: I need a refund for my last invoice']);
+      assert.equal((await s.run(caseOf('product-setup').input)).status, 'completed');
+      assert.equal(around.agent?.received.length, 1, 'a case routed to manuals does not reach the agent');
+    } finally {
+      await s.close();
+    }
+  } finally {
+    await around.close();
+  }
 });
 
 test('swap-host replaces the host and nothing else', async () => {
@@ -320,9 +516,17 @@ test('static-registry trust with registry.requireListed: a direct call to an uns
   }
 });
 
-test('swap-all is the six swaps together and nothing else', async () => {
+test('swap-all is the port, member and host swaps together and nothing else', async () => {
   const base = await loadConfig(CONFIG);
   const resolved = await loadConfig(CONFIG, { profile: 'swap-all' });
-  assert.equal(Object.keys(leaves(rawProfile('swap-all'))).length, 6);
-  assert.deepEqual(changedUnits(base, resolved), [...Object.values(SWAPS).map((s) => s.unit), 'members.billing'].sort());
+  const all = rawProfile('swap-all') as { host: unknown; members: Record<string, unknown>; ports: Record<string, unknown> };
+  assert.deepEqual(Object.keys(all).sort(), ['host', 'members', 'ports']);
+  assert.deepEqual(all.host, (rawProfile('swap-host') as { host: unknown }).host);
+  assert.deepEqual(all.members, (rawProfile('swap-member') as { members: unknown }).members);
+  for (const [profile, swap] of Object.entries(SWAPS)) {
+    const port = swap.unit.slice('ports.'.length);
+    assert.deepEqual(all.ports[port], (rawProfile(profile) as { ports: Record<string, unknown> }).ports[port], profile);
+  }
+  assert.deepEqual(changedUnits(base, resolved), [...Object.values(SWAPS).map((s) => s.unit), 'members.billing', 'system'].sort());
+  assert.equal(resolved.host?.adapter, 'agent-layers');
 });

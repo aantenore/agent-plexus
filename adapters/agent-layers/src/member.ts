@@ -94,6 +94,7 @@ export const memberAdapter = defineAdapter<'MemberPort', MemberOptions>({
   portVersion: PORT_VERSIONS.MemberPort,
   tiers: ['prototype', 'production'],
   description: 'Runs an agent of a composed agent-layers stack as a member.',
+  capabilities: { resume: false, cancel: false, checkpoint: false, waits: true },
   optionsSchema: {
     type: 'object',
     properties: {

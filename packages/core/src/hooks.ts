@@ -92,8 +92,14 @@ export interface TelemetryHook {
   metric(name: string, value: number, attrs: Attributes): void;
 }
 
+/** What the core gives a scorer beside the case and the result. */
+export interface ScoreContext {
+  /** Reads a text the execution journal stored, by the key a hop record carries (`inputRef`, `outputRef`). */
+  read?(key: string): Promise<string | undefined>;
+}
+
 export interface ScoreHook {
-  score(evalCase: EvalCase, result: SystemResult): Promise<Score[]>;
+  score(evalCase: EvalCase, result: SystemResult, ctx?: ScoreContext): Promise<Score[]>;
 }
 
 export interface StateHook {

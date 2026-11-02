@@ -32,12 +32,18 @@ interface RunFile {
   textCount: number;
 }
 
+/** A wait in flight: `release` settles it with a value, `fail` rejects it (close). */
+interface Waiter {
+  release(value: Stored): void;
+  fail(err: Error): void;
+}
+
 /** A run in memory: its file content, the steps and waits in flight, and the chain that orders its writes. */
 interface Run {
   file: RunFile;
   path: string;
   inflight: Map<string, Promise<unknown>>;
-  pending: Map<string, ((value: Stored) => void)[]>;
+  pending: Map<string, Waiter[]>;
   writes: Promise<void>;
 }
 
@@ -96,7 +102,7 @@ export function createFileExecution(options: FileExecutionOptions, ctx: Pick<Ada
     run.file.waits[name] = value;
     const waiters = run.pending.get(name) ?? [];
     run.pending.delete(name);
-    for (const release of waiters) release(value);
+    for (const waiter of waiters) waiter.release(value);
   }
 
   const execution = (run: Run): Execution => ({
@@ -124,13 +130,19 @@ export function createFileExecution(options: FileExecutionOptions, ctx: Pick<Ada
         settle(run, name, early);
         return persist(run).then(() => load(early));
       }
-      return new Promise<unknown>((done) => {
+      return new Promise<unknown>((done, fail) => {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const waiters = run.pending.get(name) ?? [];
-        waiters.push((value) => {
-          if (timer) clearTimeout(timer);
-          void persist(run).catch(() => undefined);
-          done(load(value));
+        waiters.push({
+          release(value) {
+            if (timer) clearTimeout(timer);
+            void persist(run).catch(() => undefined);
+            done(load(value));
+          },
+          fail(err) {
+            if (timer) clearTimeout(timer);
+            fail(err);
+          },
         });
         run.pending.set(name, waiters);
         const arm = (): void => {
@@ -189,6 +201,12 @@ export function createFileExecution(options: FileExecutionOptions, ctx: Pick<Ada
       return run && Object.hasOwn(run.file.texts, key) ? run.file.texts[key] : undefined;
     },
     async close() {
+      const err = new Error(`${NAME}: closed while waiting`);
+      for (const run of runs.values()) {
+        const waiters = [...run.pending.values()].flat();
+        run.pending.clear();
+        for (const waiter of waiters) waiter.fail(err);
+      }
       await Promise.allSettled([...runs.values()].map((r) => r.writes));
       if (made) await rm(made, { recursive: true, force: true });
     },

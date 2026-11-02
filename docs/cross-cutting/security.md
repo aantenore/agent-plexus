@@ -35,7 +35,8 @@ The adapter `a2a-member` applies these rules before and during every call to a r
 - **Private addresses.** Private, loopback and link-local hosts are refused unless that origin is configured. Host names
   are checked as written, not after DNS resolution: restrict egress at the network level too.
 - **No redirects** on the card, the key set or any call.
-- **Card fetch.** No credential and no static headers; size bounded by `maxCardBytes`; cached for `cardTtlMs`.
+- **Card fetch.** No credential and no static headers; size bounded by its option `maxCardBytes`; cached for its
+  option `cardTtlMs`.
 - **Signatures.** JWS over the canonical card, checked with keys from `keys` only. The `jku` of a signature is never
   fetched, and `kid` must match a configured key. `requireSigned` refuses a card that is unsigned or not verified.
 - **Audience** comes from the options, never from the card.

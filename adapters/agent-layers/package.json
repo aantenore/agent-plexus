@@ -1,6 +1,6 @@
 {
   "name": "@agent-plexus/adapter-agent-layers",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Builds an agent-plexus host from an agent-layers stack, offers a stack as a member and runs a system as a stack's runtime",
   "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-plexus-adapter", "agent-layers"],
   "homepage": "https://github.com/aantenore/agent-plexus/tree/main/adapters/agent-layers#readme",
@@ -45,7 +45,7 @@
     "@agent-layers/core": "^0.2.0"
   },
   "peerDependencies": {
-    "@agent-plexus/core": "^0.1.0"
+    "@agent-plexus/core": "^0.2.0"
   },
   "devDependencies": {
     "@agent-layers/adapter-basic-runtime": "0.2.0",
@@ -55,11 +55,13 @@
     "@agent-layers/adapter-regex-guard": "0.2.0",
     "@agent-layers/adapter-rules-authorization": "0.2.0",
     "@agent-layers/adapter-static-identity": "0.2.0",
-    "@agent-plexus/adapter-basic-topology": "0.1.0",
-    "@agent-plexus/adapter-function-member": "0.1.0",
-    "@agent-plexus/adapter-memory-execution": "0.1.0",
-    "@agent-plexus/adapter-rule-attribution": "0.1.0",
-    "@agent-plexus/core": "0.1.0",
+    "@agent-layers/conformance": "0.2.0",
+    "@agent-plexus/adapter-basic-topology": "0.2.0",
+    "@agent-plexus/adapter-function-member": "0.2.0",
+    "@agent-plexus/adapter-memory-execution": "0.2.0",
+    "@agent-plexus/adapter-rule-attribution": "0.2.0",
+    "@agent-plexus/conformance": "0.2.0",
+    "@agent-plexus/core": "0.2.0",
     "@types/node": "^24.19.0",
     "typescript": "^7.0.2"
   }

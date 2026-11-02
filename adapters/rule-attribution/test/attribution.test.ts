@@ -304,7 +304,9 @@ test('echoShare is a number in (0, 1]', () => {
   assert.equal(adapter.optionsSchema?.additionalProperties, false);
 });
 
-test('failed and error: the hop; memberLayer from reason.layer; plexus layer ids and host are not member layers', async () => {
+test('failed and error: the hop; memberLayer from reason.memberLayer, else reason.layer; plexus layer ids and host are not member layers', async () => {
+  const [own] = await run([failed('a', { code: 'error', layer: 'member', memberLayer: 'model' })]);
+  assert.deepEqual([own?.layer, own?.member, own?.memberLayer, own?.confidence], ['member', 'a', 'model', CONFIDENCE.high]);
   const [withLayer] = await run([failed('a', { code: 'error', layer: 'harness' })]);
   assert.deepEqual([withLayer?.layer, withLayer?.member, withLayer?.memberLayer, withLayer?.confidence], ['member', 'a', 'harness', CONFIDENCE.high]);
   const [plexusId] = await run([failed('a', { code: 'error', layer: 'routing' })]);

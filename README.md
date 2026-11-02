@@ -114,10 +114,11 @@ node --conditions=@agent-plexus/source packages/cli/src/cli.ts eval --config exa
 `dev` runs each typed line as one run. The commands, options and exit codes are in [docs/guide.md](docs/guide.md#cli).
 The example is described in [examples/offline](examples/offline/README.md).
 
-[examples/swap](examples/swap/README.md) runs the same system with each layer replaced by one config value: one profile
-per layer, loaded by path, with the same routes, the same answers and the same layer and member for the crash case. Its README has the table of
-profiles. One profile, with all six layers swapped (two cases pass; the crash case fails and is attributed to member
-`billing`, exit 1):
+[examples/swap](examples/swap/README.md) runs the same system with each layer replaced in config only: one profile per
+alternative, an adapter of the example loaded by path or another published adapter, with the same routes, the same answers
+and the same member for the crash case. Its README has the table of profiles; `npm run swap:matrix` runs them all. One
+profile, with registry, routing, topology, execution, attribution, the `billing` member and the host swapped together
+(two cases pass; the crash case fails and is attributed to member `billing`, exit 1):
 
 ```bash
 node --conditions=@agent-plexus/source packages/cli/src/cli.ts eval --config examples/swap/plexus.json --profile swap-all examples/swap/cases.json
@@ -129,6 +130,7 @@ node --conditions=@agent-plexus/source packages/cli/src/cli.ts eval --config exa
 spec/            language-neutral contracts: language.md, hooks.md, ports/ (JSON schemas are planned)
 packages/core    @agent-plexus/core: ports, host hooks, memberCall, assemble, system config, limits (zero dependencies)
 packages/cli     @agent-plexus/cli: check, run, resume, dev, eval
+packages/conformance  @agent-plexus/conformance: contract tests a port adapter runs in its own tests
 adapters/<name>  @agent-plexus/adapter-<name>: one package per framework, protocol or technology
 examples/        sample systems: offline (reference adapters), swap (each layer replaced by one config value)
 docs/            product, architecture, stack, guide, adapters, limits, layers/<id>.md, cross-cutting/, decisions/, research/, proposals/

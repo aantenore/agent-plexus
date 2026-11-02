@@ -135,6 +135,7 @@ export const adapter = defineAdapter<'MemberPort', FunctionMemberOptions>({
   portVersion: PORT_VERSIONS.MemberPort,
   tiers: ['prototype', 'production'],
   description: 'Calls a function in process as a member; the function returns text or a full member result.',
+  capabilities: { resume: false, cancel: false, checkpoint: false, waits: false },
   optionsSchema: {
     type: 'object',
     properties: {

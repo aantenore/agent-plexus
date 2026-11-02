@@ -1,9 +1,10 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { AdapterContext, AdapterDescriptor, Fills, FillTypes } from './adapter.ts';
+import { checkDescriptor, type AdapterContext, type AdapterDescriptor, type Fills, type FillTypes } from './adapter.ts';
 import { adapterLimitProblems, coerceLimitOptions, interpolate } from './adapter-config.ts';
 import type { AdapterRef } from './config.ts';
 import { AdapterError, ConfigError } from './errors.ts';
+import { resolveImport } from './import-resolve.ts';
 import { formatProblem, validate } from './schema.ts';
 import { errorMessage, isPlainObject } from './util.ts';
 
@@ -49,8 +50,65 @@ export const loadDescriptor: DescriptorLoader = async (fills, name, cwd) => {
   throw new Error(`module has no adapter for ${fills}${isPath(name) ? '' : ` named "${name}"`} (found: ${describeAll(all)})`);
 };
 
+const isDescriptor = (v: unknown): v is AdapterDescriptor =>
+  isPlainObject(v) && typeof v.fills === 'string' && typeof v.name === 'string' && typeof v.create === 'function';
+
 /**
- * Loads the descriptor, fills `${env:...}` in `ref.options`, validates them (schema and declared limits) and creates the
+ * Every adapter descriptor a module exports: in `adapters`, `default` or any named export, alone or in an array. A
+ * `default` that is a plain object and not a descriptor (a CommonJS `module.exports`) is searched the same way.
+ */
+export function descriptorsOf(mod: Record<string, unknown>): AdapterDescriptor[] {
+  const out = new Set<AdapterDescriptor>();
+  const scan = (values: unknown[]): void => {
+    for (const value of values) {
+      for (const v of Array.isArray(value) ? value : [value]) if (isDescriptor(v)) out.add(v);
+    }
+  };
+  scan(Object.values(mod));
+  if (isPlainObject(mod.default) && !isDescriptor(mod.default)) scan(Object.values(mod.default));
+  return [...out];
+}
+
+/** Imports a module as an `import` in `cwd` would: a path relative to it, or a package installed there (`resolveImport`). */
+async function importFrom(specifier: string, cwd: string): Promise<Record<string, unknown>> {
+  return (await import(resolveImport(specifier, cwd))) as Record<string, unknown>;
+}
+
+/** The descriptors a plugin exports; a plugin that exports none is an error, not an empty list. */
+async function pluginDescriptors(specifier: string, cwd: string): Promise<AdapterDescriptor[]> {
+  const found = descriptorsOf(await importFrom(specifier, cwd));
+  if (!found.length) throw new Error('it exports no adapter descriptors');
+  return found;
+}
+
+/**
+ * A loader that looks an adapter up by name in the descriptors the `plugins` modules export (packages or paths,
+ * resolved as an import in the config's directory, never from elsewhere; the first plugin listed wins), and asks
+ * `fallback` for any other name. Each plugin is imported once, when an adapter is first looked up; one that cannot be
+ * resolved or exports no descriptors is an error.
+ */
+export function pluginLoader(plugins: readonly string[], fallback: DescriptorLoader = loadDescriptor): DescriptorLoader {
+  const loaded = new Map<string, Promise<AdapterDescriptor[]>>();
+  const load = (cwd: string): Promise<AdapterDescriptor[]> => {
+    let found = loaded.get(cwd);
+    if (!found) {
+      found = Promise.all(plugins.map((p) => pluginDescriptors(p, cwd).catch((err: unknown) => {
+        throw new Error(`plugin "${p}" failed to load: ${errorMessage(err)}`, { cause: err });
+      }))).then((lists) => lists.flat());
+      found.catch(() => loaded.delete(cwd));
+      loaded.set(cwd, found);
+    }
+    return found;
+  };
+  return async (fills, name, cwd) => {
+    if (!plugins.length) return fallback(fills, name, cwd);
+    const own = (await load(cwd)).find((d) => d.fills === fills && d.name === name);
+    return own ?? fallback(fills, name, cwd);
+  };
+}
+
+/**
+ * Loads the descriptor, checks its shape and port version (`checkDescriptor`), fills `${env:...}` in `ref.options`, validates them (schema and declared limits) and creates the
  * instance. Errors name `where`.
  */
 export async function createAdapter<F extends Fills>(
@@ -62,6 +120,9 @@ export async function createAdapter<F extends Fills>(
   } catch (err) {
     throw new AdapterError(where, ref.adapter, errorMessage(err), { cause: err });
   }
+  const unsound = checkDescriptor(descriptor);
+  if (!unsound.length && descriptor.fills !== fills) unsound.push(`fills ${descriptor.fills}, expected ${fills}`);
+  if (unsound.length) throw new AdapterError(where, ref.adapter, `cannot be used: ${unsound.join('; ')}`);
   const missing: string[] = [];
   const filled = interpolate(ref.options ?? {}, ctx.env, missing, `${where}.options`);
   if (missing.length) throw new ConfigError(missing);

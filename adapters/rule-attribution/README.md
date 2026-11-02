@@ -47,8 +47,9 @@ compared only, never copied into evidence.
 ## Member layer
 
 `memberLayer` is the member's own name for where it failed. When the record source has spans for the blamed hop, the
-first span with status `error` or `failed` and a layer gives it; otherwise `reason.layer`, unless that is a plexus
-layer id or `host`. A source that fails to deliver spans is ignored.
+first span with status `error` or `failed` and a layer gives it; otherwise `reason.memberLayer`, else `reason.layer`
+unless that is a plexus layer id or `host` (the form used before `memberLayer`; the core's `memberLayerOf` reads both).
+A source that fails to deliver spans is ignored.
 
 ## Limits
 

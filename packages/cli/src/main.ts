@@ -13,13 +13,13 @@ export { processIo, type Io } from './io.ts';
 const HELP = `agent-plexus <command> [options]
 
   check                      load and assemble the system, print findings (FAIL, WARN), exit 1 on any FAIL
-  run <text>                 one run of the system: the output, then one line per hop (--json, --quiet)
+  run <text>                 one run of the system: the output, then one line per hop (--run-id <id>, --json, --quiet)
   resume <runId>             answer a waiting run and run it again (--input <text> | --approve | --deny [--reason <text>]) [--wait <token>]
   dev                        terminal loop: each line is a run, /exit quits (--quiet)
   eval <cases.json>          run, score and attribute a file of cases, exit 1 when a case fails (--json)
 
 Common options: --config <file> (default ${DEFAULT_CONFIG}), --profile <name>, --help (also per command)
-Exit codes: 0 ok, 1 findings, failed runs or a bad system, 2 wrong command line`;
+Exit codes: 0 ok, 1 findings, failed runs or a bad system, 2 wrong command line, 3 a run waiting for a reply (run, resume)`;
 
 const COMMON = {
   config: { type: 'string' }, profile: { type: 'string' }, help: { type: 'boolean', short: 'h' },
@@ -36,6 +36,7 @@ interface Flags {
   deny?: boolean;
   reason?: string;
   wait?: string;
+  'run-id'?: string;
 }
 
 interface Command {
@@ -56,6 +57,17 @@ function noArgs(positionals: string[]): void {
 function textOf(positionals: string[]): string {
   if (!positionals.length) throw new UsageError('expected <text>');
   return positionals.join(' ');
+}
+
+/** Longest run id the system accepts; a longer one would be replaced by a generated id. */
+const MAX_RUN_ID = 128;
+
+/** The run id `--run-id` asks for, if any: non-empty and at most 128 characters. */
+function runIdFlag(f: Flags): { runId?: string } {
+  const id = f['run-id'];
+  if (id === undefined) return {};
+  if (!id || id.length > MAX_RUN_ID) throw new UsageError(`--run-id needs an id of 1 to ${MAX_RUN_ID} characters`);
+  return { runId: id };
 }
 
 function runIdOf(positionals: string[]): string {
@@ -90,27 +102,30 @@ be loaded and invalid topologies are FAIL findings. Exit 1 on any FAIL.`,
     exec: (io, f, pos) => { noArgs(pos); return check(io, project(f)); },
   },
   run: {
-    usage: 'agent-plexus run <text> [--config <file>] [--profile <name>] [--json] [--quiet]',
+    usage: 'agent-plexus run <text> [--run-id <id>] [--config <file>] [--profile <name>] [--json] [--quiet]',
     help: `One run of the system with the given text. Prints the output, then one line per hop on stderr:
-<member> <status> <code?> <ms>ms. A waiting run ends with the "resume" command that answers it. Exit 1 unless the
-run completed.
-  --quiet   no hop lines
-  --json    print the SystemResult as JSON: the output and the hop record (keys, never texts)`,
-    options: { ...COMMON, json: { type: 'boolean' }, quiet: { type: 'boolean' } },
-    exec: (io, f, pos) => run(io, { ...project(f), text: textOf(pos), ...flag(f, 'json'), ...flag(f, 'quiet') }),
+<member> <status> <code?> <ms>ms. A waiting run ends with the "resume" command that answers it.
+Exit 0 when the run completed, 3 when it waits for a reply, 1 otherwise.
+  --run-id <id>   run under this id (1 to 128 characters) instead of a generated one; with the id of a run the
+                  journal keeps, the run continues with the same input (completed steps replay)
+  --quiet         no hop lines
+  --json          print the SystemResult as JSON: the output and the hop record (keys, never texts)`,
+    options: { ...COMMON, json: { type: 'boolean' }, quiet: { type: 'boolean' }, 'run-id': { type: 'string' } },
+    exec: (io, f, pos) => run(io, { ...project(f), text: textOf(pos), ...runIdFlag(f), ...flag(f, 'json'), ...flag(f, 'quiet') }),
   },
   resume: {
     usage: 'agent-plexus resume <runId> (--input <text> | --approve | --deny [--reason <text>]) [--wait <token>] [--config <file>] [--profile <name>] [--json] [--quiet]',
     help: `Answers a run that ended waiting and runs it again under the same run id, with the input it started with.
-Completed steps replay from the journal; the waiting call gets the reply. Output and exit code as for "run".
+Completed steps replay from the journal; the waiting call gets the reply. Output and exit codes as for "run":
+0 completed, 3 waiting again, 1 otherwise.
   --input <text>    the input a waiting member asked for
   --approve         approve the call the host's gate asked about; --deny refuses it (--reason <text> goes with either)
   --wait <token>    the wait this reply answers, as the waiting run printed it: the resume fails when the run now
                     waits elsewhere, so a repeated or late reply cannot answer a later wait
   --quiet           no hop lines
   --json            print the SystemResult as JSON
-The run must be in the journal: across processes this needs a durable execution adapter. memory-execution keeps runs
-in the memory of one process, so a run started by "agent-plexus run" cannot be resumed with it.`,
+The run must be in the journal: across processes this needs a durable execution adapter. An execution adapter that
+keeps runs in the memory of one process cannot resume a run started by another "agent-plexus run".`,
     options: { ...COMMON, json: { type: 'boolean' }, quiet: { type: 'boolean' }, input: { type: 'string' }, approve: { type: 'boolean' }, deny: { type: 'boolean' }, reason: { type: 'string' }, wait: { type: 'string' } },
     exec: (io, f, pos) => resume(io, { ...project(f), runId: runIdOf(pos), reply: replyOf(f), ...flag(f, 'json'), ...flag(f, 'quiet') }),
   },

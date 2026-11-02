@@ -51,11 +51,26 @@ export interface Spent {
   costUsd?: number;
 }
 
-const amount = (n: number | undefined): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
+/** What a run has spent so far, over all its invocations: kept in the journal as `run:spent`. */
+export interface SpentTotals {
+  tokens: number;
+  costUsd: number;
+}
+
+const amount = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
+
+/** A kept `run:spent` value; anything else counts as nothing spent. */
+export function spentTotals(value: unknown): SpentTotals {
+  const v = (value && typeof value === 'object' ? value : {}) as Partial<SpentTotals>;
+  return { tokens: amount(v.tokens) ? v.tokens : 0, costUsd: amount(v.costUsd) ? v.costUsd : 0 };
+}
 
 /**
- * Budget of one run. Calls reserve a share of what is left, then settle with what the member reported; a dimension
- * the member did not report counts as fully spent. Updates are synchronous, so parallel calls never over-reserve.
+ * Budget of one run. Calls reserve a share of what is not spent, capped by what no other call has reserved, then
+ * settle with what the member reported; a dimension the member did not report counts as fully spent, unless the call
+ * goes on later (it ended waiting): then it counts as nothing, and the call's continuation settles the rest. Updates are
+ * synchronous, so parallel calls never over-reserve. `spent` is what earlier invocations of the run spent: the budget
+ * is the run's, not the invocation's.
  */
 export class Ledger {
   readonly bounds: Bounds;
@@ -65,13 +80,27 @@ export class Ledger {
   readonly #open = new Set<Reservation>();
   #tokens: number | undefined;
   #costUsd: number | undefined;
+  readonly #spent: SpentTotals;
+  readonly #inherited: boolean;
 
-  constructor(bounds: Bounds, now: () => number = Date.now, by: DeadlineBy = 'limits.system.timeoutMs') {
+  constructor(bounds: Bounds, now: () => number = Date.now, by: DeadlineBy = 'limits.system.timeoutMs', spent?: SpentTotals) {
     this.bounds = bounds;
     this.deadlineBy = by;
     this.#now = now;
-    this.#tokens = bounds.tokens;
-    this.#costUsd = bounds.costUsd;
+    this.#spent = spentTotals(spent);
+    this.#inherited = this.#spent.tokens > 0 || this.#spent.costUsd > 0;
+    this.#tokens = bounds.tokens === undefined ? undefined : Math.max(0, bounds.tokens - this.#spent.tokens);
+    this.#costUsd = bounds.costUsd === undefined ? undefined : Math.max(0, bounds.costUsd - this.#spent.costUsd);
+  }
+
+  /** Whether earlier invocations of the run spent anything: their steps may replay, which needs no budget. */
+  get inherited(): boolean {
+    return this.#inherited;
+  }
+
+  /** What the run has spent, earlier invocations included; a dimension nobody reported or reserved adds nothing. */
+  spent(): SpentTotals {
+    return { ...this.#spent };
   }
 
   /** What is neither spent nor reserved; a dimension the host did not bound is absent. */
@@ -89,26 +118,33 @@ export class Ledger {
   }
 
   /**
-   * Reserves `share` (0..1, default all) of what is left after the open reservations. Undefined when a bounded
-   * dimension has nothing left to reserve.
+   * Reserves `share` (0..1, default all) of what is not spent, capped by what the open reservations leave: concurrent
+   * calls with shares that sum to at most 1 each get their share, whatever order they reserve in. Undefined when a
+   * bounded dimension has nothing left to reserve.
    */
   reserve(share = 1): Reservation | undefined {
     const fraction = Number.isFinite(share) ? Math.min(1, Math.max(0, share)) : 0;
     const left = this.remaining();
-    const tokens = left.tokens === undefined ? undefined : Math.floor(left.tokens * fraction);
-    const costUsd = left.costUsd === undefined ? undefined : left.costUsd * fraction;
+    const tokens = left.tokens === undefined ? undefined : Math.min(left.tokens, Math.floor(this.#tokens! * fraction));
+    const costUsd = left.costUsd === undefined ? undefined : Math.min(left.costUsd, this.#costUsd! * fraction);
     if ((tokens !== undefined && tokens <= 0) || (costUsd !== undefined && costUsd <= 0)) return undefined;
     const reservation: Reservation = { ...(tokens !== undefined ? { tokens } : {}), ...(costUsd !== undefined ? { costUsd } : {}) };
     this.#open.add(reservation);
     return reservation;
   }
 
-  /** Debits what was reported (or the whole reservation when nothing was) and releases the rest. */
-  settle(reservation: Reservation, spent?: Spent): void {
+  /**
+   * Debits what was reported and releases the rest. A dimension nothing was reported for debits the whole reservation,
+   * or nothing when `partial`: the call goes on later (it ended waiting) and its continuation reports what it spends.
+   */
+  settle(reservation: Reservation, spent?: Spent, partial = false): void {
     if (!this.#open.delete(reservation)) return;
     const usage = spent?.usage;
-    const tokens = usage && amount(usage.inputTokens) && amount(usage.outputTokens) ? usage.inputTokens + usage.outputTokens : reservation.tokens;
-    const costUsd = amount(spent?.costUsd) ? spent.costUsd : reservation.costUsd;
+    const unreported = (reserved: number | undefined): number | undefined => (partial ? undefined : reserved);
+    const tokens = usage && amount(usage.inputTokens) && amount(usage.outputTokens) ? usage.inputTokens + usage.outputTokens : unreported(reservation.tokens);
+    const costUsd = amount(spent?.costUsd) ? spent.costUsd : unreported(reservation.costUsd);
+    if (tokens !== undefined) this.#spent.tokens += tokens;
+    if (costUsd !== undefined) this.#spent.costUsd += costUsd;
     if (this.#tokens !== undefined && tokens !== undefined) this.#tokens = Math.max(0, this.#tokens - tokens);
     if (this.#costUsd !== undefined && costUsd !== undefined) this.#costUsd = Math.max(0, this.#costUsd - costUsd);
   }

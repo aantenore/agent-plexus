@@ -4,7 +4,7 @@ import { TIERS, type JsonSchema, type Tier } from './adapter.ts';
 import { ConfigError } from './errors.ts';
 import { formatProblem, validate, type Problem } from './schema.ts';
 import { RUN_STATUSES, type Condition, type TopologyKind, type TopologySpec } from './shapes.ts';
-import { collectLimits, type Env, type SystemLimits } from './system-limits.ts';
+import { collectLimits, type Deprecation, type Env, type SystemLimits } from './system-limits.ts';
 import { childNodes } from './topology-walk.ts';
 import { errorMessage, isPlainObject } from './util.ts';
 
@@ -23,12 +23,14 @@ export interface PortsConfig {
 }
 
 /** Limits as written: numbers, `"unbounded"` or `${env:NAME}` references, by group. */
-export type LimitsConfig = Partial<Record<'system' | 'registry' | 'router' | 'attribution', Record<string, number | string>>>;
+export type LimitsConfig = Partial<Record<'system' | 'router' | 'attribution', Record<string, number | string>>>;
 
 /** Contents of a system config file. */
 export interface SystemConfig {
   $schema?: string;
   system: { name: string };
+  /** Modules (packages or paths) whose exported descriptors are found by name before `@agent-plexus/adapter-<name>`. */
+  plugins?: string[];
   /** Absent or null: the prototype host. */
   host?: AdapterRef | null;
   members: Record<string, AdapterRef>;
@@ -51,6 +53,8 @@ export interface ResolvedConfig {
   profile?: string;
   tier: Tier;
   host?: AdapterRef;
+  /** Adapter modules looked up by name first (`pluginLoader`); empty when none. */
+  plugins: string[];
   members: Record<string, AdapterRef>;
   ports: {
     registry?: AdapterRef;
@@ -66,6 +70,8 @@ export interface ResolvedConfig {
   registry: { requireSigned: boolean; requireListed: boolean };
   /** Directory of the config file; relative paths resolve against it. */
   cwd: string;
+  /** Parts of the config that are accepted but ignored; the readiness gate warns about each. */
+  deprecated?: Deprecation[];
 }
 
 export interface LoadOptions {
@@ -93,6 +99,7 @@ const CONFIG_SCHEMA: JsonSchema = {
   properties: {
     $schema: { type: 'string' },
     system: { type: 'object', required: ['name'], properties: { name: NAME }, additionalProperties: false },
+    plugins: { type: 'array', items: NAME },
     host: ADAPTER_REF,
     members: { type: 'object', additionalProperties: ADAPTER_REF },
     ports: {
@@ -245,7 +252,8 @@ export function resolveConfig(raw: unknown, opts: ResolveOptions): ResolvedConfi
   nodeProblems(merged.topology, '$.topology', out);
   const env = opts.env ?? process.env;
   const limitErrors: string[] = [];
-  const limits = collectLimits(merged.limits, env, limitErrors);
+  const deprecated: Deprecation[] = [];
+  const limits = collectLimits(merged.limits, env, limitErrors, deprecated);
   if (out.length || limitErrors.length) return fail([...out.map(formatProblem), ...limitErrors]);
 
   const config = merged as unknown as SystemConfig;
@@ -254,6 +262,7 @@ export function resolveConfig(raw: unknown, opts: ResolveOptions): ResolvedConfi
     ...(opts.profile ? { profile: opts.profile } : {}),
     tier: config.tier ?? 'prototype',
     ...(config.host ? { host: config.host } : {}),
+    plugins: config.plugins ?? [],
     members: config.members,
     ports: {
       ...(config.ports.registry ? { registry: config.ports.registry } : {}),
@@ -266,6 +275,7 @@ export function resolveConfig(raw: unknown, opts: ResolveOptions): ResolvedConfi
     limits,
     registry: { requireSigned: config.registry?.requireSigned ?? false, requireListed: config.registry?.requireListed ?? false },
     cwd: opts.cwd,
+    ...(deprecated.length ? { deprecated } : {}),
   };
 }
 

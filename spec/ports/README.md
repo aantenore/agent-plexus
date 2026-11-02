@@ -14,7 +14,9 @@ sections: Purpose, Operations, Data shapes, Semantics, Errors, Escape hatch, Con
 | Flow | `execution` (L4) | [ExecutionPort](ExecutionPort.md) | 0.1.0 | Journal of a run: steps that run once, waits, stored texts |
 | Insight | `attribution` (L5) | [AttributionPort](AttributionPort.md) | 0.1.0 | Name the layer and the member behind a failure |
 
-The versions are the values of `PORT_VERSIONS` in `packages/core/src/ports.ts`. Layer ids (`member`, `registry`, ...) are
+The versions are the values of `PORT_VERSIONS` in `packages/core/src/ports.ts`. An adapter declares the version it
+implements (`portVersion`); the core loads it only when that version is compatible with its own: same major and, while
+the major is `0`, same minor. A breaking change to a port bumps the minor while the port is `0.x`, the major after. Layer ids (`member`, `registry`, ...) are
 the stable identifiers. The `L0`-`L5` numbers are for reading only and never appear in identifiers or file names. The
 [host hooks](../hooks.md) are not ports.
 
@@ -88,5 +90,9 @@ rules below hold for every system.
 
 ## Conformance
 
-A conformance suite per port, in `packages/conformance`, is planned. The page of each port lists what its suite will
-check. Until then each adapter is covered by its own tests (`node:test`).
+[`@agent-plexus/conformance`](../../packages/conformance) has one suite per port and one for the host hooks:
+`checkExecution`, `checkTopology`, `checkMember`, `checkRegistry`, `checkRouter`, `checkAttribution` and `checkHost`.
+`checkAdapter(descriptor, { options, fixtures })` checks the descriptor, creates the adapter as `assemble` does and runs
+the suite of what it fills; `checkSystem` runs the adapter inside an assembled system. Each failure starts with the id
+of the rule it breaks (`E3`, `T6`, `M4`, ...), listed in the package README. Every adapter in this repository runs them
+in `test/conformance.test.ts`.

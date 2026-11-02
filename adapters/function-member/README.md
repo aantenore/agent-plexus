@@ -4,6 +4,8 @@ Maps **in-process function** → **MemberPort** (layer `member`). Tier: prototyp
 
 Wraps a function as a member. The function receives the input and the call context and returns the answer text, or a
 full member result to report another status. It is the reference member: it needs no network and no agent runtime.
+Declared `capabilities`: none (no `resume`, `cancel`, `checkpoint`; `waits` false). A function that returns `waiting`
+is passed on, but the run cannot continue it.
 
 ## Options
 

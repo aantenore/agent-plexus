@@ -1,6 +1,6 @@
 {
   "name": "@agent-plexus/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "agent-plexus command line: check, run, resume, dev, eval",
   "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "cli"],
   "homepage": "https://github.com/aantenore/agent-plexus/tree/main/packages/cli#readme",
@@ -40,7 +40,7 @@
     "prepack": "npm run build && node ../../scripts/copy-license.mjs"
   },
   "dependencies": {
-    "@agent-plexus/core": "^0.1.0"
+    "@agent-plexus/core": "^0.2.0"
   },
   "devDependencies": {
     "@types/node": "^24.19.0",

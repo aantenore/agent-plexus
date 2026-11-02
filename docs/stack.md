@@ -13,7 +13,7 @@ each can be swapped by changing one line of config. The design is in [architectu
 | Member | L0 | [Members](layers/member.md) (`member`) | Who does the work, and how is it called? | MemberPort | `function-member`, `agent-layers`, `a2a-member` |
 | Discovery | L1 | [Registry](layers/registry.md) (`registry`) | Which agents exist, what can they do, can their cards be trusted? | RegistryPort | `static-registry`; AGNTCY Agent Directory and Kubernetes CRDs are candidates |
 | Discovery | L2 | [Routing](layers/routing.md) (`routing`) | Which agent should handle this request? | AgentRouterPort | `skill-router`; `model-router` and `knowledge-router` planned |
-| Flow | L3 | [Topology](layers/topology.md) (`topology`) | In what order and shape does work flow between agents? | TopologyPort | `basic-topology` (`sequence`, `route`, `loop`, `parallel`, `handoff`, `graph`); `supervise` planned |
+| Flow | L3 | [Topology](layers/topology.md) (`topology`) | In what order and shape does work flow between agents? | TopologyPort | `basic-topology` (`sequence`, `route`, `loop`, `parallel`, `handoff`, `supervise`, `graph`) |
 | Flow | L4 | [Execution](layers/execution.md) (`execution`) | Does a long run survive a restart, and wait for a person? | ExecutionPort | `memory-execution`, `sqlite-execution`; `host-execution` planned; DBOS, Temporal, Hatchet are candidates |
 | Insight | L5 | [Attribution](layers/attribution.md) (`attribution`) | When the system fails, which agent and which layer caused it? | AttributionPort | `rule-attribution`; `judge-attribution`, `replay-attribution` planned |
 

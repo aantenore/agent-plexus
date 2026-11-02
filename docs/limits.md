@@ -6,9 +6,12 @@ production, and what `agent-plexus check` does with it.
 
 ## How limits work
 
-- **Where.** System limits live in the system config under `limits.<group>.<name>` (groups: `system`, `registry`,
-  `router`, `attribution`). Adapter limits are options of the adapter entry (`members.<id>.options`, or
-  `ports.<slot>.options`). Profiles override them like any other value: objects merge deeply, `null` restores the
+- **Where.** System limits live in the system config under `limits.<group>.<name>` (groups: `system`, `router`,
+  `attribution`; any other group is rejected). Adapter limits are options of the adapter entry
+  (`members.<id>.options`, or `ports.<slot>.options`): card size and lifetime, for example, are options of the adapter
+  that fetches cards ([`a2a-member`](#a2a-member--memberport)). The `limits.registry` group of 0.1.0
+  (`cardTtlMs`, `maxCardBytes`) is deprecated: a config that sets it still loads, the values are ignored, and the
+  readiness gate warns (`$.limits.registry`); set them as `a2a-member` options instead. Profiles override them like any other value: objects merge deeply, `null` restores the
   default.
 - **Environment.** A limit may be a whole-string `${env:NAME}` or `${env:NAME:-default}` reference. After
   interpolation the string must be a number (or `unbounded`) in the accepted range, or the config is rejected.
@@ -43,20 +46,14 @@ setting is absent. **Accepted** is the validated range. **Safe range** is what p
 | `limits.system.timeoutMs` | `300000` ms | 1–∞ or unbounded | 1–3600000 | fail if unbounded; warn outside safe range | Deadline of a system run when the host passes none; a deadline from the host can only make it shorter. |
 | `limits.system.maxSteps` | `20` | 1–∞ or unbounded | 1–100 | fail if unbounded; warn outside safe range | Member calls in one run; the next call stops with `limit`. |
 | `limits.system.maxDepth` | `3` | 0–∞ or unbounded | 0–10 | fail if unbounded; warn outside safe range | Hops a system run may add when the host passes no bounds (nested systems, supervisors); the next call stops with `hop_limit`. |
-| `limits.system.maxParallel` | `4` | 1–64 | 1–16 | warn outside safe range | Branches of a `parallel` node running at once. |
+| `limits.system.maxParallel` | `4` | 1–64 | 1–16 | warn outside safe range | Member calls running at once in one run, enforced by the core: a call beyond it waits for a slot, first come first served. Topologies also bound the branches of a `parallel` node by it. |
 | `limits.system.maxIterations` | `5` | 1–100 | 1–20 | warn outside safe range | Default bound of a `loop` node, and the most visits of one node in a `graph`. |
-| `limits.system.maxHandoffs` | `10` | 1–100 | 1–20 | warn outside safe range | Default bound of a `handoff` node: turns after the first; the next stops with `limit`. |
+| `limits.system.maxHandoffs` | `10` | 1–100 | 1–20 | warn outside safe range | Default bound of a `handoff` node: turns after the first; the next stops with `limit`. Also bounds the delegations of a `supervise` node. |
 | `limits.system.maxRepeats` | `3` | 1–100 | 1–10 | warn outside safe range | Back-and-forth round trips between the same two members before the next call stops with `limit`. |
 | `limits.system.stepTimeoutMs` | `300000` ms | 1–∞ or unbounded | 1–3600000 | fail if unbounded; warn outside safe range | One member call, capped by the time left in the run. |
+| `limits.system.cancelTimeoutMs` | `5000` ms | 1–60000 | — | — | Time a member's `cancel` may take when the core cancels the remote task of an abandoned or cut-off call (aborted, or timed out by the core); after it the core stops waiting and reports `plexus.member.cancel_failed`. |
 | `limits.system.minRemainingMs` | `1000` ms | 0–60000 | — | — | A member call does not start with less time left in the run than this; the call stops with `timeout`. |
 | `limits.system.marginMs` | `1000` ms | 0–60000 | — | — | Time kept back from the deadline on each outbound call: the member is told the time left minus the margin (never below 0), so it can end before the caller does. |
-
-### `limits.registry`
-
-| Setting | Default | Accepted | Safe range | On production | Why |
-|---|---|---|---|---|---|
-| `limits.registry.cardTtlMs` | `300000` ms | 0–86400000 | — | — | How long a fetched card is trusted. Planned use: `static-registry` fetches nothing yet. |
-| `limits.registry.maxCardBytes` | `65536` bytes | 1024–1048576 | — | — | Largest card read. Planned use, as above. |
 
 ### `limits.router`
 
@@ -85,7 +82,7 @@ Ordered by layer. Set them under the adapter's `options`; an adapter not listed 
 | `options.maxCardBytes` | `65536` bytes | 1024–1048576 | — | — | Largest agent card or key set read. |
 | `options.maxResponseBytes` | `4194304` bytes | ≥ 1024 | — | — | Largest JSON-RPC answer read from the remote agent. |
 | `options.cardTtlMs` | `300000` ms | 0–86400000 | — | — | How long a fetched card and its endpoint are trusted. |
-| `options.cancelTimeoutMs` | `5000` ms | 100–60000 | — | — | Time limit of the cancel request sent after an abort or a deadline. |
+| `options.cancelTimeoutMs` | `5000` ms | 100–60000 | — | — | Time limit of each cancel request the adapter sends: after a deadline, a failure, or an abort before the task was checkpointed, and in `cancel`. |
 
 ### `skill-router` · AgentRouterPort
 

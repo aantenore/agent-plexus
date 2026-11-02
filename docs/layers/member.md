@@ -100,8 +100,20 @@ sequenceDiagram
   `call:<node path>:<n>#<attempt>`, hop record `attempt`). The receive check, the budget and the hop record work as
   for any call. A member without `resume`, or without a kept handle, stops with code `rejected`, layer `member`. See
   [execution](execution.md#waiting-and-resume).
-- On abort or deadline the adapter cancels the remote task itself (`a2a-member` sends `CancelTask`); the core does not
-  call `cancel` yet.
+- On its own deadline the adapter cancels the remote task itself (`a2a-member` sends `CancelTask`). The core calls
+  `cancel`, best effort and bounded by `limits.system.cancelTimeoutMs`, for a call whose task it knows whenever it cuts
+  the call off (an abort of the run or the call, or its own step or deadline timeout, which aborts the call signal with
+  a `TimeoutError` reason), and when the topology abandons a call that ended `waiting`; the adapter then leaves the
+  task to it, so the task is cancelled once. A cancelled task's handle is forgotten, so a later invocation of the run
+  invokes the member again instead of resuming it. A result the member returned itself is never cancelled. A cancel
+  that fails is reported as `plexus.member.cancel_failed`; it changes no result.
+- An adapter declares in its descriptor's `capabilities` (`resume`, `cancel`, `checkpoint`, `waits`) what its members
+  do. The readiness gate warns about a member that `waits` without `resume`, and about one that `checkpoint`s without
+  `cancel` raced by a `parallel` with `join: "first"`.
+- A member's own name for where it stopped goes in `reason.memberLayer`, never in `reason.layer`: a member speaks for
+  layer `member` only. The core moves a plexus layer or `host` a member names to `memberLayer` and sets `member`.
+- A call that ends `waiting` spends from the budget only what it reported; its continuation settles the rest. `usage`
+  and `costUsd` that are not finite non-negative numbers are dropped (event `plexus.member.figure_dropped`).
 - Bounds travel to a remote agent in the [bounds extension](../../spec/extensions/bounds-v1.md) of A2A: time left, hops,
   budget and lineage.
 
@@ -129,6 +141,7 @@ records and in `plexus.member`.
 | event | `plexus.parts.dropped` when an input carried `parts` that did not cross |
 | event | `plexus.member.resumed` when the call continued remote work through `resume`: journaled work after a restart, or a reply to a waiting member (no content) |
 | event | `plexus.checkpoint.ignored` when a member checkpointed a handle that is not a non-empty string of at most 1024 characters |
+| event | `plexus.member.figure_dropped` when a member reported `usage` or `costUsd` that is not a finite non-negative number (dropped) |
 | metric | `plexus.hops` by member and status |
 
 ## Evaluation
@@ -147,7 +160,7 @@ A2A needs no adapter of its own.
 |---|---|---|
 | [`function-member`](../../adapters/function-member) | An in-process function (prototype, production) | implemented |
 | [`a2a-member`](../../adapters/a2a-member) | An agent served over A2A 1.0 and 0.3, on the official JavaScript SDK (prototype, production); card fetched without credential and verified against configured keys, endpoint pinning, https and private-address rules, polling, resume, cancel, bounds extension | implemented |
-| [`agent-layers`](../../adapters/agent-layers) | An agent of an agent-layers stack, in process (prototype, production); deadline, hops and budget are not passed on yet, because agent-layers has no bounds | implemented |
+| [`agent-layers`](../../adapters/agent-layers) | An agent of an agent-layers stack, in process (prototype, production); deadline, hops and budget are not passed on yet, because agent-layers has no bounds; a waiting stack run is reported, but not resumed (`waits` without `resume`) | implemented |
 | `agent-layers`: tool source of `supervise` | The stack's tools as what a supervisor can call | planned |
 
 Another agent-plexus system as a member works in process through the `fn` option of `function-member` (code only, not

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Ledger, openBounds } from '../src/ledger.ts';
+import { Ledger, openBounds, spentTotals } from '../src/ledger.ts';
 import { resolveLimits } from '../src/system-limits.ts';
 import type { Bounds, RunContext } from '../src/shapes.ts';
 
@@ -69,6 +69,15 @@ test('nothing reported counts as fully spent, per dimension', () => {
   assert.equal(l.remaining().tokens, 0);
 });
 
+test('a partial settle (a call that ended waiting) debits only what was reported', () => {
+  const l = new Ledger(bounds({ tokens: 100, costUsd: 1 }), () => NOW);
+  l.settle(l.reserve()!, undefined, true);
+  assert.deepEqual(l.remaining(), { tokens: 100, costUsd: 1 });
+  assert.deepEqual(l.spent(), { tokens: 0, costUsd: 0 });
+  l.settle(l.reserve()!, { usage: { inputTokens: 5, outputTokens: 5 } }, true);
+  assert.deepEqual(l.remaining(), { tokens: 90, costUsd: 1 });
+});
+
 test('release gives a reservation back untouched', () => {
   const l = new Ledger(bounds({ tokens: 10 }), () => NOW);
   l.release(l.reserve()!);
@@ -95,4 +104,33 @@ test('outbound carries one more hop, the reserved budget and the time left minus
   assert.equal(l.outbound('run', 'root', r, 1000, 500).remainingMs, 0);
   now += 100_000;
   assert.equal(l.outbound('run', 'root', r, 1000).remainingMs, 0);
+});
+
+test('concurrent shares are even whatever order they reserve in, and never exceed what is left', () => {
+  const halves = new Ledger(bounds({ tokens: 100, costUsd: 1 }), () => NOW);
+  assert.deepEqual([halves.reserve(0.5), halves.reserve(0.5)], [{ tokens: 50, costUsd: 0.5 }, { tokens: 50, costUsd: 0.5 }]);
+  const thirds = new Ledger(bounds({ tokens: 90 }), () => NOW);
+  assert.deepEqual([thirds.reserve(1 / 3), thirds.reserve(1 / 3), thirds.reserve(1 / 3)], [{ tokens: 30 }, { tokens: 30 }, { tokens: 30 }]);
+  const greedy = new Ledger(bounds({ tokens: 100 }), () => NOW);
+  greedy.reserve(0.8);
+  assert.deepEqual(greedy.reserve(0.5), { tokens: 20 });
+});
+
+test('what earlier invocations spent comes off the budget, and spent() counts on from there', () => {
+  const l = new Ledger(bounds({ tokens: 100, costUsd: 1 }), () => NOW, undefined, { tokens: 30, costUsd: 0.5 });
+  assert.equal(l.inherited, true);
+  assert.deepEqual(l.remaining(), { tokens: 70, costUsd: 0.5 });
+  l.settle(l.reserve(0.5)!, { usage: { inputTokens: 5, outputTokens: 5 }, costUsd: 0.1 });
+  assert.deepEqual(l.spent(), { tokens: 40, costUsd: 0.6 });
+  assert.equal(new Ledger(bounds({ tokens: 10 }), () => NOW).inherited, false);
+  const over = new Ledger(bounds({ tokens: 10 }), () => NOW, undefined, { tokens: 50, costUsd: 0 });
+  assert.equal(over.reserve(), undefined);
+});
+
+test('spent is tracked without a bound too; a kept value that is not totals counts as nothing spent', () => {
+  const l = new Ledger(bounds(), () => NOW, undefined, spentTotals({ tokens: 'x', costUsd: -1 }));
+  assert.deepEqual(l.spent(), { tokens: 0, costUsd: 0 });
+  l.settle(l.reserve()!, { usage: { inputTokens: 2, outputTokens: 3 }, costUsd: 0.25 });
+  l.settle(l.reserve()!);
+  assert.deepEqual(l.spent(), { tokens: 5, costUsd: 0.25 });
 });

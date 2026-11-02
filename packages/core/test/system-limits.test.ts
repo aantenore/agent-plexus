@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ConfigError } from '../src/errors.ts';
-import { limitFindings, resolveLimits, SYSTEM_LIMITS } from '../src/system-limits.ts';
+import { collectLimits, limitFindings, resolveLimits, SYSTEM_LIMITS } from '../src/system-limits.ts';
 
 test('absent limits take the defaults of the table', () => {
   const v = resolveLimits(undefined);
@@ -29,7 +29,7 @@ test('rejected values name their path, all at once', () => {
     (err: unknown) => {
       assert.ok(err instanceof ConfigError);
       const text = (err as ConfigError).errors.join('\n');
-      for (const needle of ['limits.system.maxSteps: must be >= 1', 'limits.system.maxParallel: must be <= 64', 'limits.system.maxRepeats', 'limits.system.timeoutMs: environment variable MISSING is not set', 'limits.system.maxIterations', 'limits.system.bogus: unknown limit', 'limits.registry.maxCardBytes: must be >= 1024', 'limits.nope']) {
+      for (const needle of ['limits.system.maxSteps: must be >= 1', 'limits.system.maxParallel: must be <= 64', 'limits.system.maxRepeats', 'limits.system.timeoutMs: environment variable MISSING is not set', 'limits.system.maxIterations', 'limits.system.bogus: unknown limit', 'limits.nope: unknown limit group (known: system, router, attribution)']) {
         assert.ok(text.includes(needle), `missing: ${needle}\n${text}`);
       }
       return true;
@@ -50,4 +50,14 @@ test('findings: defaults are clean; unbounded fails; outside the safe range warn
     'limits.system.timeoutMs': 'fail', 'limits.system.maxSteps': 'warn', 'limits.system.maxDepth': 'fail',
     'limits.system.maxParallel': 'warn', 'limits.router.maxCandidates': 'warn',
   });
+});
+
+test('a deprecated limit group is ignored and noted, not rejected', () => {
+  const problems: string[] = [];
+  const deprecated: { path: string; message: string }[] = [];
+  const values = collectLimits({ registry: { maxCardBytes: 10 } }, {}, problems, deprecated);
+  assert.deepEqual(problems, []);
+  assert.deepEqual(deprecated.map((d) => d.path), ['$.limits.registry']);
+  assert.equal(values.maxSteps, 20);
+  assert.doesNotThrow(() => resolveLimits({ registry: { cardTtlMs: 1 } }, {}));
 });

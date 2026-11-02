@@ -1,6 +1,6 @@
 # AgentRouterPort
 
-Layer: `routing` (L2 Routing) · Version: 0.1.0 · Conformance: planned
+Layer: `routing` (L2 Routing) · Version: 0.1.0 · Conformance: [`checkRouter`](../../packages/conformance) in `@agent-plexus/conformance`
 
 ## Purpose
 
@@ -40,8 +40,7 @@ asks the router again; the core writes a routing hop for it (`failed`, code `err
 
 ## Conformance
 
-A `checkRouter` suite is planned. It will verify: a decision names a candidate or none; `ranked` contains only
-candidates; the call does not mutate the candidates.
+`checkRouter` in [`@agent-plexus/conformance`](../../packages/conformance) checks this port: rules A1-A5. Among them: a decision names a candidate or none; `ranked` lists only candidates; `route` neither changes the question nor reads the credential. The package README lists all the rules.
 
 ## Version history
 

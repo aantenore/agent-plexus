@@ -1,0 +1,133 @@
+[
+  {
+    "id": "base",
+    "layer": "none",
+    "profile": null,
+    "run": "cases",
+    "cli": true,
+    "description": "The reference adapters: function-member, static-registry, skill-router, basic-topology, memory-execution, rule-attribution, the prototype host."
+  },
+  {
+    "id": "registry-file",
+    "layer": "registry",
+    "profile": "swap-registry",
+    "run": "cases",
+    "cli": true,
+    "description": "Agents read from registry.json by ./adapters/file-registry.ts instead of the configured members."
+  },
+  {
+    "id": "routing-keyword",
+    "layer": "routing",
+    "profile": "swap-routing",
+    "run": "cases",
+    "cli": true,
+    "description": "Members chosen by keyword overlap (./adapters/keyword-router.ts) instead of skill-router rules."
+  },
+  {
+    "id": "topology-linear",
+    "layer": "topology",
+    "profile": "swap-topology",
+    "run": "cases",
+    "cli": true,
+    "description": "sequence and route run by ./adapters/linear-topology.ts instead of basic-topology."
+  },
+  {
+    "id": "execution-file",
+    "layer": "execution",
+    "profile": "swap-execution",
+    "run": "cases",
+    "cli": true,
+    "description": "Journal in JSON files (./adapters/file-execution.ts) instead of memory."
+  },
+  {
+    "id": "execution-sqlite",
+    "layer": "execution",
+    "profile": "swap-execution-sqlite",
+    "run": "cases",
+    "cli": true,
+    "description": "Journal in a SQLite file (sqlite-execution) at SWAP_SQLITE_PATH, a temp path, instead of memory."
+  },
+  {
+    "id": "attribution-last-failure",
+    "layer": "attribution",
+    "profile": "swap-attribution",
+    "run": "cases",
+    "cli": true,
+    "description": "Failures blamed on the last hop that did not complete (./adapters/last-failure-attribution.ts) instead of rule-attribution."
+  },
+  {
+    "id": "member-table",
+    "layer": "member",
+    "profile": "swap-member",
+    "run": "cases",
+    "cli": true,
+    "description": "billing answered by another member adapter, ./adapters/table-member.ts over a JSON rule table, instead of function-member."
+  },
+  {
+    "id": "member-agent-layers",
+    "layer": "member",
+    "profile": "swap-member-agent-layers",
+    "run": "cases",
+    "cli": true,
+    "description": "billing served by an agent-layers stack through the agent-layers member adapter."
+  },
+  {
+    "id": "member-a2a",
+    "layer": "member",
+    "profile": "swap-member-a2a",
+    "run": "cases",
+    "cli": false,
+    "description": "billing served over A2A by a2a-member, against a fake A2A agent on loopback that the test starts (the command line has no agent to call)."
+  },
+  {
+    "id": "host-agent-layers",
+    "layer": "host",
+    "profile": "swap-host",
+    "run": "cases",
+    "cli": true,
+    "description": "The agent-layers host (identity, authorization, guard, eval) instead of the prototype host."
+  },
+  {
+    "id": "all",
+    "layer": "all",
+    "profile": "swap-all",
+    "run": "cases",
+    "cli": true,
+    "description": "Every swap of this example at once: registry, routing, topology, execution (file), attribution, member (table) and host."
+  },
+  {
+    "id": "wait-resume-memory",
+    "layer": "execution",
+    "profile": null,
+    "run": "wait",
+    "restart": false,
+    "cli": false,
+    "description": "A run waits on the host gate before billing and is resumed by the same system on the memory journal."
+  },
+  {
+    "id": "wait-resume-file",
+    "layer": "execution",
+    "profile": "swap-execution",
+    "run": "wait",
+    "restart": true,
+    "cli": false,
+    "description": "A run waits on the host gate before billing and is resumed by a new system on the same file journal; triage replays."
+  },
+  {
+    "id": "wait-resume-sqlite",
+    "layer": "execution",
+    "profile": "swap-execution-sqlite",
+    "run": "wait",
+    "restart": true,
+    "cli": false,
+    "description": "A run waits on the host gate before billing and is resumed by a new system on the same SQLite journal; triage replays."
+  },
+  {
+    "id": "unsupported-kind",
+    "layer": "topology",
+    "profile": "unsupported-kind",
+    "run": "check-fails",
+    "cli": true,
+    "description": "linear-topology with a loop topology: check refuses the kind before any run."
+  }
+]

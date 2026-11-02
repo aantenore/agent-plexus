@@ -233,7 +233,7 @@ test('resume answers a waiting run from another process through a durable journa
   try {
     const file = await waitingSystem(dir);
     const started = captureIo();
-    assert.equal(await main(['run', '--config', file, 'start'], started.io), 1);
+    assert.equal(await main(['run', '--config', file, 'start'], started.io), 3);
     assert.equal(started.out(), '[waiting] needs_input member');
     const hint = /waiting: agent-plexus resume (\S+) --input <text> --wait '([^']+)'/.exec(started.err());
     assert.ok(hint, started.err());
@@ -263,5 +263,37 @@ test('resume needs one run id and exactly one of --input, --approve, --deny', as
     const c = captureIo();
     assert.equal(await main(args, c.io), 2, args.join(' '));
     assert.match(c.err(), /usage: agent-plexus resume/);
+  }
+});
+
+test('run --run-id runs under the given id; a waiting run exits 3 and its resume hint names that id', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-cli-'));
+  try {
+    const file = await waitingSystem(dir);
+    const started = captureIo();
+    assert.equal(await main(['run', '--config', file, '--run-id', 'order-42', '--json', 'start'], started.io), 3);
+    const result = JSON.parse(started.out());
+    assert.deepEqual([result.status, result.runId], ['waiting', 'order-42']);
+    const resumed = captureIo();
+    assert.equal(await main(['resume', 'order-42', '--config', file, '--input', 'x', '--wait', result.wait.token], resumed.io), 0, resumed.err());
+    for (const bad of [['run', '--run-id', '', 'x'], ['run', '--run-id', 'r'.repeat(129), 'x']]) {
+      const c = captureIo();
+      assert.equal(await main(bad, c.io), 2);
+      assert.match(c.err(), /--run-id needs an id of 1 to 128 characters/);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('help documents exit code 3 for a waiting run and names no adapter', async () => {
+  const top = captureIo();
+  await main(['--help'], top.io);
+  assert.match(top.out(), /3 a run waiting for a reply/);
+  for (const name of ['run', 'resume']) {
+    const c = captureIo();
+    await main([name, '--help'], c.io);
+    assert.match(c.out(), /3 when it waits|3 waiting/);
+    assert.doesNotMatch(c.out(), /memory-execution|sqlite-execution/);
   }
 });

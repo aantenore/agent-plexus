@@ -109,7 +109,7 @@ are the host's; without `maxHops` the run may add `limits.system.maxDepth` hops.
 | `runId?` | String | The member's own run id. |
 | `taskRef?` | String | Opaque handle to resume or cancel the member's work (an A2A task and context). |
 | `usage?` | `{inputTokens, outputTokens}` | |
-| `costUsd?` | Number, >= 0 | Present when the member reports it; absent means unknown, and the budget treats it as fully spent. |
+| `costUsd?` | Number, >= 0 | Present when the member reports it; absent means unknown, and the budget treats it as fully spent (on a `waiting` result: as nothing spent yet, the continuation settles the rest). A value that is not a finite non-negative number is dropped by the core. |
 | `wait?` | `WaitRef` | On a `waiting` result of a member call only, set by the core: the wait a resume answers. A member's own is dropped; a topology passes it on with the result. |
 | `ext?` | Ext | |
 
@@ -118,7 +118,8 @@ path>:<n>#<attempt>`, opaque to a caller), `kind` is `input` for a member that w
 `approval` for the host's `ask`, and `member` the member id. It carries no text.
 
 A `SystemResult` is a `MemberResult` plus `runId` and `record: [HopRecord]`, so a system can be a member of another.
-Its `wait` is present exactly when it is `waiting` on a wait the run keeps, and names that wait.
+Its `wait` is present exactly when it is `waiting` on a wait the run keeps, and names that wait. Its `usage` and
+`costUsd` are the core's totals over the records of the invocation that are not `replayed`.
 
 ### AgentEntry
 
@@ -185,12 +186,13 @@ the block yet.
 
 ## Stop reasons
 
-`StopReason` is `{code, layer?, by?, stage?, detail?}`. Consumers branch on `code` only.
+`StopReason` is `{code, layer?, memberLayer?, by?, stage?, detail?}`. Consumers branch on `code` only.
 
 | Field | Meaning |
 | --- | --- |
 | `code` | One of the stop codes below. |
-| `layer?` | Where it stopped: a plexus layer, `host`, or the member's own name for its layer. |
+| `layer?` | Where it stopped: a plexus layer id or `host`. A value that is neither is read as `memberLayer` (the form used before that field). |
+| `memberLayer?` | The member's own name for where it stopped, a layer of its own stack. Never compared with plexus layer ids, so a member layer named like one (`routing`) is not taken for it. |
 | `by?` | The instance that stopped it: a host name, a limit path such as `limits.system.maxSteps`. For people and telemetry. |
 | `stage?` | `send` or `receive`, for a gate check. |
 | `detail?` | Internal text. Never parsed, never shown to a caller: the CLI leaves it out of its JSON output, in the `reason` of the result and in every `reason` of the record. |
@@ -217,9 +219,10 @@ the block yet.
 | Shape | `ext?: { [key]: JSON value }`. JSON values only. |
 | Keys | `<adapter>.<name>`; the namespace is the adapter name. |
 | Who writes | The adapter that produces the shape, only keys in its own namespace. |
+| Protocol keys | `plexus.` is the core's namespace, reserved. A member writes two of its keys to steer the topology: `plexus.delegate` (`{ member, input? }`, for `supervise`) and `plexus.handoff` (a member id, for `handoff`). No other `plexus.` key may be written. The bare `delegate` and `handoff` of 0.1.0 are deprecated: `basic-topology` still reads them (the `plexus.` key wins when both are set), and the conformance kit reports them as warnings, not failures. |
 | Core | Copies `ext` unchanged wherever a shape passes through. Never reads, branches on, logs or traces an adapter key. A `Condition` may test an `ext` value. |
 
-Declaration of `produces` / `reads` in the adapter descriptor, and a conformance check of the keys, are planned.
+Declaration of `produces` / `reads` in the adapter descriptor is planned. The conformance suites already check that the keys an adapter writes are namespaced.
 
 ## Condition
 
@@ -244,8 +247,8 @@ A node is a member id or a nested `TopologySpec`; every kind is bounded. Every k
 | `parallel` | `branches: [Node]`, `join?: "all" \| "first"`, `merge?: Node` | Fan out and join; with `first`, the other branches are cancelled. |
 | `route` | `candidates: [String] \| {skills?, tags?, attrs?}`, `router?: String`, `fallback?: Node` | The AgentRouterPort picks one; none chosen runs `fallback` or stops with `rejected`. |
 | `loop` | `body: Node`, `until: Condition`, `maxIterations?: N` | Bounded by `limits.system.maxIterations` by default. |
-| `handoff` | `start: String`, `members: [String]`, `router?: String`, `maxHandoffs?: N` | After each answer the router picks the next member or ends. |
-| `supervise` | `supervisor: String`, `members: [String]` | The supervisor chooses whom to call, through the system. |
+| `handoff` | `start: String`, `members: [String]`, `router?: String`, `maxHandoffs?: N` | After each answer the member (`ext["plexus.handoff"]`) or the router picks the next member, or it ends. |
+| `supervise` | `supervisor: String`, `members: [String]` | The supervisor is called with the node input; it names the member to call with `ext["plexus.delegate"] = { member, input? }` and is called again with the member's output, until it answers without it. Bounded by `limits.system.maxHandoffs`. |
 | `graph` | `nodes: {id: Node}`, `start`, `edges: [{from, to, when?: Condition}]`, `end: [String]` | Explicit state machine. |
 
 The config schema checks the shape of every kind; whether members and routers exist, and whether the topology adapter
@@ -259,7 +262,7 @@ The core names its spans, events and metrics `plexus.*` only, and sets `plexus.l
 | --- | --- |
 | span | `plexus.run`, `plexus.hop`, `plexus.route`; `plexus.node` is declared but not emitted yet |
 | attribute | `plexus.layer`, `plexus.system`, `plexus.member`, `plexus.hop`, `plexus.node.path`, `plexus.node.kind`, `plexus.route.choice`, `plexus.run.status`, `plexus.run.reason`, `plexus.parts.count`, `plexus.execution.key`, `plexus.error.message`; `plexus.node.kind` is declared but not emitted yet |
-| event | `plexus.limit`, `plexus.parts.dropped`, `plexus.member.resumed`, `plexus.checkpoint.ignored`, `plexus.execution.write_failed` (a value the core keeps, or the run's `end` or `release`, could not be written: the key and the error, never the value), `plexus.execution.reply_kept` (a resume went on with the reply an earlier resume delivered), `plexus.execution.wait_inferred` (a `waiting` result named no wait of the run: the latest is kept) |
+| event | `plexus.limit`, `plexus.parts.dropped`, `plexus.member.resumed`, `plexus.checkpoint.ignored`, `plexus.execution.write_failed` (a value the core keeps, or the run's `end` or `release`, could not be written: the key and the error, never the value), `plexus.execution.reply_kept` (a resume went on with the reply an earlier resume delivered), `plexus.execution.wait_inferred` (a `waiting` result named no wait of the run: the latest is kept), `plexus.member.cancel_failed` (a `cancel` of an abandoned or cut-off call threw or outlived `limits.system.cancelTimeoutMs`), `plexus.member.figure_dropped` (a member's `usage` or `costUsd` was not a finite non-negative number and was dropped) |
 | metric | `plexus.hops`, `plexus.attributions` |
 
 Credentials never appear in attributes.

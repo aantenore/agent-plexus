@@ -3,7 +3,7 @@ import type {
   AnonymousCaller, Caller as LayersCaller, EvalCase as LayersEvalCase, EvalRun, EvalScore, GuardStage, Layer, PublicCaller,
   RunResult, StopReason as LayersStopReason,
 } from '@agent-layers/core';
-import { inputText } from '@agent-plexus/core';
+import { inputText, memberLayerOf } from '@agent-plexus/core';
 import type { Caller, EvalCase, MemberResult, Score, StopReason, SystemResult } from '@agent-plexus/core';
 
 /** Namespace of the `ext` keys this package writes. */
@@ -52,7 +52,10 @@ export function plexusCaller(caller: LayersCaller): Caller {
   };
 }
 
-/** An agent-layers run result as a member result, one to one; the guard stage is not carried. */
+/**
+ * An agent-layers run result as a member result, one to one: the stop is the `member` layer's, and the agent-layers layer
+ * that stopped it is `memberLayer`. The guard stage is not carried.
+ */
 export function memberResultOf(run: RunResult): MemberResult {
   const { reason } = run;
   return {
@@ -61,7 +64,8 @@ export function memberResultOf(run: RunResult): MemberResult {
     ...(reason ? {
       reason: {
         code: reason.code,
-        ...(reason.layer ? { layer: reason.layer } : {}),
+        layer: 'member',
+        ...(reason.layer ? { memberLayer: reason.layer } : {}),
         ...(reason.by ? { by: reason.by } : {}),
         ...(reason.detail ? { detail: reason.detail } : {}),
       },
@@ -73,13 +77,15 @@ export function memberResultOf(run: RunResult): MemberResult {
 }
 
 /**
- * A plexus stop reason as an agent-layers one. A layer agent-layers does not have becomes `harness`; the internal
- * `detail` is dropped, as it may carry error text.
+ * A plexus stop reason as an agent-layers one. The layer is the member's own layer when agent-layers has it (a stack
+ * member's stop), else `reason.layer` when agent-layers has it, else `harness`; the internal `detail` is dropped, as it
+ * may carry error text.
  */
 export function layersReason(reason: StopReason): LayersStopReason {
+  const own = memberLayerOf(reason);
   return {
     code: reason.code,
-    layer: reason.layer && isLayer(reason.layer) ? reason.layer : FALLBACK_LAYER,
+    layer: own && isLayer(own) ? own : reason.layer && isLayer(reason.layer) ? reason.layer : FALLBACK_LAYER,
     ...(reason.by ? { by: reason.by } : {}),
     ...(reason.stage ? { stage: guardStageOf(reason.stage) } : {}),
   };

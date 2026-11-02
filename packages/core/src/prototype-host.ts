@@ -1,4 +1,4 @@
-import type { Attributes, Host, ScoreHook, SpanHandle, TelemetryHook } from './hooks.ts';
+import type { Attributes, Host, ScoreContext, ScoreHook, SpanHandle, TelemetryHook } from './hooks.ts';
 import { ATTR, SPAN } from './names.ts';
 import { sameIdentity, type EvalCase, type HopRecord, type Score, type SystemResult } from './shapes.ts';
 
@@ -10,7 +10,7 @@ export interface PrototypeHostOptions {
   quiet?: boolean;
   /** Where hop lines go (default: standard error). */
   write?: (line: string) => void;
-  /** Reads a stored text by key, so member expectations can check outputs; without it only `status` is checked. */
+  /** Reads a stored text by key when the scorer is given no `read`; without either only `status` is checked. */
   read?: (key: string) => Promise<string | undefined>;
 }
 
@@ -69,25 +69,30 @@ function toScore(metric: string, checks: Check[], member?: string): Score {
 const lastHop = (record: HopRecord[], member: string): HopRecord | undefined =>
   record.filter((h) => h.member === member && !h.abandoned).at(-1);
 
+/**
+ * The built-in scorer: the `expected` fields of a case only. Used by the prototype host, and by a system whose host has
+ * no `score`, so a case with expectations is never passed unchecked. `read` gives member outputs; without it a text
+ * expectation on a member fails with `output unavailable`.
+ */
+export async function expectedScores(evalCase: EvalCase, result: SystemResult, read?: ScoreContext['read']): Promise<Score[]> {
+  const scores: Score[] = [];
+  const { output, members } = evalCase.expected ?? {};
+  if (output) scores.push(toScore('expected.output', textChecks(result.output, output)));
+  for (const [member, expected] of Object.entries(members ?? {})) {
+    const hop = lastHop(result.record, member);
+    const checks: Check[] = [{ ok: !!hop, reason: 'called' }];
+    if (hop && expected.status !== undefined) checks.push({ ok: hop.status === expected.status, reason: 'status' });
+    if (hop && (expected.contains !== undefined || expected.matches !== undefined)) {
+      const text = hop.outputRef && read ? await read(hop.outputRef) : undefined;
+      checks.push(...(text === undefined ? [{ ok: false, reason: 'output unavailable' }] : textChecks(text, expected)));
+    }
+    scores.push(toScore('expected.member', checks, member));
+  }
+  return scores;
+}
+
 function scoreHook(read: PrototypeHostOptions['read']): ScoreHook {
-  return {
-    async score(evalCase: EvalCase, result: SystemResult): Promise<Score[]> {
-      const scores: Score[] = [];
-      const { output, members } = evalCase.expected ?? {};
-      if (output) scores.push(toScore('expected.output', textChecks(result.output, output)));
-      for (const [member, expected] of Object.entries(members ?? {})) {
-        const hop = lastHop(result.record, member);
-        const checks: Check[] = [{ ok: !!hop, reason: 'called' }];
-        if (hop && expected.status !== undefined) checks.push({ ok: hop.status === expected.status, reason: 'status' });
-        if (hop && (expected.contains !== undefined || expected.matches !== undefined)) {
-          const text = hop.outputRef && read ? await read(hop.outputRef) : undefined;
-          checks.push(...(text === undefined ? [{ ok: false, reason: 'output unavailable' }] : textChecks(text, expected)));
-        }
-        scores.push(toScore('expected.member', checks, member));
-      }
-      return scores;
-    },
-  };
+  return { score: (evalCase, result, ctx) => expectedScores(evalCase, result, ctx?.read ?? read) };
 }
 
 /**

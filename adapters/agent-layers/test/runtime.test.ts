@@ -107,6 +107,8 @@ test('layersReason: a plexus layer without an agent-layers equal is harness; sta
   assert.deepEqual(layersReason({ code: 'timeout', layer: 'topology', by: 'x', detail: 'internal text' }), { code: 'timeout', layer: 'harness', by: 'x' });
   assert.deepEqual(layersReason({ code: 'guard_block', layer: 'guardrail', stage: 'send' }), { code: 'guard_block', layer: 'guardrail', stage: 'tool_args' });
   assert.deepEqual(layersReason({ code: 'guard_block', layer: 'host', stage: 'receive' }), { code: 'guard_block', layer: 'harness', stage: 'tool_result' });
+  assert.deepEqual(layersReason({ code: 'guard_block', layer: 'member', memberLayer: 'guardrail' }), { code: 'guard_block', layer: 'guardrail' });
+  assert.deepEqual(layersReason({ code: 'error', layer: 'member', memberLayer: 'not-a-layer' }), { code: 'error', layer: 'harness' });
 });
 
 test('runResultOf: status, output, usage and cost; hops as a count', () => {

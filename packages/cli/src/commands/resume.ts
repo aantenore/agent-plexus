@@ -10,7 +10,7 @@ export interface ResumeArgs extends ProjectArgs {
   quiet?: boolean;
 }
 
-/** Answers a waiting run and runs it again under its run id. Output and exit code as for `run`. */
+/** Answers a waiting run and runs it again under its run id. Output and exit codes as for `run`. */
 export async function resume(io: Io, args: ResumeArgs): Promise<number> {
   const { system } = await openProject(io, args);
   try {

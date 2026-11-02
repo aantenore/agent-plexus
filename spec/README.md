@@ -19,4 +19,4 @@ the [port index](ports/README.md), which explains the notation used on the pages
 then [hooks.md](hooks.md).
 
 An implementation is conformant for a port when it passes the conformance suite listed on that port's page and declares
-the port version it implements. Conformance suites are planned; today each adapter is covered by its own tests.
+the port version it implements. The suites are in [`@agent-plexus/conformance`](../packages/conformance).

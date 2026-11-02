@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { prototypeHost } from '../src/prototype-host.ts';
+import { expectedScores, prototypeHost } from '../src/prototype-host.ts';
 import type { EvalCase, HopRecord, SystemResult } from '../src/shapes.ts';
 
 const hop = (member: string, extra: Partial<HopRecord> = {}): HopRecord => ({
@@ -49,4 +49,13 @@ test('score: member expectations check the status and, with a reader, the output
   assert.deepEqual(scores.map((s) => [s.metric, s.member, s.value]), [['expected.member', 'billing', 1], ['expected.member', 'triage', 0], ['expected.member', 'ghost', 0]]);
   const noReader = await prototypeHost({ quiet: true }).score!.score({ id: 'c', input: 'q', expected: { members: { billing: { contains: 'paid' } } } }, result('x', record));
   assert.equal(noReader[0]!.value, 0);
+});
+
+test('score: the read a caller passes is used for member outputs, before the one the host was built with', async () => {
+  const c: EvalCase = { id: 'c', input: 'q', expected: { members: { a: { contains: 'yes' } } } };
+  const r = result('x', [hop('a', { outputRef: 'k' })]);
+  const built = prototypeHost({ quiet: true, read: async () => 'no' });
+  assert.equal((await built.score!.score(c, r))[0]!.value, 0);
+  assert.equal((await built.score!.score(c, r, { read: async (key) => (key === 'k' ? 'yes' : undefined) }))[0]!.value, 1);
+  assert.deepEqual(await expectedScores(c, r), [{ metric: 'expected.member', value: 0, member: 'a', reason: 'failed: output unavailable' }]);
 });

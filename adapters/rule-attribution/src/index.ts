@@ -1,6 +1,6 @@
 import {
   defineAdapter,
-  isLayer,
+  memberLayerOf as reasonMemberLayer,
   PORT_VERSIONS,
   type AdapterContext,
   type Attribution,
@@ -193,7 +193,7 @@ async function byStopCode(candidate: HopRecord, index: number, hops: HopRecord[]
   return { layer: 'member', ...at(candidate), confidence: CONFIDENCE.high, evidence, layerFrom: candidate, reason, graded: true };
 }
 
-/** The member's own name for where it failed: the first failed span with a layer, else the reason's layer. */
+/** The member's own name for where it failed: the first failed span with a layer, else the reason's `memberLayer`. */
 async function memberLayerOf(finding: Finding, source: RecordSource | undefined): Promise<string | undefined> {
   const hop = finding.layerFrom;
   if (hop && source?.spans) {
@@ -205,8 +205,7 @@ async function memberLayerOf(finding: Finding, source: RecordSource | undefined)
       // Spans are optional insight; the record alone is enough.
     }
   }
-  const own = finding.reason?.layer;
-  return own && !isLayer(own) && own !== 'host' ? own : undefined;
+  return reasonMemberLayer(finding.reason);
 }
 
 /** Deterministic attribution over the hop record. */

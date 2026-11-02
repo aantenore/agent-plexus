@@ -1,6 +1,6 @@
 {
   "name": "@agent-plexus/adapter-function-member",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Calls an in-process function as an agent-plexus member",
   "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-plexus-adapter", "member"],
   "homepage": "https://github.com/aantenore/agent-plexus/tree/main/adapters/function-member#readme",
@@ -37,10 +37,11 @@
     "prepack": "npm run build && node ../../scripts/copy-license.mjs"
   },
   "peerDependencies": {
-    "@agent-plexus/core": "^0.1.0"
+    "@agent-plexus/core": "^0.2.0"
   },
   "devDependencies": {
-    "@agent-plexus/core": "0.1.0",
+    "@agent-plexus/conformance": "0.2.0",
+    "@agent-plexus/core": "0.2.0",
     "@types/node": "^24.19.0",
     "typescript": "^7.0.2"
   }

@@ -7,6 +7,7 @@ export const adapter = defineAdapter<'MemberPort', Record<string, never>>({
   maps: { technology: 'test fixture' },
   portVersion: PORT_VERSIONS.MemberPort,
   tiers: ['prototype'],
+  capabilities: { waits: true, resume: true },
   create: (_options, ctx): MemberPort => ({
     name: ctx.name,
     describe: async () => ({ id: ctx.name, name: ctx.name, description: 'asks for more', skills: [], endpoint: { protocol: 'function' }, trust: { signed: false, pinned: false } }),

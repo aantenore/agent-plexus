@@ -1,6 +1,6 @@
 # AttributionPort
 
-Layer: `attribution` (L5 Attribution) · Version: 0.1.0 · Conformance: planned
+Layer: `attribution` (L5 Attribution) · Version: 0.1.0 · Conformance: [`checkAttribution`](../../packages/conformance) in `@agent-plexus/conformance`
 
 ## Purpose
 
@@ -26,8 +26,11 @@ A `RecordSource` is an interface inside this layer, not a port: `records(rootRun
 - Skip hops the topology abandoned.
 - `layer` is a plexus layer id, or `host` when the host's gate refused a call. `member` names the hop's member when a
   member is to blame; a route that chose nobody, and a system limit, name none.
+- `reason.layer` is read only as a plexus layer id or `host`. A member layer id that equals a plexus layer id (a
+  member's own `routing`, say) would be ambiguous there, so a member puts its own layer in `reason.memberLayer`.
 - `memberLayer` is the member's own name for where it failed. Read it from the member's spans when the source has them,
-  else from `reason.layer` unless that is a plexus layer id or `host`.
+  else from `reason.memberLayer`, else from `reason.layer` when that is neither a plexus layer id nor `host` (the form
+  used before `memberLayer`; core `memberLayerOf` reads both).
 - `evidence` holds short identifiers (codes, hop ids, node paths), never texts.
 - Waiting is not a failure: `needs_input`, a member's `needs_auth` and `aborted` give no attribution.
 - The core passes at most `limits.attribution.maxRecords` records, and an in-memory source of recent runs.
@@ -42,8 +45,7 @@ An adapter that cannot decide returns an empty list. A source that fails to deli
 
 ## Conformance
 
-A `checkAttribution` suite is planned. It will verify: an empty record gives no attribution; `confidence` is in
-[0, 1]; abandoned hops are skipped; the rules table of the adapter holds.
+`checkAttribution` in [`@agent-plexus/conformance`](../../packages/conformance) checks this port: rules At1-At8. Among them: an empty record gives no attribution; `confidence` is in [0, 1]; abandoned, waiting and `aborted` hops are skipped; stored texts never reach the evidence; the adapter's rules table holds. The package README lists all the rules.
 
 ## Version history
 

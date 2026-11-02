@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { stableStringify, runGuards } from '@agent-layers/core';
 import type { AccessQuestion, ApprovalPort, ComposeOptions, Risk, Stack } from '@agent-layers/core';
-import { defineAdapter, RESUME_OWNER_ONLY, sameIdentity } from '@agent-plexus/core';
+import { defineAdapter, expectedScores, RESUME_OWNER_ONLY, sameIdentity } from '@agent-plexus/core';
 import type {
   AgentEntry, GateCheck, GateDecision, GateHook, GateQuestion, GateVerdict, Host, ResumeQuestion, ScoreHook, TelemetryHook,
 } from '@agent-plexus/core';
@@ -154,11 +154,14 @@ function scoreOf(stack: Stack): ScoreHook | undefined {
   const evaluators = stack.ports.eval;
   if (!evaluators.length) return undefined;
   return {
-    async score(evalCase, result) {
+    async score(evalCase, result, ctx) {
       const mapped = layersEvalCase(evalCase);
       const run = evalRunOf(result);
       const scores = await Promise.all(evaluators.map((e) => e.score(mapped, run)));
-      return scores.flat().map(plexusScore);
+      // The evaluators see the system's output only: expectations on members are checked here, on the stored texts.
+      const members = evalCase.expected?.members;
+      const memberScores = members ? await expectedScores({ id: evalCase.id, input: evalCase.input, expected: { members } }, result, ctx?.read) : [];
+      return [...scores.flat().map(plexusScore), ...memberScores];
     },
   };
 }

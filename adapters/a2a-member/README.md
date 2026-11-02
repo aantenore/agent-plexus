@@ -9,7 +9,8 @@ layer (cards and the lower-case wire shapes are read as they are).
 
 A remote agent, in any language or framework, becomes a member: each call is one A2A message. The call returns as soon
 as the remote side has a task, the task id is journaled through `ctx.checkpoint`, and the task is polled until it ends
-or waits. A restart resumes the same task through `resume` instead of sending the request again.
+or waits. A restart resumes the same task through `resume` instead of sending the request again. Declared
+`capabilities`: `resume`, `cancel`, `checkpoint`, `waits`.
 
 ## Options
 
@@ -28,7 +29,7 @@ or waits. A restart resumes the same task through `resume` instead of sending th
 | `maxCardBytes` | integer | `65536` | Largest agent card (or key set) read |
 | `maxResponseBytes` | integer | `4194304` | Largest JSON-RPC answer read (min 1024) |
 | `cardTtlMs` | integer | `300000` | How long a fetched card and its endpoint are trusted |
-| `cancelTimeoutMs` | integer | `5000` | Time limit of the `CancelTask` sent after an abort or a deadline |
+| `cancelTimeoutMs` | integer | `5000` | Time limit of each `CancelTask`: after a deadline, a failure or an abort before the checkpoint, and in `cancel` |
 
 ```json
 {
@@ -60,7 +61,7 @@ Ranges and the production checks are declared once in the descriptor; `agent-ple
 | `options.maxCardBytes` | 65536 | 1024–1048576 | | Largest card or key set read |
 | `options.maxResponseBytes` | 4194304 | ≥ 1024 | | Largest JSON-RPC answer read |
 | `options.cardTtlMs` | 300000 | 0–86400000 | | How long a card is trusted |
-| `options.cancelTimeoutMs` | 5000 | 100–60000 | | Bounds the `CancelTask` after an abort or a deadline |
+| `options.cancelTimeoutMs` | 5000 | 100–60000 | | Bounds each `CancelTask` |
 
 All accept `${env:NAME}`.
 
@@ -81,11 +82,14 @@ id and the context id, and `GetTask` runs every `pollMs`. The time is bounded by
 **resume.** Without input: continues polling that task. With input: sends it as a message on the same task and
 context (for `input-required`), then polls. Called by the core on restart with the journaled reference.
 
-**cancel.** `CancelTask` for the task of the reference.
+**cancel.** `CancelTask` for the task of the reference. The core calls it for a call it cut off whose task it knows
+(an abort, or the core's own step or deadline timeout), and for a `waiting` task a topology abandons.
 
-**abort and deadline.** When `ctx.signal` aborts or the time runs out, `CancelTask` is sent (bounded by
-`cancelTimeoutMs`) and the call returns `stopped`: `aborted` when the caller stopped it with time left, `timeout`
-otherwise.
+**abort and deadline.** The call returns `stopped`: `aborted` when the caller stopped it with time left, `timeout`
+otherwise (the core's own timeout aborts the call signal with a `TimeoutError` reason). When this adapter's own time
+runs out, on a failure, or when the call is cut off before its task was checkpointed, `CancelTask` is sent here
+(bounded by `cancelTimeoutMs`). A call the core cuts off after the checkpoint, or on a resumed task, is not cancelled
+here: the core holds the reference and calls `cancel`, so the task is cancelled once.
 
 **Bounds.** Every message carries the [bounds extension](../../spec/extensions/bounds-v1.md): the URI is sent in the
 `A2A-Extensions` header (`required: false`; an agent that does not know it ignores it) and

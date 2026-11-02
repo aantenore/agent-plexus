@@ -22,10 +22,11 @@ same version. The packages under `examples/*` are private and are not part of th
 ## Later releases
 
 1. Set the new version in every package and in the internal dependency ranges, for example
-   `npm version 0.2.0 --workspaces --no-git-tag-version`, then update the `^0.1.0` ranges and the exact `0.1.0`
+   `npm version 0.3.0 --workspaces --no-git-tag-version`, then update the `^0.2.0` ranges and the exact `0.2.0`
    development pins on `@agent-plexus/*` packages (and in `examples/*`) to the new version and run `npm install` to
-   refresh the lockfile.
-2. Commit, tag `v0.2.0`, push.
+   refresh the lockfile. While the major is 0 a caret range stops at the next minor (`^0.2.0` does not match `0.3.0`),
+   so every internal range moves with the version: the packages are released in lockstep.
+2. Commit, tag `v0.3.0`, push.
 3. `npm run release:dry`, then `npm run release`. A version that is already on npm cannot be published again.
 
 ## From GitHub Actions
@@ -42,6 +43,10 @@ npm limits how many new packages an account can create in a short time (HTTP 429
 package can hit it: wait and run the release again, it publishes only what is missing.
 
 ## Notes
+
+- 0.2.0 follows the published 0.1.0 of `@agent-plexus/core`: the core gained exports, so every package moved to 0.2.0
+  together, `@agent-plexus/conformance` included, with internal ranges at `^0.2.0`. Port versions (`PORT_VERSIONS`)
+  are unchanged at 0.1.0: adapters built for 0.1.0 load as before.
 
 - `prepack` in each package builds it and copies the root `LICENSE` into the package folder (ignored by git). The
   build of a package needs the `dist/` of the packages it depends on, which `npm run build` (dependency order)

@@ -54,7 +54,7 @@ test('descriptor fills TopologyPort with the supported kinds', () => {
   assert.equal(adapter.name, 'basic-topology');
   assert.deepEqual(adapter.tiers, ['prototype', 'production']);
   assert.deepEqual(adapter.maps, { technology: 'in-process topology executor' });
-  assert.deepEqual([...createBasicTopology().kinds], ['sequence', 'route', 'loop', 'parallel', 'handoff', 'graph']);
+  assert.deepEqual([...createBasicTopology().kinds], ['sequence', 'route', 'loop', 'parallel', 'handoff', 'supervise', 'graph']);
 });
 
 test('sequence chains outputs and reports step paths', async () => {
@@ -274,11 +274,9 @@ test('parallel join first falls back to the first non-completed when none comple
 test('unsupported kinds are rejected at bind, naming the kind', () => {
   const topology = createBasicTopology();
   const info = { system: 'test', members: [] };
-  assert.throws(() => topology.bind({ kind: 'supervise', supervisor: 's', members: ['a'] }, info), /supervise/);
-  assert.throws(
-    () => topology.bind({ kind: 'sequence', steps: ['a', { kind: 'supervise', supervisor: 's', members: ['a'] }] }, info),
-    /root\.steps\[1\].*supervise/,
-  );
+  const swarm = { kind: 'swarm', members: ['a'] } as unknown as TopologySpec;
+  assert.throws(() => topology.bind(swarm, info), /swarm/);
+  assert.throws(() => topology.bind({ kind: 'sequence', steps: ['a', swarm] }, info), /root\.steps\[1\].*swarm/);
 });
 
 test('malformed specs are rejected at bind', () => {
@@ -289,6 +287,8 @@ test('malformed specs are rejected at bind', () => {
   assert.throws(() => topology.bind({ kind: 'handoff', start: '', members: ['a'] }, info), /start/);
   assert.throws(() => topology.bind({ kind: 'handoff', start: 'a', members: [] }, info), /members/);
   assert.throws(() => topology.bind({ kind: 'handoff', start: 'a', members: ['a'], maxHandoffs: 0 }, info), /maxHandoffs/);
+  assert.throws(() => topology.bind({ kind: 'supervise', supervisor: '', members: ['a'] }, info), /supervisor/);
+  assert.throws(() => topology.bind({ kind: 'supervise', supervisor: 's', members: [] }, info), /members/);
   assert.throws(() => topology.bind({ kind: 'graph', nodes: {}, start: 'a', edges: [], end: [] }, info), /nodes/);
   assert.throws(() => topology.bind({ kind: 'graph', nodes: { a: 'a' }, start: 'b', edges: [], end: ['a'] }, info), /"start" names unknown node "b"/);
   assert.throws(() => topology.bind({ kind: 'graph', nodes: { a: 'a' }, start: 'a', edges: [{ from: 'a', to: 'z' }], end: ['a'] }, info), /edges\[0\]\.to names unknown node "z"/);
@@ -320,7 +320,7 @@ test('aborting between steps stops the sequence', async () => {
   assert.equal(calls.length, 1);
 });
 
-const handoffTo = (member: string): Partial<MemberResult> => ({ ext: { handoff: member } });
+const handoffTo = (member: string): Partial<MemberResult> => ({ ext: { 'plexus.handoff': member } });
 
 test('handoff follows the member that names the next one, passing the output on', async () => {
   const { scope, calls, routes } = fakeScope((member) => (member === 'a' ? ok('from a', handoffTo('b')) : member === 'b' ? ok('from b', handoffTo('c')) : ok('final')));
@@ -382,7 +382,7 @@ test('handoff to something that is not a member is rejected, naming it', async (
   assert.match(result.reason?.detail ?? '', /ghost/);
   assert.equal(calls.length, 1);
 
-  const odd = fakeScope(() => ok('x', { ext: { handoff: 7 } }));
+  const odd = fakeScope(() => ok('x', { ext: { 'plexus.handoff': 7 } }));
   const bad = await run({ kind: 'handoff', start: 'a', members: ['a'] }, odd.scope);
   assert.equal(bad.reason?.code, 'rejected');
 });
@@ -683,4 +683,130 @@ test('graph: a waiting result follows only an edge whose condition names waiting
     assert.equal(moved.status, 'completed');
     assert.deepEqual(named.calls.map((c) => c.member), ['a', 'b']);
   }
+});
+
+// supervise -----------------------------------------------------------------------------------------------------------
+
+/**
+ * A supervisor that follows a script: on each of its turns it delegates to the next entry (a member id, or a member id
+ * and an input), and once the script is done it completes with what it was last told. Other members echo.
+ */
+function supervisor(script: (string | { member: string; input?: unknown })[], extra: Partial<MemberResult> = {}): Reply {
+  let turn = 0;
+  return (member, input, options) => {
+    const text = typeof input === 'string' ? input : input.text;
+    if (member !== 'sup') return ok(`${member}(${text})`, extra);
+    const next = script[turn++];
+    if (next === undefined) return ok(`done: ${text}`, extra);
+    const delegate = typeof next === 'string' ? { member: next } : next;
+    return ok(`plan ${turn} at ${options.node}`, { ...extra, ext: { 'plexus.delegate': delegate } });
+  };
+}
+
+const SUPERVISE: TopologySpec = { kind: 'supervise', supervisor: 'sup', members: ['a', 'b'] };
+
+test('supervise: a supervisor that does not delegate is the node result', async () => {
+  const { scope, calls } = fakeScope(supervisor([]));
+  const result = await run(SUPERVISE, scope);
+  assert.deepEqual(result, { status: 'completed', output: 'done: in' });
+  assert.deepEqual(calls.map((c) => [c.member, c.options.node]), [['sup', 'root.supervisor[0]']]);
+});
+
+test('supervise: one delegation calls the member with the supervisor output, then reports the turn back', async () => {
+  const { scope, calls } = fakeScope(supervisor(['a']));
+  const result = await run(SUPERVISE, scope);
+  assert.deepEqual(calls.map((c) => [c.member, c.options.node, c.input]), [
+    ['sup', 'root.supervisor[0]', 'in'],
+    ['a', 'root.members[0]', 'plan 1 at root.supervisor[0]'],
+    ['sup', 'root.supervisor[1]', '[a]\na(plan 1 at root.supervisor[0])'],
+  ]);
+  assert.deepEqual(result, { status: 'completed', output: 'done: [a]\na(plan 1 at root.supervisor[0])' });
+});
+
+test('supervise: two delegations, the second with an input of its own; usage and cost of every call are summed', async () => {
+  const { scope, calls } = fakeScope(supervisor(['a', { member: 'b', input: { text: 'look up order 7' } }], { usage: { inputTokens: 2, outputTokens: 1 }, costUsd: 0.25 }));
+  const result = await run(SUPERVISE, scope);
+  assert.deepEqual(calls.map((c) => [c.member, c.options.node]), [
+    ['sup', 'root.supervisor[0]'], ['a', 'root.members[0]'], ['sup', 'root.supervisor[1]'], ['b', 'root.members[1]'], ['sup', 'root.supervisor[2]'],
+  ]);
+  assert.deepEqual(calls[3]?.input, { text: 'look up order 7' });
+  assert.equal(calls[4]?.input, '[b]\nb(look up order 7)');
+  assert.equal(result.output, 'done: [b]\nb(look up order 7)');
+  assert.deepEqual(result.usage, { inputTokens: 10, outputTokens: 5 });
+  assert.equal(result.costUsd, 1.25);
+});
+
+test('supervise: a delegation outside members, or malformed, stops rejected in the topology layer', async () => {
+  for (const [delegate, named] of [[{ member: 'z' }, '"z"'], ['a', '"undefined"'], [{ member: 'a', input: 7 }, 'input']] as const) {
+    const { scope, calls } = fakeScope((member) => (member === 'sup' ? ok('plan', { ext: { 'plexus.delegate': delegate }, usage: { inputTokens: 1, outputTokens: 1 } }) : ok(member)));
+    const result = await run(SUPERVISE, scope);
+    assert.deepEqual([result.status, result.reason?.code, result.reason?.layer], ['stopped', 'rejected', 'topology']);
+    assert.match(result.reason?.detail ?? '', new RegExp(named));
+    assert.deepEqual(result.usage, { inputTokens: 1, outputTokens: 1 });
+    assert.deepEqual(calls.map((c) => c.member), ['sup']);
+  }
+});
+
+test('supervise: delegations are bounded by limits.system.maxHandoffs', async () => {
+  const { scope, calls } = fakeScope(supervisor(['a', 'b', 'a', 'b']), { limits: { maxHandoffs: 2 } });
+  const result = await run(SUPERVISE, scope);
+  assert.deepEqual([result.status, result.reason?.code, result.reason?.layer, result.reason?.by], ['stopped', 'limit', 'topology', 'limits.system.maxHandoffs']);
+  assert.equal(result.output, 'plan 3 at root.supervisor[2]');
+  assert.deepEqual(calls.map((c) => c.member), ['sup', 'a', 'sup', 'b', 'sup']);
+});
+
+test('supervise: a result that is not completed, from the supervisor or a member, ends the node with it', async () => {
+  const fromMember = fakeScope((member) => (member === 'sup' ? ok('plan', { ext: { 'plexus.delegate': { member: 'a' } } }) : failed('a broke')));
+  assert.deepEqual(await run(SUPERVISE, fromMember.scope), { status: 'failed', output: 'a broke', reason: { code: 'error' } });
+  assert.deepEqual(fromMember.calls.map((c) => c.member), ['sup', 'a']);
+
+  const fromSupervisor = fakeScope(() => failed('sup broke'));
+  assert.equal((await run(SUPERVISE, fromSupervisor.scope)).output, 'sup broke');
+  assert.equal(fromSupervisor.calls.length, 1);
+});
+
+test('supervise: a waiting member or supervisor passes the wait through', async () => {
+  const waiting = (member: string): MemberResult => ({ status: 'waiting', output: '', reason: { code: 'needs_input' }, wait: { token: `call:${member}:0#0`, kind: 'input', member } });
+  const member = fakeScope((m) => (m === 'sup' ? ok('plan', { ext: { 'plexus.delegate': { member: 'b' } } }) : waiting(m)));
+  const fromMember = await run(SUPERVISE, member.scope);
+  assert.equal(fromMember.status, 'waiting');
+  assert.deepEqual(fromMember.wait, { token: 'call:b:0#0', kind: 'input', member: 'b' });
+
+  const sup = fakeScope((m) => waiting(m));
+  assert.deepEqual((await run(SUPERVISE, sup.scope)).wait, { token: 'call:sup:0#0', kind: 'input', member: 'sup' });
+});
+
+test('supervise: node paths are unique per call and the same on a replay, so a journal replays every call', async () => {
+  const nested: TopologySpec = { kind: 'sequence', steps: ['a', SUPERVISE] };
+  const live = supervisor(['a', 'b', 'a']);
+  const journal = new Map<string, MemberResult>();
+  const first = fakeScope(async (member, input, options, n) => {
+    const result = await live(member, input, options, n);
+    journal.set(options.node, result);
+    return result;
+  });
+  const original = await run(nested, first.scope);
+  const paths = first.calls.map((c) => c.options.node);
+  assert.equal(new Set(paths).size, paths.length, 'one path per call');
+
+  // A replay answers each call from what was stored under its path: the walk asks for exactly the same calls.
+  const replay = fakeScope((_member, _input, options) => {
+    const hit = journal.get(options.node);
+    assert.ok(hit, `a stored call for ${options.node}`);
+    return hit;
+  });
+  const replayed = await run(nested, replay.scope);
+  assert.deepEqual(replay.calls.map((c) => [c.member, c.options.node, c.input]), first.calls.map((c) => [c.member, c.options.node, c.input]));
+  assert.deepEqual(replayed, original);
+});
+
+test('the bare handoff and delegate keys of 0.1.0 are still read (deprecated); the plexus. keys win over them', async () => {
+  const handed = fakeScope((member) => (member === 'a' ? ok('from a', { ext: { handoff: 'b' } }) : ok(`from ${member}`)));
+  assert.equal((await run({ kind: 'handoff', start: 'a', members: ['a', 'b', 'c'] }, handed.scope)).output, 'from b');
+  const both = fakeScope((member) => (member === 'a' ? ok('from a', { ext: { 'plexus.handoff': 'c', handoff: 'b' } }) : ok(`from ${member}`)));
+  assert.equal((await run({ kind: 'handoff', start: 'a', members: ['a', 'b', 'c'] }, both.scope)).output, 'from c');
+  let turn = 0;
+  const delegated = fakeScope((member) => (member === 'sup' && turn++ === 0 ? ok('plan', { ext: { delegate: { member: 'a' } } }) : ok(`${member} done`)));
+  assert.deepEqual((await run(SUPERVISE, delegated.scope)).output, 'sup done');
+  assert.deepEqual(delegated.calls.map((c) => c.member), ['sup', 'a', 'sup']);
 });

@@ -11,7 +11,7 @@ configured `host` adapter that fills `Host`.
 | --- | --- | --- | --- |
 | [`gate`](#gate) | yes | Allow every call, no token, no check | Required; errors are a deny |
 | [`telemetry`](#telemetry) | yes | One line per hop on stderr | Required |
-| [`score`](#score) | no | `expected` checks only | Optional |
+| [`score`](#score) | no | `expected` checks only | Optional; without it the core applies the `expected` checks |
 | [`state`](#state) | no | None | Optional |
 
 `tier` is `prototype` or `production`. The readiness gate fails a production-tier profile whose host is a prototype
@@ -93,12 +93,17 @@ Spans, events and metrics. The core names everything `plexus.*` and sets `plexus
 
 ### Operations
 
-- `score(evalCase: EvalCase, result: SystemResult) → [Score]`
+- `score(evalCase: EvalCase, result: SystemResult, ctx?: ScoreContext) → [Score]`
+  `ScoreContext` is `{read?(key: String) → String?}`: it reads a text the execution journal stored, by the key a hop
+  record carries (`inputRef`, `outputRef`), so any host can check member outputs. Absent when the execution adapter
+  has no `read`.
 
 ### Semantics
 
 - Scores are in [0, 1]. A score with `member` set speaks about one member; [attribution](ports/AttributionPort.md)
   reads it.
+- A host without `score` gets the built-in checks below from `System.score` (core `expectedScores`), never an empty
+  list: a case with expectations is not passed unchecked.
 - The prototype default checks the `expected` fields of a case only: `expected.output` (`equals`, `contains`, `matches`
   on the system output, metric `expected.output`) and `expected.members.<id>` (the member was called, `status`, and
   `contains` / `matches` on its stored output, metric `expected.member`). Without a stored text a text expectation
@@ -118,8 +123,8 @@ Key/value storage a host offers. No default exists: ExecutionPort keeps its own 
 
 ## Conformance
 
-A conformance suite for a host is planned. Until then a host is covered by its adapter's tests; the offline example
-runs the prototype host.
+`checkHost` in [`@agent-plexus/conformance`](../packages/conformance) checks a host: rules H1-H9 (tier, gate
+decisions, resume by the owner only, tokens, checks, telemetry, scores, state).
 
 ## Version history
 

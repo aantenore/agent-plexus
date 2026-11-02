@@ -3,7 +3,7 @@
  * under `<adapter>.<name>` keys, which the core copies and never reads. Run status and stop codes use values chosen to
  * match the common vocabularies of agent stacks, so an adapter maps them one to one.
  */
-import type { AttributionLayer } from './layers.ts';
+import { isLayer, type AttributionLayer } from './layers.ts';
 
 export type Ext = Record<string, unknown>;
 export type Attrs = Record<string, string | number | boolean | string[]>;
@@ -106,8 +106,13 @@ export type StopCode = CoreStopCode | (string & {});
 export interface StopReason {
   /** The only field consumers branch on. */
   code: StopCode;
-  /** Where it stopped: a plexus layer, `host`, or the member's own name for its layer. */
+  /**
+   * Where it stopped: a plexus layer or `host`. A member's own name for its layer goes in `memberLayer`; any other value
+   * here is still read as one (see `memberLayerOf`).
+   */
   layer?: string;
+  /** The member's own name for where it stopped (a layer of the member's own stack), never compared with plexus layer ids. */
+  memberLayer?: string;
   /** Instance that stopped it. For people and telemetry, never branched on. */
   by?: string;
   /** For a gate check: whether it stopped what was sent to the member or what came back. */
@@ -296,3 +301,14 @@ export const inputText = (input: RunInput): string => (typeof input === 'string'
 /** A string, or an object with a string `text`. */
 export const isRunInput = (value: unknown): value is RunInput =>
   typeof value === 'string' || (!!value && typeof value === 'object' && typeof (value as { text?: unknown }).text === 'string');
+
+/**
+ * The member's own name for where a reason stopped: `memberLayer`, else a `layer` that is neither a plexus layer id nor
+ * `host` (the form used before `memberLayer`).
+ */
+export function memberLayerOf(reason: StopReason | undefined): string | undefined {
+  if (!reason) return undefined;
+  if (typeof reason.memberLayer === 'string' && reason.memberLayer !== '') return reason.memberLayer;
+  const { layer } = reason;
+  return typeof layer === 'string' && layer !== '' && !isLayer(layer) && layer !== 'host' ? layer : undefined;
+}

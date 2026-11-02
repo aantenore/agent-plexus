@@ -110,3 +110,20 @@ test('loadConfig reads a file and resolves paths against its directory', async (
   await writeFile(file, '{ nope');
   await assert.rejects(loadConfig(file), /cannot read as JSON/);
 });
+
+test('plugins: a list of module specifiers, empty by default, replaced by a profile', () => {
+  assert.deepEqual(resolveConfig(base(), opts).plugins, []);
+  const raw = { ...base(), plugins: ['@acme/plexus-adapters', './adapters/mine.ts'], profiles: { other: { plugins: ['./other.ts'] } } };
+  assert.deepEqual(resolveConfig(raw, opts).plugins, ['@acme/plexus-adapters', './adapters/mine.ts']);
+  assert.deepEqual(resolveConfig(raw, { ...opts, profile: 'other' }).plugins, ['./other.ts']);
+  assert.throws(() => resolveConfig({ ...base(), plugins: ['ok', ''] }, opts), /\$\.plugins\[1\]/);
+  assert.throws(() => resolveConfig({ ...base(), plugins: 'x' }, opts), /\$\.plugins/);
+});
+
+test('limits.registry (0.1.0) still loads: ignored, and noted as deprecated for the readiness gate', () => {
+  const c = resolveConfig({ ...base(), limits: { registry: { cardTtlMs: 1000 } } }, opts);
+  assert.deepEqual(c.deprecated?.map((d) => d.path), ['$.limits.registry']);
+  assert.match(c.deprecated![0]!.message, /limits\.registry is deprecated and ignored: card limits are options of the adapter that fetches cards/);
+  assert.equal(resolveConfig(base(), opts).deprecated, undefined);
+  assert.throws(() => resolveConfig({ ...base(), limits: { nope: {} } }, opts), /limits\.nope: unknown limit group \(known: system, router, attribution\)/);
+});

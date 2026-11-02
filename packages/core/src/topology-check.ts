@@ -26,6 +26,24 @@ export function unsupportedKinds(spec: TopologyNode, supportedKinds: readonly To
 }
 
 /**
+ * Members a node and everything below it may call: member ids, route candidates (every member of `all` for a route
+ * that filters), handoff and supervise members.
+ */
+export function membersIn(spec: TopologyNode, all: readonly string[]): string[] {
+  const out = new Set<string>();
+  walkTopology(spec, (node) => {
+    if (typeof node === 'string') return void out.add(node);
+    switch (node.kind) {
+      case 'route': for (const id of Array.isArray(node.candidates) ? node.candidates : all) out.add(id); break;
+      case 'handoff': for (const id of [node.start, ...node.members]) out.add(id); break;
+      case 'supervise': for (const id of [node.supervisor, ...node.members]) out.add(id); break;
+      default:
+    }
+  });
+  return [...out];
+}
+
+/**
  * Structural problems of a topology against the configured members and routers and the kinds the topology adapter
  * runs: unknown members and routers, unsupported kinds, graph nodes that do not exist, an end no edge leads to.
  */

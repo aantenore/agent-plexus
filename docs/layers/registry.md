@@ -48,7 +48,8 @@ Mapped by adapters, not by the port:
 ## Boundaries
 
 - Cards are untrusted. `a2a-member` checks their JWS signatures against configured keys only, bounds their size
-  (`maxCardBytes`) and caches them for `cardTtlMs`. Production requires signed cards or endpoints pinned in config.
+  (its option `maxCardBytes`) and caches them for its option `cardTtlMs`. Production requires signed cards or endpoints
+  pinned in config.
 - `audience` always comes from config; a card cannot set the audience a token is minted for.
 - `registry.requireSigned` makes `check` fail every member with neither a signed card nor a pinned endpoint. A
   function member is pinned.
@@ -89,12 +90,13 @@ Mapped by adapters, not by the port:
   "ports": {
     "registry": { "adapter": "static-registry", "options": { "entries": { "billing": { "tags": ["billing"] } } } }
   },
-  "registry": { "requireSigned": false, "requireListed": false },
-  "limits": { "registry": { "cardTtlMs": 300000, "maxCardBytes": 65536 } }
+  "registry": { "requireSigned": false, "requireListed": false }
 }
 ```
 
-The registry slot is optional; a `route` node needs it to find candidates. Limits: [limits.md](../limits.md).
+The registry slot is optional; a `route` node needs it to find candidates. The registry has no system limits: card size
+and lifetime are options of the adapter that fetches cards (`a2a-member`: `maxCardBytes`, `cardTtlMs`). Limits:
+[limits.md](../limits.md).
 
 ## Telemetry
 
@@ -108,7 +110,8 @@ the registry are what routing rules and evaluation cases rely on.
 
 ## How to swap
 
-Change `ports.registry.adapter`. Members, rules and topology stay. Adapters that fetch cards read `limits.registry.*`.
+Change `ports.registry.adapter`. Members, rules and topology stay. An adapter that fetches cards takes its card limits
+as its own options.
 
 ## Reference adapters
 

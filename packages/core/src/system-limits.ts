@@ -14,14 +14,27 @@ export const SYSTEM_LIMITS = defineLimits({
   maxHandoffs: { path: 'limits.system.maxHandoffs', default: 10, unit: 'count', min: 1, max: 100, safe: { min: 1, max: 20 }, why: 'Default bound of a handoff.' },
   maxRepeats: { path: 'limits.system.maxRepeats', default: 3, unit: 'count', min: 1, max: 100, safe: { min: 1, max: 10 }, why: 'Back-and-forth between the same two members.' },
   stepTimeoutMs: { path: 'limits.system.stepTimeoutMs', default: 300_000, unit: 'ms', min: 1, unbounded: 'fail', safe: { min: 1, max: HOUR_MS }, why: 'One member call, capped by the time left.' },
-  cardTtlMs: { path: 'limits.registry.cardTtlMs', default: 300_000, unit: 'ms', min: 0, max: 86_400_000, why: 'How long a fetched card is trusted.' },
+  cancelTimeoutMs: { path: 'limits.system.cancelTimeoutMs', default: 5000, unit: 'ms', min: 1, max: 60_000, why: 'Time a cancel of an abandoned or cut-off call may take.' },
   minRemainingMs: { path: 'limits.system.minRemainingMs', default: 1000, unit: 'ms', min: 0, max: 60_000, why: 'A member call does not start with less time left than this.' },
   marginMs: { path: 'limits.system.marginMs', default: 1000, unit: 'ms', min: 0, max: 60_000, why: 'Time kept back from the deadline on each outbound call.' },
-  maxCardBytes: { path: 'limits.registry.maxCardBytes', default: 65_536, unit: 'bytes', min: 1024, max: 1_048_576, why: 'Largest card read.' },
   maxCandidates: { path: 'limits.router.maxCandidates', default: 20, unit: 'count', min: 1, max: 200, safe: { min: 1, max: 50 }, why: 'Candidates sent to a model or knowledge router.' },
   historyRuns: { path: 'limits.attribution.historyRuns', default: 100, unit: 'count', min: 1, max: 10_000, why: 'Past runs kept in memory for attribution.' },
   maxRecords: { path: 'limits.attribution.maxRecords', default: 500, unit: 'count', min: 1, max: 100_000, why: 'Hop records read by one attribution.' },
 });
+
+/**
+ * Limit groups the core no longer reads, with what replaced them: a config that sets one still loads, and the readiness
+ * gate warns that it is ignored.
+ */
+export const DEPRECATED_LIMIT_GROUPS: Readonly<Record<string, string>> = {
+  registry: 'card limits are options of the adapter that fetches cards (a2a-member: options.maxCardBytes, options.cardTtlMs)',
+};
+
+/** A part of the config that is accepted but ignored, for the readiness gate to warn about. */
+export interface Deprecation {
+  path: string;
+  message: string;
+}
 
 export type LimitKey = keyof typeof SYSTEM_LIMITS;
 /** Resolved limits: a number, or `"unbounded"` where the limit allows it. */
@@ -63,9 +76,10 @@ function fromEnv(spec: LimitSpec, raw: unknown, env: Env, problems: string[]): u
 
 /**
  * Reads the `limits` section: absent values take the default, `${env:...}` references are filled in, and every value
- * is range-checked. Problems are appended to `problems`, one per value, naming the path; the default stands in.
+ * is range-checked. Problems are appended to `problems`, one per value, naming the path; the default stands in. A
+ * deprecated group (`DEPRECATED_LIMIT_GROUPS`) is ignored and appended to `deprecated` instead.
  */
-export function collectLimits(config: unknown, env: Env, problems: string[]): SystemLimits {
+export function collectLimits(config: unknown, env: Env, problems: string[], deprecated: Deprecation[] = []): SystemLimits {
   const section = config === undefined || config === null ? {} : config;
   if (!isPlainObject(section)) {
     problems.push('limits: must be an object');
@@ -73,7 +87,12 @@ export function collectLimits(config: unknown, env: Env, problems: string[]): Sy
   }
   const specs = Object.values(SYSTEM_LIMITS) as LimitSpec[];
   const known = new Set(specs.map((s) => s.path.split('.')[1]!));
-  for (const name of Object.keys(section)) if (!known.has(name)) problems.push(`limits.${name}: unknown limit group`);
+  for (const name of Object.keys(section)) {
+    if (known.has(name)) continue;
+    const replaced = Object.hasOwn(DEPRECATED_LIMIT_GROUPS, name) ? DEPRECATED_LIMIT_GROUPS[name] : undefined;
+    if (replaced) deprecated.push({ path: `$.limits.${name}`, message: `limits.${name} is deprecated and ignored: ${replaced}` });
+    else problems.push(`limits.${name}: unknown limit group (known: ${[...known].join(', ')})`);
+  }
   const out: Record<string, LimitValue> = {};
   for (const [key, spec] of Object.entries(SYSTEM_LIMITS) as [string, LimitSpec][]) {
     const [, group, name] = spec.path.split('.') as [string, string, string];

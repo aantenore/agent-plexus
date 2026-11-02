@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { defineAdapter, type AdapterContext, type AdapterDescriptor, type Tier } from '../src/adapter.ts';
 import { assemble } from '../src/assemble.ts';
@@ -590,13 +593,19 @@ test('a waiting member without resume stops with rejected in the member layer', 
   assert.deepEqual([res.status, res.reason?.code, res.reason?.layer, res.reason?.detail], ['stopped', 'rejected', 'member', 'member billing cannot resume']);
 });
 
-test('after a resume a replay calls nobody again and replayed steps spend no budget', async () => {
-  const { system, calls } = await resumable({ triage: { tokens: 50 }, billing: {} }, { kind: 'sequence', steps: ['triage', 'billing'] }, { host: askingGate().host });
+test('after a resume a replay calls nobody again; the budget is the run\'s and replayed steps spend none of it', async () => {
+  const { system, calls, journal } = await resumable({ triage: { tokens: 50 }, billing: {} }, { kind: 'sequence', steps: ['triage', 'billing'] }, { host: askingGate().host });
   const bounds = (tokens: number) => ({ deadlineAt: new Date(Date.now() + 60_000).toISOString(), hops: 0, maxHops: 5, tokens });
   assert.equal((await system.run('hi', { runId: 'r8', bounds: bounds(100) })).status, 'waiting');
-  const res = await system.resume('r8', { approved: true }, { bounds: bounds(50) });
+  assert.deepEqual(journal.kept.get('r8')!.get('run:spent'), { tokens: 50, costUsd: 0 });
+  const res = await system.resume('r8', { approved: true }, { bounds: bounds(100) });
   assert.equal(res.status, 'completed', JSON.stringify(res.reason));
-  const replay = await system.run('hi', { runId: 'r8', bounds: bounds(50) });
+  // billing reports nothing: the 50 tokens left were reserved for it and count as spent.
+  assert.deepEqual(journal.kept.get('r8')!.get('run:spent'), { tokens: 100, costUsd: 0 });
+  // The whole budget is spent, yet a replay goes through: replayed steps need none.
+  const replay = await system.run('hi', { runId: 'r8', bounds: bounds(100) });
+  // Every call replayed: this invocation spent nothing.
+  assert.equal(replay.usage, undefined);
   assert.equal(replay.status, 'completed');
   assert.equal(replay.output, 'billing:triage:hi');
   assert.deepEqual(calls, ['invoke:triage', 'invoke:billing']);
@@ -1123,5 +1132,129 @@ test('a run whose owner or input cannot be kept fails before its topology runs; 
     assert.equal(again.status, 'waiting', key);
     assert.equal(journal.kept.get('own9')!.get('run:input'), 'secret of alice');
     assert.deepEqual(calls, ['invoke:A', 'invoke:B']);
+  }
+});
+
+test('usage and cost of a result are the core\'s totals over the calls of this invocation, whatever the topology returns', async () => {
+  const liar = defineAdapter({
+    fills: 'TopologyPort', name: 'liar-topology', maps, tiers: both, portVersion: '0.1.0',
+    create: (): TopologyPort => ({
+      name: 'liar-topology', kinds: ['sequence'],
+      bind: () => ({
+        async run(input, scope) {
+          await scope.call('triage', input, { node: 'root.steps[0]' });
+          await scope.call('billing', input, { node: 'root.steps[1]' });
+          return { status: 'completed', output: 'done', usage: { inputTokens: 999, outputTokens: 999 }, costUsd: 42 };
+        },
+      }),
+    }),
+  }) as unknown as AdapterDescriptor;
+  const { system } = await build({
+    members: { triage: { adapter: 'fake-member', options: { reply: 'T', tokens: 5 } }, billing: { adapter: 'fake-member', options: { reply: 'B', tokens: 7 } } },
+    ports: { ...rawConfig().ports, topology: { adapter: 'liar-topology' } },
+  }, { extra: [liar] });
+  const res = await system.run('hi');
+  assert.deepEqual(res.usage, { inputTokens: 12, outputTokens: 0 });
+  assert.equal(res.costUsd, undefined);
+});
+
+test('without a host scorer the built-in expected checks apply, so a case is never passed unchecked', async () => {
+  const { system } = await build({}, { host: recordingHost().host });
+  const res = await system.run('hi');
+  const scores = await system.score({ id: 'c', input: 'hi', expected: { output: { equals: 'nope' }, members: { triage: { contains: 'T:hi' } } } }, res);
+  assert.deepEqual(scores.map((s) => [s.metric, s.value]), [['expected.output', 0], ['expected.member', 1]]);
+});
+
+test('a host scorer gets read, so it can check member outputs', async () => {
+  const harness = recordingHost();
+  const texts: (string | undefined)[] = [];
+  harness.host.score = {
+    async score(_c, result, ctx) {
+      texts.push(await ctx?.read?.(result.record[0]!.outputRef!));
+      return [{ metric: 'own', value: 1 }];
+    },
+  };
+  const { system } = await build({}, { host: harness.host });
+  const res = await system.run('hi');
+  assert.deepEqual(await system.score({ id: 'c', input: 'hi' }, res), [{ metric: 'own', value: 1 }]);
+  assert.deepEqual(texts, ['triage:T:hi']);
+});
+
+test('abandoning a call that waits on a remote task asks its member to cancel the task', async () => {
+  const cancelled: string[] = [];
+  const waiter = defineAdapter({
+    fills: 'MemberPort', name: 'waiting-member', maps, tiers: both, portVersion: '0.1.0',
+    create: (_o, ctx): MemberPort => ({
+      ...fakeMemberPort(ctx.name, async () => ({ status: 'waiting', output: '', reason: { code: 'needs_input' }, taskRef: `task-${ctx.name}` })),
+      cancel: async (ref) => { cancelled.push(ref); },
+    }),
+  }) as unknown as AdapterDescriptor;
+  const abandoning = defineAdapter({
+    fills: 'TopologyPort', name: 'abandoning-topology', maps, tiers: both, portVersion: '0.1.0',
+    create: (): TopologyPort => ({
+      name: 'abandoning-topology', kinds: ['sequence'],
+      bind: () => ({
+        async run(input, scope) {
+          const lost = await scope.call('triage', input, { node: 'root.branches[0]' });
+          await scope.call('billing', input, { node: 'root.branches[1]' });
+          scope.abandon(lost.hopId);
+          scope.abandon(lost.hopId);
+          return { status: 'completed', output: 'done' };
+        },
+      }),
+    }),
+  }) as unknown as AdapterDescriptor;
+  const { system } = await build({
+    members: { triage: { adapter: 'waiting-member' }, billing: { adapter: 'waiting-member' } },
+    ports: { ...rawConfig().ports, topology: { adapter: 'abandoning-topology' } },
+  }, { extra: [waiter, abandoning] });
+  const res = await system.run('hi');
+  await new Promise((done) => setImmediate(done));
+  assert.equal(res.status, 'completed');
+  assert.deepEqual(cancelled, ['task-triage']);
+  assert.equal(res.record.find((h) => h.member === 'triage')?.abandoned, true);
+});
+
+test('a config with plugins loads its adapters from the plugin modules', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-assemble-plugins-'));
+  try {
+    await writeFile(join(dir, 'plugin.mjs'), `
+const base = { maps: { technology: 'test' }, portVersion: '0.1.0', tiers: ['prototype'] };
+const entry = (id) => ({ id, name: id, description: id, skills: [], endpoint: { protocol: 'function' }, trust: { signed: false, pinned: false } });
+export const member = { ...base, fills: 'MemberPort', name: 'plugin-member', create: (o, ctx) => ({
+  name: ctx.name, describe: async () => entry(ctx.name), invoke: async (input) => ({ status: 'completed', output: 'plugin:' + (typeof input === 'string' ? input : input.text) }),
+}) };
+export const topology = { ...base, fills: 'TopologyPort', name: 'plugin-topology', create: () => ({
+  name: 'plugin-topology', kinds: ['sequence'],
+  bind: (spec) => ({ run: async (input, scope) => (await scope.call(spec.steps[0], input, { node: 'root.steps[0]' })).result }),
+}) };
+export const execution = { ...base, fills: 'ExecutionPort', name: 'plugin-execution', create: () => {
+  const texts = new Map();
+  return {
+    name: 'plugin-execution',
+    begin: async (runKey) => {
+      const kept = new Map();
+      return { runKey, step: async (n, fn) => fn(), wait: async () => undefined, put: async (t) => { texts.set('t' + texts.size, t); return 't' + (texts.size - 1); },
+        remember: async (k, v) => { kept.set(k, v); }, recall: async (k) => kept.get(k), end: async () => {} };
+    },
+    signal: async () => true,
+    read: async (k) => texts.get(k),
+  };
+} };
+export const attribution = { ...base, fills: 'AttributionPort', name: 'plugin-attribution', create: () => ({ name: 'plugin-attribution', attribute: async () => [] }) };
+`);
+    const config = resolveConfig({
+      system: { name: 'plugged' },
+      plugins: ['./plugin.mjs'],
+      members: { solo: { adapter: 'plugin-member' } },
+      ports: { topology: { adapter: 'plugin-topology' }, execution: { adapter: 'plugin-execution' }, attribution: { adapter: 'plugin-attribution' } },
+      topology: { kind: 'sequence', steps: ['solo'] },
+    }, { cwd: dir });
+    const system = await assemble(config, { host: prototypeHost({ quiet: true }) });
+    const res = await system.run('hi');
+    assert.deepEqual([res.status, res.output], ['completed', 'plugin:hi']);
+    await system.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

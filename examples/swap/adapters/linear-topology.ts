@@ -1,6 +1,7 @@
 import {
   defineAdapter, inputText, PORT_VERSIONS,
-  type BoundTopology, type MemberResult, type RunInput, type RunScope, type TopologyNode, type TopologyPort, type TopologySpec,
+  type BoundTopology, type MemberResult, type RouteDecision, type RunInput, type RunScope, type TopologyNode, type TopologyPort, type TopologySpec,
+  type Usage,
 } from '@agent-plexus/core';
 
 const NAME = 'linear-topology';
@@ -18,19 +19,40 @@ function ensureRunnable(node: TopologyNode, path: string): void {
   if (node.kind === 'route' && node.fallback !== undefined) ensureRunnable(node.fallback, `${path}.fallback`);
 }
 
+/** `last` with the usage and cost of every call in `all` summed, so the result carries the totals of its node. */
+function withTotals(last: MemberResult, all: readonly MemberResult[]): MemberResult {
+  let usage: Usage | undefined;
+  let costUsd: number | undefined;
+  for (const r of all) {
+    if (r.usage) usage = { inputTokens: (usage?.inputTokens ?? 0) + r.usage.inputTokens, outputTokens: (usage?.outputTokens ?? 0) + r.usage.outputTokens };
+    if (r.costUsd !== undefined) costUsd = (costUsd ?? 0) + r.costUsd;
+  }
+  const { usage: _usage, costUsd: _costUsd, ...rest } = last;
+  return { ...rest, ...(usage ? { usage } : {}), ...(costUsd !== undefined ? { costUsd } : {}) };
+}
+
+/** A route whose router or registry failed, as the spec requires: `failed`, code `error`, layer `routing`. */
+const routingFailed = (decision: RouteDecision): MemberResult => ({
+  status: 'failed',
+  output: '',
+  reason: { code: 'error', layer: 'routing', ...(decision.reason ? { detail: decision.reason } : {}) },
+});
+
 /** Runs `node` with `incoming` as its input and returns its result. */
 async function walk(scope: RunScope, node: TopologyNode, path: string, incoming: RunInput): Promise<MemberResult> {
   if (typeof node === 'string') return (await scope.call(node, incoming, { node: path })).result;
   const input = node.input === 'original' ? scope.input : incoming;
   if (node.kind === 'sequence') {
+    const results: MemberResult[] = [];
     let last: MemberResult = { status: 'completed', output: inputText(input) };
     let current = input;
     for (const [i, step] of node.steps.entries()) {
       last = await walk(scope, step, `${path}.steps[${i}]`, current);
-      if (last.status !== 'completed') return last;
+      results.push(last);
+      if (last.status !== 'completed') return withTotals(last, results);
       current = last.output;
     }
-    return last;
+    return withTotals(last, results);
   }
   if (node.kind === 'route') {
     const decision = await scope.route({ input, candidates: node.candidates, ...(node.router !== undefined ? { router: node.router } : {}), node: path });
@@ -39,6 +61,7 @@ async function walk(scope: RunScope, node: TopologyNode, path: string, incoming:
       return (await scope.call(decision.member, input, { node: path, route })).result;
     }
     if (node.fallback !== undefined) return walk(scope, node.fallback, `${path}.fallback`, input);
+    if (decision.failed) return routingFailed(decision);
     return { status: 'stopped', output: '', reason: { code: 'rejected', layer: 'routing' } };
   }
   throw new TypeError(`${NAME}: node "${path}" has unsupported kind "${(node as { kind: string }).kind}"`);

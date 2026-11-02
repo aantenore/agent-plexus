@@ -1,7 +1,7 @@
 # Guide
 
 How to start a system, write a member, write an adapter, add a host, configure a system, and move it from prototype to
-production. Concepts are in [architecture.md](architecture.md). Packages are not published yet (version 0.1.0): work
+production. Concepts are in [architecture.md](architecture.md). Packages are at version 0.2.0; the examples below work
 inside this repository.
 
 ## Quickstart: start a system from the offline example
@@ -20,7 +20,7 @@ To start your own system, copy `examples/offline` to a new folder in the reposit
 modules in `members/`, and point `--config` at it. Rename the package in the copy's `package.json`: the example is the
 workspace `@agent-plexus/example-offline`, and two workspaces with one name make `npm install` fail. Or copy it outside
 `examples/` (still inside the repository, so Node finds `node_modules`) and leave `package.json` and `tsconfig.json`
-behind. Adapters named in the config are found as
+behind. Adapters named in the config are found in the `plugins` modules first, then as
 `@agent-plexus/adapter-<name>` from the repository's `node_modules`; module paths in options are relative to the
 config file. The `--conditions=@agent-plexus/source` flag makes Node load the TypeScript sources of the workspace
 packages; the sections below write the command as `agent-plexus`.
@@ -37,7 +37,8 @@ packages; the sections below write the command as `agent-plexus`.
 
 `examples/swap` is the same system with each layer replaced by one config value: one `swap-*` profile per layer, and
 `swap-all` with the swaps together. Each swap is a single value in `plexus.json`, and the system keeps its routes and
-the attribution of the crash case. The profiles table is in its [README](../examples/swap/README.md). Evaluating one:
+the attribution of the crash case. The profiles table is in its [README](../examples/swap/README.md);
+`npm run swap:matrix` runs every swap, tests and command line. Evaluating one:
 
 ```bash
 node --conditions=@agent-plexus/source packages/cli/src/cli.ts eval --config examples/swap/plexus.json --profile swap-all examples/swap/cases.json
@@ -121,8 +122,8 @@ An agent served over A2A, in any language or framework, is a member through `a2a
 - https is required except on loopback; private addresses are refused unless that origin is configured; redirects are
   never followed. The rules are listed in [security](cross-cutting/security.md#remote-agents-over-a2a).
 - A call returns once the remote side has a task. The task id is journaled, the task is polled every `pollMs`, and a
-  restart of the same run resumes that task instead of sending the request again. On abort or deadline the member
-  cancels the remote task.
+  restart of the same run resumes that task instead of sending the request again. On a deadline the member cancels
+  the remote task; on an abort the core does, through the member's `cancel`, so the task is cancelled once.
 - The remaining time, hops, budget and lineage go along in the [bounds extension](../spec/extensions/bounds-v1.md).
   A remote task that waits for input ends the call as `waiting` with code `needs_input` (or `needs_auth`); answer it
   with [resume](#resume-a-waiting-run).
@@ -155,6 +156,7 @@ $ agent-plexus resume 3f0c... --input "order 42, new address: 1 Main St" --wait 
 Shipping: the address of order 42 is changed
 ```
 
+`run` and `resume` exit `3` when the run ends waiting, so a script can tell a pending run from a failed one (`1`).
 The hint names the reply the run's wait needs and the wait itself. `--wait <token>` is optional but recommended: a
 reply that names its wait answers only that one, so a repeated or late resume fails ("waits on another step") instead
 of answering a wait the run reached since.
@@ -168,8 +170,8 @@ In code: `system.resume(runId, { input, wait: result.wait.token })` or `system.r
 result.wait.token })` (`wait` optional), with an optional context whose `caller` is who resumes. A waiting result's
 `wait` (`{ token, kind, member }`) says which call the run waits on and which reply it takes. The host's gate is asked
 first whether that caller may resume the run (action `resume`, with the run's owner); the prototype host allows only
-the caller that started it. The resume is a new invocation with its own deadline and budget, and its result counts
-only what it spent. A run that is not waiting, a reply of the other kind or for another wait, or a `run` or `resume`
+the caller that started it. The resume is a new invocation with its own deadline; its budget is the run's, less what
+earlier invocations spent (`run:spent`), and its result counts only what it spent. A run that is not waiting, a reply of the other kind or for another wait, or a `run` or `resume`
 while another invocation runs the same run ("in progress") gives `failed` with code `error`. Details:
 [execution](layers/execution.md#waiting-and-resume).
 
@@ -234,7 +236,7 @@ export const adapter = defineAdapter<'AgentRouterPort', TagRouterOptions>({
 export const adapters = [adapter];
 ```
 
-And its test, with `node:test` (conformance suites per port are planned):
+And its test, with `node:test`:
 
 ```ts
 import assert from 'node:assert/strict';
@@ -267,11 +269,14 @@ Steps:
    loader reads it.
 3. Declare every timeout, size, count or truncation length once with `defineLimits` and set it as the descriptor's
    `limits` (see [limits.md](limits.md)), never a literal in the code.
-4. Write `test/*.test.ts` with `node:test`.
+4. Write `test/*.test.ts` with `node:test`, including the port's contract tests from the conformance kit
+   `@agent-plexus/conformance`.
 5. Write `README.md`: what it maps onto which port, tiers, an options table and a config snippet.
 6. Add the adapter to [adapters.md](adapters.md), and its limits to [limits.md](limits.md).
 7. Use it by name (`"adapter": "tag-router"`) once the package is installed, or by path while you develop:
    `"adapter": "./tag-router/src/index.ts"`; `#<name>` picks one descriptor when a module exports several for the port.
+   A package outside `@agent-plexus/adapter-*` (`@acme/plexus-adapters`) is listed in the config's `plugins`; its
+   adapters are then named like any other (see [Adapter lookup](#adapter-lookup)).
 
 Checks for the pull request, run only for the package you touched:
 
@@ -291,7 +296,43 @@ Rules:
 - Never put tokens or secrets in errors, logs or telemetry attributes.
 - Put technology-specific data in `ext` (keys `<adapter>.<name>`).
 - `tiers: ['prototype']` for in-memory or development-only adapters; add `production` when a real system backs it.
-- `portVersion` is `0.1.0` for every port.
+- `portVersion` is `0.1.0` for every port. The core refuses an adapter whose `portVersion` is not compatible with its
+  own (`PORT_VERSIONS`): same major and, while the major is `0`, same minor. The message names the adapter, its version
+  and the core's.
+- The core checks every descriptor it loads with `checkDescriptor`: `fills` a known port or `Host`, a non-empty
+  `name`, `maps` with a `standard` or a `technology`, `tiers` a non-empty subset of `prototype` and `production`, an
+  object `optionsSchema`, a semver `portVersion` (required for ports), `create` a function.
+- A MemberPort adapter declares what it can do beyond `describe` and `invoke` in `capabilities`: `resume`, `cancel`,
+  `checkpoint`, `waits` (booleans, absent = `false`). The readiness gate warns when a member `waits` without `resume`,
+  and when a member that `checkpoint`s without `cancel` races under a `parallel` with `join: "first"`.
+
+### Adapter lookup
+
+An `adapter` value is resolved in this order:
+
+| Value | Found in |
+|---|---|
+| Starts with `.` or `/` | The module at that path, relative to the config file; `#<name>` picks one descriptor |
+| A name exported by a `plugins` module | That module; the first plugin listed wins |
+| Any other name | The package `@agent-plexus/adapter-<name>` |
+
+`plugins` lists modules, packages or paths, resolved as an `import` written in the config's directory would be: a path
+relative to it, or a package installed in a `node_modules` above it, through its `exports` with the import conditions
+(`node`, `import`, the `--conditions` of the process, `default`), so an ESM-only package works and a dual package loads
+its ESM entry. A package that is not installed there is an error; it is never looked up elsewhere. A plugin exports
+descriptors in `adapters`, `default` (a CommonJS `module.exports` object is searched too) or any named export, alone or
+in an array:
+
+```json
+{
+  "plugins": ["@acme/plexus-adapters", "./adapters/local.ts"],
+  "members": { "billing": { "adapter": "acme-crm-member" } }
+}
+```
+
+A plugin that fails to resolve or import, or that exports no descriptors, fails the adapter that looked it up, naming
+the plugin. In code, `assemble` uses
+`pluginLoader(config.plugins)`; `resolveAdapter` replaces it in tests.
 
 ## Add a host
 
@@ -406,13 +447,14 @@ Schema file is planned.
 | Key | Meaning |
 |---|---|
 | `system.name` | System name; the `plexus.system` attribute |
+| `plugins` | Modules (packages or paths) exporting adapter descriptors, for adapters outside `@agent-plexus/adapter-*`; see [Adapter lookup](#adapter-lookup) |
 | `host` | `{ adapter, options? }` filling `Host`; absent or `null`: the prototype host |
 | `members` | Member id → `{ adapter, options? }` filling MemberPort |
-| `ports.registry` | Optional. A `route` node reads its candidates from it; without one no candidate is found |
+| `ports.registry` | Required by a `route` or `handoff` node, which reads its candidates from it (`check` fails without one) |
 | `ports.router` | One `{ adapter, options? }` (the router `router`), or a map of names to refs; `route` and `handoff` nodes name one with `router` |
 | `ports.topology`, `ports.execution`, `ports.attribution` | Required; `{ adapter, options? }` |
 | `topology` | A `TopologySpec`: a member id or a node; see [spec/language.md](../spec/language.md#topologyspec) |
-| `limits` | `system`, `registry`, `router`, `attribution` groups; every limit is in [limits.md](limits.md) |
+| `limits` | `system`, `router`, `attribution` groups; every limit is in [limits.md](limits.md). Card size and lifetime are options of the adapter that fetches cards (`a2a-member`), not core limits |
 | `registry.requireSigned` | `true`: every member needs a signed card or a pinned endpoint |
 | `registry.requireListed` | `true`: every member call needs `ports.registry` to return the member, also for a member the topology names; one it does not return is `denied`, layer `registry`. Without it a registry only supplies route candidates |
 | `tier` | `prototype` (default) or `production` |
@@ -437,7 +479,10 @@ The promise: the members, the topology and the tests never change; only the host
 
 **The readiness gate.** `check --profile production` fails when the host is a prototype, when an adapter is
 prototype-only, when a limit is `"unbounded"` where that is unsafe, and when `registry.requireSigned` finds an unpinned
-member. It warns for limits outside their safe range ([limits.md](limits.md)). On the offline example:
+member. It warns for limits outside their safe range ([limits.md](limits.md)). On every tier it fails a `route` or
+`handoff` node without `ports.registry`, and warns when a member's declared `capabilities` fall short (`waits` without
+`resume`; `checkpoint` without `cancel` under a `parallel` with `join: "first"`) and when the execution adapter has no
+`read` (attribution cannot trace stored texts, and expectations on member outputs cannot be scored). On the offline example:
 
 ```text
 $ agent-plexus check --config examples/offline/plexus.json --profile production
@@ -461,8 +506,8 @@ Swap in `sqlite-execution` to pass that finding.
 
 ## Eval and attribution
 
-`eval` runs a file of cases through the system, scores each one with the host's `score` hook and attributes every
-failure from its hop record.
+`eval` runs a file of cases through the system, scores each one with the host's `score` hook (the built-in `expected`
+checks when the host has none) and attributes every failure from its hop record.
 
 ```json
 [
@@ -485,7 +530,7 @@ failure from its hop record.
 | `tags` | Free labels |
 
 A case passes when the run completed and every score is 1. The prototype host scores `expected.output` and
-`expected.member`; a production host may add more. On a failed case `eval` prints the run status, the scores below 1
+`expected.member`, as the core does for a host without `score`; a production host may add more. On a failed case `eval` prints the run status, the scores below 1
 and one attribution line: `<layer> <member?> <memberLayer?> <confidence> <evidence>`.
 
 ```text
@@ -504,13 +549,21 @@ The attribution rules are in [layers/attribution.md](layers/attribution.md).
 | Command | What it does |
 |---|---|
 | `check` | Load the config, assemble the system, apply the readiness gate of the profile's tier; print `FAIL` and `WARN` lines and a summary |
-| `run <text>` | One run: the output on stdout, one line per hop on stderr (`<member> <status> <code?> <ms>ms`); `--json` prints the result with the hop record, `--quiet` drops the hop lines; a waiting run ends with the `resume` command that answers it |
+| `run <text>` | One run: the output on stdout, one line per hop on stderr (`<member> <status> <code?> <ms>ms`); `--json` prints the result with the hop record, `--quiet` drops the hop lines, `--run-id <id>` runs under a chosen id (1 to 128 characters) instead of a generated one; a waiting run ends with the `resume` command that answers it |
 | `resume <runId>` | Answer a waiting run and run it again: `--input <text>`, or `--approve` / `--deny` with `--reason <text>`, and `--wait <token>` to answer only that wait; output as `run`. Needs a durable execution adapter across processes; see [Resume a waiting run](#resume-a-waiting-run) |
 | `dev` | Terminal loop: each line of input is one run; `/exit` or end of input quits; `--quiet` |
 | `eval <cases.json>` | Run, score and attribute a file of cases; `--json` prints counts and, per case, status, output, scores and attributions |
 
-Common options: `--config <file>` (default `plexus.json`), `--profile <name>`, `--help` (also per command). Exit codes:
-`0` ok, `1` findings, failed runs or an invalid system, `2` wrong command line. `diff` and `draw` are planned.
+Common options: `--config <file>` (default `plexus.json`), `--profile <name>`, `--help` (also per command).
+
+| Exit code | Meaning |
+|---|---|
+| `0` | ok: `check` passed, the run completed, every case passed |
+| `1` | findings, a failed or stopped run, a failed case, or an invalid system |
+| `2` | wrong command line |
+| `3` | `run` or `resume` ended `waiting` for a reply; answer it with the printed `resume` command |
+
+`diff` and `draw` are planned.
 
 ## Extension rules
 

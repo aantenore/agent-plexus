@@ -17,7 +17,9 @@ Data shapes: `HopRecord`, `Score` and `Attribution` in [spec/language.md](../../
 
 An `Attribution` is `{ layer, member?, memberLayer?, hopId?, confidence, evidence, by }`. `layer` is a plexus layer id,
 or `host` when the host refused a call. `memberLayer` is the member's own name for where it failed (an agent-layers
-layer id, for instance). `confidence` is in [0, 1]; `evidence` is a list of short identifiers (codes, hop ids, node
+layer id, for instance). A member reports it in `reason.memberLayer`: `reason.layer` is read only as a plexus layer id
+or `host`, since a member layer named like a plexus layer (`routing`) would be taken for it there. A `reason.layer`
+that is neither is still read as the member's layer (core `memberLayerOf`). `confidence` is in [0, 1]; `evidence` is a list of short identifiers (codes, hop ids, node
 paths), never texts.
 
 A `RecordSource` is an interface inside this layer, not a port: `records(rootRunId)` and, when available,

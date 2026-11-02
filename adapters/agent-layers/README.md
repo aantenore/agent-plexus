@@ -44,7 +44,7 @@ host tier is `production` when the stack's profile is production-tier, else `pro
 | `gate.token` | CredentialPort | `credentials.token(audience, { caller })` with the plexus caller mapped to the agent-layers caller, credential included. No credential adapter: no token |
 | `gate.check` | every GuardPort | The guard context carries the run id and session of the call. `send` runs the guards of stage `tool_args`, `receive` those of `tool_result`, in order, through the stack's own guard runner (spans and metrics included). The first block is a block; a redaction carries its text on; a failing guard is a block that does not echo the error |
 | `telemetry` | TelemetryPort fan-out | Spans, events and metrics keep their `plexus.*` names and attributes and gain `agent.layer: "harness"` |
-| `score` | EvaluatorPort adapters | Present when the stack has evaluators. The case becomes an agent-layers case (`expected` is the expected output text: `equals`, else `contains`, else `matches`; the whole expectation is under `ext["agent-plexus.expected"]`), the result an `EvalRun`; scores come back as `{ metric, value, reason }` |
+| `score` | EvaluatorPort adapters | Present when the stack has evaluators. The case becomes an agent-layers case (`expected` is the expected output text: `equals`, else `contains`, else `matches`; the whole expectation is under `ext["agent-plexus.expected"]`), the result an `EvalRun`; scores come back as `{ metric, value, reason }`. The evaluators see the system's output only: `expected.members` is checked by the host itself on the member texts the core reads back (`expected.member` scores, as the built-in checks) |
 | `state` | none | Not provided |
 
 `state` is omitted: agent-layers' StatePort is an append-only event log per session (`append`, `read`, `list`,
@@ -55,7 +55,9 @@ Closing the system closes the stack.
 
 ## Member
 
-Offers an agent of a composed stack as a member. One stack per member instance.
+Offers an agent of a composed stack as a member. One stack per member instance. Declared `capabilities`: `waits` only
+(a stack run can end `waiting`; there is no `resume`, `cancel` or `checkpoint`), so the readiness gate warns that a run
+waiting on this member cannot continue.
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
@@ -85,7 +87,7 @@ caller's credential. The run result maps one to one:
 |---|---|
 | `status`, `output`, `runId`, `usage`, `costUsd` | the same |
 | `reason.code`, `reason.by`, `reason.detail` | the same |
-| `reason.layer` (an agent-layers layer id) | `reason.layer` |
+| `reason.layer` (an agent-layers layer id) | `reason.memberLayer`; `reason.layer` is `member` |
 | `reason.stage`, `events`, `ext` | not carried |
 
 ## Runtime
@@ -120,7 +122,7 @@ only to mint member tokens), session, abort signal and trace context, and return
 |---|---|
 | `status`, `output`, `usage`, `costUsd` | the same; `runId` is the agent-layers run id |
 | `reason.code`, `reason.by` | the same |
-| `reason.layer` | the same when agent-layers has that layer, else `harness` (topology, member, host, …) |
+| `reason.layer` | `reason.memberLayer` when agent-layers has that layer (a stack member's stop), else `reason.layer` when agent-layers has it, else `harness` (topology, member, host, …) |
 | `reason.stage` | `send` becomes `tool_args`, `receive` becomes `tool_result` |
 | `reason.detail` | dropped: it is internal and may carry error text |
 | `record` | `ext["agent-plexus.hops"]`, the number of hop records; no texts |
@@ -137,7 +139,7 @@ detail: "<error name>" }`. Systems are closed with the stack.
 | Host `state` | See above |
 | Stack `policy` rules | Only the authorization adapter is asked; the local rules of the config are applied by agent-layers' own tool pipeline |
 | `resume` and `cancel` of the member | A `waiting` stack run is reported as `waiting`; its approval id is in `reason.detail` |
-| Stack tools as the tool source of a `supervise` topology | Planned; the `supervise` kind is not implemented yet |
+| Stack tools as the tool source of a `supervise` topology | Planned; the `supervise` kind exists (basic-topology), its supervisor is a member |
 
 ## Limits
 

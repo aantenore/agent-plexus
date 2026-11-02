@@ -1,11 +1,11 @@
 import {
-  defineAdapter, PORT_VERSIONS,
+  defineAdapter, EXT_KEYS, isRunInput, PORT_VERSIONS,
   type BoundTopology, type CallOptions, type Condition, type MemberResult, type RouteDecision, type RunInput, type TopologyNode,
   type TopologyPort, type TopologySpec, type Usage,
 } from '@agent-plexus/core';
 
 const NAME = 'basic-topology';
-const KINDS = ['sequence', 'route', 'loop', 'parallel', 'handoff', 'graph'] as const satisfies readonly TopologySpec['kind'][];
+const KINDS = ['sequence', 'route', 'loop', 'parallel', 'handoff', 'supervise', 'graph'] as const satisfies readonly TopologySpec['kind'][];
 
 /** Where a node runs: the signal that can abort it, its budget share and the hops it made. */
 interface Frame {
@@ -42,6 +42,9 @@ function withTotals(base: MemberResult, all: readonly MemberResult[]): MemberRes
   const { usage: _usage, costUsd: _costUsd, ...rest } = base;
   return { ...rest, ...(usage ? { usage } : {}), ...(costUsd !== undefined ? { costUsd } : {}) };
 }
+
+/** One block of a joined text: `[<label>]` then the output, as parallel joins its branches and supervise reports a turn. */
+const block = (label: string, output: string): string => `[${label}]\n${output}`;
 
 const isSpec = (node: TopologyNode): node is TopologySpec => typeof node === 'object' && node !== null;
 
@@ -81,6 +84,12 @@ function validate(node: TopologyNode, path: string): void {
       }
       if (node.maxHandoffs !== undefined && !(Number.isInteger(node.maxHandoffs) && node.maxHandoffs >= 1)) {
         throw new TypeError(`${NAME}: node "${path}" (handoff) maxHandoffs must be an integer >= 1`);
+      }
+      return;
+    case 'supervise':
+      if (typeof node.supervisor !== 'string' || !node.supervisor) throw new TypeError(`${NAME}: node "${path}" (supervise) needs a "supervisor" member id`);
+      if (!Array.isArray(node.members) || node.members.length === 0 || node.members.some((m) => typeof m !== 'string' || !m)) {
+        throw new TypeError(`${NAME}: node "${path}" (supervise) needs a non-empty "members" list of member ids`);
       }
       return;
     case 'graph': {
@@ -133,8 +142,9 @@ function bindRun(spec: TopologySpec): BoundTopology {
           case 'loop': return loop(n, path, input, frame);
           case 'parallel': return parallel(n, path, input, frame);
           case 'handoff': return handoff(n, path, input, frame);
+          case 'supervise': return supervise(n, path, input, frame);
           case 'graph': return graph(n, path, input, frame);
-          default: throw new TypeError(`${NAME}: node "${path}" has unsupported kind "${n.kind}"`);
+          default: throw new TypeError(`${NAME}: node "${path}" has unsupported kind "${(n as { kind: string }).kind}"`);
         }
       }
 
@@ -189,7 +199,8 @@ function bindRun(spec: TopologySpec): BoundTopology {
 
           let next: string | undefined;
           chosen = undefined;
-          const named = result.ext?.handoff;
+          // The protocol key; the bare `handoff` of 0.1.0 is still read (deprecated).
+          const named = result.ext?.[EXT_KEYS.handoff] ?? result.ext?.handoff;
           if (named !== undefined) {
             if (typeof named !== 'string' || !n.members.includes(named)) {
               return withTotals(stopped('rejected', 'topology', undefined, `handoff to "${String(named)}", which is not a member of ${path}`), results);
@@ -212,6 +223,35 @@ function bindRun(spec: TopologySpec): BoundTopology {
           }
           current = next;
           incoming = result.output;
+        }
+      }
+
+      async function supervise(n: Extract<TopologySpec, { kind: 'supervise' }>, path: string, input: RunInput, frame: Frame): Promise<MemberResult> {
+        const max = scope.limits.maxHandoffs;
+        const results: MemberResult[] = [];
+        let incoming = input;
+        for (let turn = 0; ; turn++) {
+          const result = await member(n.supervisor, `${path}.supervisor[${turn}]`, incoming, frame);
+          results.push(result);
+          if (result.status !== 'completed') return withTotals(result, results);
+          // The protocol key; the bare `delegate` of 0.1.0 is still read (deprecated).
+          const named = result.ext?.[EXT_KEYS.delegate] ?? result.ext?.delegate;
+          if (named === undefined) return withTotals(result, results);
+
+          const delegate = named as { member?: unknown; input?: unknown } | null;
+          const target = typeof delegate === 'object' && delegate !== null ? delegate.member : undefined;
+          if (typeof target !== 'string' || !n.members.includes(target)) {
+            return withTotals(stopped('rejected', 'topology', undefined, `delegation to "${String(target)}", which is not a member of ${path}`), results);
+          }
+          if (delegate?.input !== undefined && !isRunInput(delegate.input)) {
+            return withTotals(stopped('rejected', 'topology', undefined, `delegation to "${target}" has an input that is not a text or { text }`), results);
+          }
+          if (turn + 1 > max) return withTotals({ ...result, status: 'stopped', reason: { code: 'limit', layer: 'topology', by: 'limits.system.maxHandoffs' } }, results);
+
+          const delegated = await member(target, `${path}.members[${turn}]`, (delegate?.input as RunInput | undefined) ?? result.output, frame);
+          results.push(delegated);
+          if (delegated.status !== 'completed') return withTotals(delegated, results);
+          incoming = block(target, delegated.output);
         }
       }
 
@@ -295,7 +335,7 @@ function bindRun(spec: TopologySpec): BoundTopology {
           const b = n.branches[i] as TopologyNode;
           return typeof b === 'string' ? b : `${path}.branches[${i}]`;
         };
-        const joined = results.map((r, i) => `[${label(i)}]\n${(r as MemberResult).output}`).join('\n\n');
+        const joined = results.map((r, i) => block(label(i), (r as MemberResult).output)).join('\n\n');
         if (n.merge === undefined) return withTotals({ status: 'completed', output: joined }, done);
         const mergeFrame: Frame = {};
         if (frame.signal) mergeFrame.signal = frame.signal;
@@ -311,7 +351,7 @@ function bindRun(spec: TopologySpec): BoundTopology {
   };
 }
 
-/** Topology that runs sequence, route, loop, parallel, handoff and graph nodes in process. */
+/** Topology that runs sequence, route, loop, parallel, handoff, supervise and graph nodes in process. */
 export function createBasicTopology(name = NAME): TopologyPort {
   return {
     name,
@@ -329,7 +369,7 @@ export const adapter = defineAdapter<'TopologyPort'>({
   maps: { technology: 'in-process topology executor' },
   portVersion: PORT_VERSIONS.TopologyPort,
   tiers: ['prototype', 'production'],
-  description: 'Runs sequence, route, loop, parallel, handoff and graph topologies in process, reaching members only through the run scope.',
+  description: 'Runs sequence, route, loop, parallel, handoff, supervise and graph topologies in process, reaching members only through the run scope.',
   optionsSchema: { type: 'object', properties: {}, additionalProperties: false },
   create: (_options, ctx) => createBasicTopology(ctx.name),
 });

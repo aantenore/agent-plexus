@@ -4,6 +4,7 @@ import { adapterLimitFindings, interpolate } from '../src/adapter-config.ts';
 import { defineAdapter } from '../src/adapter.ts';
 import { ConfigError } from '../src/errors.ts';
 import { defineLimits } from '../src/limits.ts';
+import { PORT_VERSIONS } from '../src/ports.ts';
 import { prototypeHost } from '../src/prototype-host.ts';
 import { readinessFindings } from '../src/readiness.ts';
 import { createAdapter } from '../src/resolve.ts';
@@ -14,7 +15,7 @@ const limits = defineLimits({
   timeouts: { path: 'options.tools[].timeoutMs', default: 10, unit: 'ms', min: 1, why: 'x' },
 });
 const descriptor = defineAdapter({
-  fills: 'ExecutionPort', name: 'lim', maps: {}, tiers: ['production'], limits,
+  fills: 'ExecutionPort', name: 'lim', maps: { technology: 'test' }, portVersion: PORT_VERSIONS.ExecutionPort, tiers: ['production'], limits,
   optionsSchema: { type: 'object', properties: { maxRuns: {}, tools: {} } },
   create: () => ({ name: 'lim', begin: async () => { throw new Error('unused'); }, signal: async () => false }),
 });

@@ -365,14 +365,48 @@ test('resume with a reference that is not this member\'s fails without a call', 
   assert.equal(f.calls.length, 0);
 });
 
-test('abort: CancelTask is sent and the result is stopped/aborted', async () => {
+test('abort after the checkpoint: stopped/aborted, the cancel is left to the core', async () => {
   const f = await fake(({ method }) => (method === 'CancelTask' ? task('CANCELED') : method === 'SendMessage' ? { task: task('WORKING') } : task('WORKING')));
   const controller = new AbortController();
   const ctx = callContext({ signal: controller.signal });
   setTimeout(() => controller.abort(), 80);
   const result = await member(f).invoke('long job', ctx);
   assert.deepEqual([result.status, result.reason?.code], ['stopped', 'aborted']);
-  assert.ok(f.methods().includes('CancelTask'));
+  assert.equal(ctx.checkpoints.length, 1);
+  assert.equal(f.methods().includes('CancelTask'), false);
+});
+
+test('abort on a resumed task: the core has the reference, so no CancelTask is sent', async () => {
+  const f = await fake(({ method }) => (method === 'CancelTask' ? task('CANCELED') : task('WORKING')));
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 80);
+  const ref = (await import('../src/task.ts')).encodeRef('task-1', 'ctx-1');
+  const result = await member(f).resume!(ref, undefined, callContext({ signal: controller.signal }));
+  assert.deepEqual([result.status, result.reason?.code], ['stopped', 'aborted']);
+  assert.equal(f.methods().includes('CancelTask'), false);
+});
+
+test('the core\'s own timeout after the checkpoint: stopped/timeout, the cancel is left to the core', async () => {
+  const f = await fake(({ method }) => (method === 'CancelTask' ? task('CANCELED') : method === 'SendMessage' ? { task: task('WORKING') } : task('WORKING')));
+  const controller = new AbortController();
+  const ctx = callContext({ signal: controller.signal });
+  setTimeout(() => controller.abort(new DOMException('the call ran out of time', 'TimeoutError')), 80);
+  const result = await member(f).invoke('long job', ctx);
+  assert.deepEqual([result.status, result.reason?.code], ['stopped', 'timeout']);
+  assert.equal(ctx.checkpoints.length, 1);
+  assert.equal(f.methods().includes('CancelTask'), false);
+});
+
+test('abort before the checkpoint is kept: CancelTask is sent for the task the core does not know', async () => {
+  const f = await fake(({ method }) => (method === 'CancelTask' ? task('CANCELED') : method === 'SendMessage' ? { task: task('WORKING') } : task('WORKING')));
+  const controller = new AbortController();
+  const ctx = callContext({ signal: controller.signal });
+  ctx.checkpoint = async () => {
+    controller.abort();
+    throw new Error('aborted while journaling');
+  };
+  const result = await member(f).invoke('long job', ctx);
+  assert.deepEqual([result.status, result.reason?.code], ['stopped', 'aborted']);
   assert.equal(f.calls.find((c) => c.method === 'CancelTask')!.params.id, 'task-1');
 });
 

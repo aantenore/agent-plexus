@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { Ledger } from '../src/ledger.ts';
 import { memberCall } from '../src/member-call.ts';
 import type { MemberCallContext } from '../src/ports.ts';
 import { caller, completed, memoryExecution, setup, type SetupOptions } from './fakes.ts';
@@ -442,4 +443,301 @@ test('a resumed call reads its reply, runs as a step of its own and is flagged i
   assert.deepEqual(journal.steps, ['call:root:0', 'call:root:0#1']);
   assert.equal(second.run.records.at(-1)?.attempt, 1);
   assert.equal(second.run.waits, undefined);
+});
+
+/** A journal whose `step` rejects with an error of its own, as an engine that serialises errors would. */
+function rewrapping(journal: ReturnType<typeof memoryExecution>): ReturnType<typeof memoryExecution> {
+  return {
+    ...journal,
+    async begin(runKey) {
+      const run = await journal.begin(runKey);
+      return {
+        ...run,
+        step: async (name, fn) => {
+          try {
+            return await run.step(name, fn);
+          } catch (err) {
+            throw Object.assign(new Error(`step ${name} failed: ${String((err as Error).message)}`), { name: 'StepError' });
+          }
+        },
+      };
+    },
+  };
+}
+
+test('a call that throws or is cut off is told apart whatever error the journal step rejects with, and stores nothing', async () => {
+  const journal = memoryExecution([], true);
+  let invoked = 0;
+  const thrower = { m: () => { invoked++; throw new Error('boom'); } };
+  const first = await setup({ members: thrower, execution: rewrapping(journal) });
+  const out = await memberCall(first.env, first.run, 'm', 'hello', { node: 'root' });
+  assert.deepEqual([out.result.status, out.result.reason?.code, out.result.reason?.layer, out.result.reason?.detail], ['failed', 'error', 'member', 'boom']);
+  const again = await setup({ members: thrower, execution: rewrapping(journal) });
+  await memberCall(again.env, again.run, 'm', 'hello', { node: 'root' });
+  assert.equal(invoked, 2);
+
+  const slow = await setup({ limits: { stepTimeoutMs: 20 }, members: { m: () => new Promise(() => {}) }, execution: rewrapping(memoryExecution([], true)) });
+  const cut = await memberCall(slow.env, slow.run, 'm', 'hello', { node: 'root' });
+  assert.deepEqual([cut.result.reason?.code, cut.result.reason?.layer], ['timeout', 'member']);
+});
+
+test('calls beyond maxParallel wait for a slot, first come first served, and all complete', async () => {
+  let running = 0;
+  let peak = 0;
+  const started: string[] = [];
+  const s = await setup({
+    limits: { maxParallel: 2 },
+    members: { m: async (input) => {
+      started.push(String(input));
+      running++;
+      peak = Math.max(peak, running);
+      await new Promise((done) => setTimeout(done, 10));
+      running--;
+      return completed(String(input));
+    } },
+  });
+  const outs = await Promise.all(['a', 'b', 'c', 'd', 'e'].map((x, i) => memberCall(s.env, s.run, 'm', x, { node: `root.branches[${i}]` })));
+  assert.deepEqual(outs.map((o) => o.result.status), ['completed', 'completed', 'completed', 'completed', 'completed']);
+  assert.equal(peak, 2);
+  assert.deepEqual(started, ['a', 'b', 'c', 'd', 'e']);
+  assert.deepEqual(s.run.slots, { busy: 0, queue: [] });
+});
+
+test('a call waiting for a slot stops with aborted on its signal, or timeout at the deadline, without reaching the member', async () => {
+  const seen: string[] = [];
+  const s = await setup({
+    limits: { maxParallel: 1, minRemainingMs: 0 },
+    bounds: { deadlineAt: new Date(Date.now() + 150).toISOString() },
+    members: { m: (input) => { seen.push(String(input)); return new Promise(() => {}); } },
+  });
+  const holder = memberCall(s.env, s.run, 'm', 'first', { node: 'root.branches[0]' });
+  const branch = new AbortController();
+  const aborted = memberCall(s.env, s.run, 'm', 'second', { node: 'root.branches[1]', signal: branch.signal });
+  const late = memberCall(s.env, s.run, 'm', 'third', { node: 'root.branches[2]' });
+  branch.abort();
+  assert.deepEqual([(await aborted).result.status, (await aborted).result.reason?.code], ['stopped', 'aborted']);
+  const timedOut = await late;
+  assert.deepEqual([timedOut.result.reason?.code, timedOut.result.reason?.layer], ['timeout', 'topology']);
+  assert.equal((await holder).result.reason?.code, 'timeout');
+  assert.deepEqual(seen, ['first']);
+  assert.equal(s.run.records.length, 3);
+});
+
+test('an aborted call with a checkpointed task asks the member to cancel it, with a live signal', async () => {
+  const run = new AbortController();
+  const s = await setup({ signal: run.signal, members: { m: async (_i, ctx) => { await ctx.checkpoint('task-9'); run.abort(); return new Promise(() => {}); } } });
+  const cancelled: { ref: string; aborted: boolean | undefined; hopId: string }[] = [];
+  s.env.members.get('m')!.cancel = async (ref, ctx) => { cancelled.push({ ref, aborted: ctx.signal?.aborted, hopId: ctx.hopId }); };
+  const out = await memberCall(s.env, s.run, 'm', 'hello', { node: 'root' });
+  assert.equal(out.result.reason?.code, 'aborted');
+  assert.deepEqual(cancelled, [{ ref: 'task-9', aborted: false, hopId: out.hopId }]);
+  assert.ok(!s.events.some((e) => e.name === 'plexus.member.cancel_failed'));
+});
+
+test('a cancel that throws or outlives cancelTimeoutMs is reported, never thrown', async () => {
+  for (const cancel of [async () => { throw new Error('gone'); }, () => new Promise<void>(() => {})]) {
+    const s = await setup({ limits: { cancelTimeoutMs: 20 }, members: { m: () => completed('x') } });
+    s.env.members.get('m')!.cancel = cancel;
+    // A waiting call keeps its task until the topology abandons it.
+    s.env.members.get('m')!.invoke = async () => ({ status: 'waiting', output: '', reason: { code: 'needs_input' }, taskRef: 'task-1' });
+    const out = await memberCall(s.env, s.run, 'm', 'hello', { node: 'root' });
+    assert.equal(out.result.status, 'waiting');
+    await s.run.tasks!.get(out.hopId)!();
+    const failed = s.events.filter((e) => e.name === 'plexus.member.cancel_failed');
+    assert.equal(failed.length, 1);
+    assert.equal(failed[0]!.attrs['plexus.hop'], out.hopId);
+    assert.equal(failed[0]!.attrs['plexus.member'], 'm');
+  }
+});
+
+test('a completed call leaves no task to cancel; a member without cancel is never asked', async () => {
+  const s = await setup({ members: { m: async (_i, ctx) => { await ctx.checkpoint('task-1'); return completed('ok'); } } });
+  let asked = 0;
+  s.env.members.get('m')!.cancel = async () => { asked++; };
+  await memberCall(s.env, s.run, 'm', 'hello', { node: 'root' });
+  assert.equal(s.run.tasks, undefined);
+  const run = new AbortController();
+  const plain = await setup({ signal: run.signal, members: { m: async (_i, ctx) => { await ctx.checkpoint('task-2'); run.abort(); return new Promise(() => {}); } } });
+  assert.equal((await memberCall(plain.env, plain.run, 'm', 'hello', { node: 'root' })).result.reason?.code, 'aborted');
+  assert.equal(asked, 0);
+});
+
+test('every settle keeps what the run spent as run:spent', async () => {
+  const s = await setup({ bounds: { tokens: 100, costUsd: 1 }, members: { m: () => completed('ok', { usage: { inputTokens: 10, outputTokens: 5 }, costUsd: 0.1 }) } });
+  await memberCall(s.env, s.run, 'm', 'a', { node: 'root' });
+  await memberCall(s.env, s.run, 'm', 'b', { node: 'root' });
+  const kept = s.execution.kept.get('run-1')!.get('run:spent') as { tokens: number; costUsd: number };
+  assert.equal(kept.tokens, 30);
+  assert.ok(Math.abs(kept.costUsd - 0.2) < 1e-9);
+});
+
+test('with the budget spent by earlier invocations, a replayed step still replays; a new call stops with limit before the member', async () => {
+  const journal = memoryExecution([], true);
+  let invoked = 0;
+  const members = { m: () => { invoked++; return completed('ok'); } };
+  const first = await setup({ bounds: { tokens: 100 }, members, execution: journal });
+  await memberCall(first.env, first.run, 'm', 'a', { node: 'root' });
+  const spent = journal.kept.get('run-1')!.get('run:spent') as { tokens: number; costUsd: number };
+  assert.equal(spent.tokens, 100);
+
+  const second = await setup({ bounds: { tokens: 100 }, members, execution: journal });
+  second.run.ledger = new Ledger(second.run.ledger.bounds, undefined, undefined, spent);
+  const replayed = await memberCall(second.env, second.run, 'm', 'a', { node: 'root' });
+  assert.equal(replayed.result.status, 'completed');
+  assert.equal(second.run.records.at(-1)?.replayed, true);
+  const asked = second.log.length;
+  const fresh = await memberCall(second.env, second.run, 'm', 'b', { node: 'root' });
+  assert.deepEqual([fresh.result.reason?.code, fresh.result.reason?.layer], ['limit', 'topology']);
+  // Unfunded and not a replay: stopped before the gate is asked, the text checked or a credential minted.
+  assert.deepEqual(second.log.slice(asked), []);
+  assert.equal(invoked, 1);
+  assert.deepEqual(journal.steps, ['call:root:0', 'call:root:0', 'call:root:1']);
+
+  // Without an earlier invocation, no budget stops the call before anything else.
+  const plain = await setup({ bounds: { tokens: 0 } });
+  assert.equal((await memberCall(plain.env, plain.run, 'm', 'a', { node: 'root' })).result.reason?.code, 'limit');
+  assert.deepEqual(plain.log, []);
+});
+
+test('a call that ends waiting without usage spends only what it reported; its resume is funded and completes', async () => {
+  const journal = memoryExecution([], true);
+  const members = { m: () => ({ status: 'waiting' as const, output: '', reason: { code: 'needs_input' as const }, taskRef: 'task-1' }) };
+  const resumes = { m: () => completed('done', { usage: { inputTokens: 30, outputTokens: 10 } }) };
+  const first = await setup({ bounds: { tokens: 100 }, members, resumes, execution: journal });
+  assert.equal((await memberCall(first.env, first.run, 'm', 'hello', { node: 'root' })).result.status, 'waiting');
+  const spent = journal.kept.get('run-1')!.get('run:spent') as { tokens: number; costUsd: number };
+  assert.deepEqual(spent, { tokens: 0, costUsd: 0 });
+  await journal.signal('run-1', 'call:root:0:reply:0', { input: 'more' });
+  const second = await setup({ bounds: { tokens: 100 }, members, resumes, execution: journal });
+  second.run.ledger = new Ledger(second.run.ledger.bounds, undefined, undefined, spent);
+  second.run.resuming = first.run.waits![0]!;
+  const out = await memberCall(second.env, second.run, 'm', 'hello', { node: 'root' });
+  assert.deepEqual([out.result.status, out.result.output], ['completed', 'done']);
+  assert.deepEqual(second.run.ledger.spent(), { tokens: 40, costUsd: 0 });
+});
+
+test('a task the core cancelled on abort is forgotten: the run begun again invokes the member, never resumes the task', async () => {
+  const journal = memoryExecution([], true);
+  const calls: string[] = [];
+  const run = new AbortController();
+  const members = {
+    m: async (_i: unknown, ctx: MemberCallContext) => {
+      calls.push('invoke');
+      if (run.signal.aborted) return completed('fresh');
+      await ctx.checkpoint('task-1');
+      run.abort();
+      return new Promise<never>(() => {});
+    },
+  };
+  const resumes = { m: (ref: string) => { calls.push(`resume:${ref}`); return completed('resumed'); } };
+  const first = await setup({ signal: run.signal, members, resumes, execution: journal });
+  first.env.members.get('m')!.cancel = async (ref) => { calls.push(`cancel:${ref}`); };
+  assert.equal((await memberCall(first.env, first.run, 'm', 'hi', { node: 'root' })).result.reason?.code, 'aborted');
+  assert.equal(journal.kept.get('run-1')!.get('call:root:0:task'), null);
+  const second = await setup({ members, resumes, execution: journal });
+  second.env.members.get('m')!.cancel = async (ref) => { calls.push(`cancel:${ref}`); };
+  const out = await memberCall(second.env, second.run, 'm', 'hi', { node: 'root' });
+  assert.equal(out.result.output, 'fresh');
+  assert.deepEqual(calls, ['invoke', 'cancel:task-1', 'invoke']);
+});
+
+test('a reply to a waiting member whose task the core cancelled stops with rejected, without resuming it', async () => {
+  const journal = memoryExecution([], true);
+  const resumed: string[] = [];
+  const members = { m: () => ({ status: 'waiting' as const, output: '', reason: { code: 'needs_input' as const }, taskRef: 'task-1' }) };
+  const resumes = { m: (ref: string) => { resumed.push(ref); return completed('resumed'); } };
+  const first = await setup({ members, resumes, execution: journal });
+  first.env.members.get('m')!.cancel = async () => {};
+  const waiting = await memberCall(first.env, first.run, 'm', 'hello', { node: 'root' });
+  // The topology abandons the waiting call: its task is cancelled and its handle forgotten.
+  await first.run.tasks!.get(waiting.hopId)!();
+  await journal.signal('run-1', 'call:root:0:reply:0', { input: 'more' });
+  const second = await setup({ members, resumes, execution: journal });
+  second.run.resuming = first.run.waits![0]!;
+  const out = await memberCall(second.env, second.run, 'm', 'hello', { node: 'root' });
+  assert.deepEqual([out.result.reason?.code, out.result.reason?.layer], ['rejected', 'member']);
+  assert.deepEqual(resumed, []);
+});
+
+/** A journal that aborts `controller` once a step has finished: the run's signal fires after the member answered. */
+function abortingAfterStep(journal: ReturnType<typeof memoryExecution>, controller: AbortController): ReturnType<typeof memoryExecution> {
+  return {
+    ...journal,
+    async begin(runKey) {
+      const run = await journal.begin(runKey);
+      return { ...run, step: async (name, fn) => { const value = await run.step(name, fn); controller.abort(); return value; } };
+    },
+  };
+}
+
+test('a result the member returned itself is never cancelled, even when the run is aborted right after', async () => {
+  for (const answer of [
+    { status: 'failed' as const, output: '', reason: { code: 'error' as const, layer: 'member' } },
+    { status: 'stopped' as const, output: '', reason: { code: 'aborted' as const, layer: 'member' } },
+    { status: 'waiting' as const, output: '', reason: { code: 'needs_input' as const }, taskRef: 'task-1' },
+  ]) {
+    const run = new AbortController();
+    const s = await setup({
+      signal: run.signal, execution: abortingAfterStep(memoryExecution([], true), run),
+      members: { m: async (_i, ctx) => { await ctx.checkpoint('task-1'); return answer; } },
+    });
+    const cancelled: string[] = [];
+    s.env.members.get('m')!.cancel = async (ref) => { cancelled.push(ref); };
+    const out = await memberCall(s.env, s.run, 'm', 'hello', { node: 'root' });
+    assert.equal(out.result.status, answer.status);
+    assert.deepEqual(cancelled, [], answer.status);
+    assert.equal(s.execution.kept.get('run-1')!.get('call:root:0:task'), 'task-1');
+  }
+});
+
+test('the core\'s own step timeout aborts the call signal with a TimeoutError and cancels the checkpointed task', async () => {
+  let reason: unknown;
+  const s = await setup({
+    limits: { stepTimeoutMs: 30 },
+    members: { m: async (_i, ctx) => {
+      await ctx.checkpoint('task-7');
+      ctx.signal!.addEventListener('abort', () => { reason = ctx.signal!.reason; });
+      return new Promise(() => {});
+    } },
+  });
+  const cancelled: string[] = [];
+  s.env.members.get('m')!.cancel = async (ref) => { cancelled.push(ref); };
+  const out = await memberCall(s.env, s.run, 'm', 'hello', { node: 'root' });
+  assert.deepEqual([out.result.reason?.code, out.result.reason?.layer], ['timeout', 'member']);
+  assert.equal((reason as DOMException).name, 'TimeoutError');
+  assert.deepEqual(cancelled, ['task-7']);
+  assert.equal(s.execution.kept.get('run-1')!.get('call:root:0:task'), null);
+});
+
+test('a member speaks only for layer member: a plexus layer or host it names moves to memberLayer', async () => {
+  const cases = [
+    [{ code: 'error', layer: 'host' }, { code: 'error', layer: 'member', memberLayer: 'host' }],
+    [{ code: 'limit', layer: 'topology', memberLayer: 'tools' }, { code: 'limit', layer: 'member', memberLayer: 'tools' }],
+    [{ code: 'error', layer: 'member', memberLayer: 'tools' }, { code: 'error', layer: 'member', memberLayer: 'tools' }],
+    [{ code: 'error' }, { code: 'error' }],
+  ] as const;
+  for (const [reason, kept] of cases) {
+    const { out, record } = await call({ members: { m: () => ({ status: 'failed', output: '', reason: { ...reason } }) } });
+    assert.deepEqual(out.result.reason, kept);
+    assert.deepEqual(record.reason, kept);
+  }
+  // A reason the core produces keeps its layer.
+  const blocked = await call({ host: { check: () => ({ action: 'block' }) } });
+  assert.equal(blocked.reason?.layer, 'host');
+});
+
+test('usage and costUsd that are not finite non-negative numbers are dropped with an event; totals stay numbers', async () => {
+  const { s, out, record } = await call({
+    bounds: { tokens: 100, costUsd: 1 },
+    members: { m: () => completed('ok', { usage: { inputTokens: Number.NaN, outputTokens: 1 }, costUsd: -1 }) },
+  });
+  assert.equal(out.result.usage, undefined);
+  assert.equal(out.result.costUsd, undefined);
+  assert.equal(record.usage, undefined);
+  assert.equal(record.costUsd, undefined);
+  assert.equal(s.events.filter((e) => e.name === 'plexus.member.figure_dropped').length, 2);
+  assert.deepEqual(s.run.ledger.spent(), { tokens: 100, costUsd: 1 });
+  const valid = await call({ members: { m: () => completed('ok', { usage: { inputTokens: 1, outputTokens: 2 }, costUsd: 0 }) } });
+  assert.deepEqual([valid.out.result.usage, valid.out.result.costUsd], [{ inputTokens: 1, outputTokens: 2 }, 0]);
+  assert.ok(!valid.s.events.some((e) => e.name === 'plexus.member.figure_dropped'));
 });

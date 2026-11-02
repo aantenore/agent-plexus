@@ -4,12 +4,20 @@ Every implementation is an adapter: a package `@agent-plexus/adapter-<name>` tha
 technology onto a port. Adapters are independent packages, so each can have its own maintainer and release cadence.
 How to write one: [guide.md](guide.md#write-an-adapter) and [CONTRIBUTING.md](../CONTRIBUTING.md).
 
+A config names an adapter by name (`"adapter": "skill-router"`, found as `@agent-plexus/adapter-skill-router`), by
+module path (`"./adapters/mine.ts#name"`), or by a name a `plugins` module exports: a package outside
+`@agent-plexus/adapter-*` (`"plugins": ["@acme/plexus-adapters"]`) needs no rename. Lookup order and rules:
+[guide.md](guide.md#adapter-lookup). The core checks each descriptor it loads (`checkDescriptor`) and refuses one
+whose `portVersion` is incompatible with the core's. A MemberPort adapter declares its `capabilities` (`resume`,
+`cancel`, `checkpoint`, `waits`), which the readiness gate reads. The conformance kit `@agent-plexus/conformance` runs
+the port contract tests against an adapter.
+
 ## Maturity
 
 | Level | Criteria |
 |---|---|
 | experimental | Descriptor and tests pass. Behaviour may change. |
-| beta | Port conformance suite passing in CI (suites are planned), a pinned upstream version with a live contract test where there is an upstream, an owner. |
+| beta | Port conformance suite (`@agent-plexus/conformance`) passing in CI, a pinned upstream version with a live contract test where there is an upstream, an owner. |
 | stable | Beta for at least one minor release of its port without breaking changes, documented options, used in a reference setup. |
 
 ## Catalog
@@ -19,8 +27,7 @@ readiness gate (`agent-plexus check --profile <p>`) rejects prototype-only adapt
 adapter below is at maturity **experimental**; ports are at version 0.1.0.
 
 Status words: **implemented** is in this repository with its tests. **Planned** is work on the order of work: the
-adapters in the Planned table below, the `supervise` kind, the conformance package, the JSON
-Schemas and the CLI commands `diff` and `draw`. A **candidate** is a technology worth an adapter, with no work scheduled.
+adapters in the Planned table below, the JSON Schemas and the CLI commands `diff` and `draw`. A **candidate** is a technology worth an adapter, with no work scheduled.
 
 ### Available
 
@@ -34,6 +41,9 @@ Every package has its own README with options, behaviour and limits.
 | `member` | [`agent-layers`](../adapters/agent-layers) | MemberPort | technology: agent-layers stack | prototype, production | implemented | experimental |
 | `member` | [`a2a-member`](../adapters/a2a-member) | MemberPort | standard: Agent2Agent (A2A) 1.0 and 0.3, JSON-RPC binding (official JavaScript SDK) | prototype, production | implemented | experimental |
 
+Declared `capabilities`: `a2a-member` all four (`resume`, `cancel`, `checkpoint`, `waits`); `agent-layers` `waits`
+only, so the readiness gate warns that a run waiting on it cannot continue; `function-member` none.
+
 #### Discovery plane
 
 | Layer | Adapter | Fills | Maps | Tiers | Status | Maturity |
@@ -45,7 +55,7 @@ Every package has its own README with options, behaviour and limits.
 
 | Layer | Adapter | Fills | Maps | Tiers | Status | Maturity |
 |---|---|---|---|---|---|---|
-| `topology` | [`basic-topology`](../adapters/basic-topology) | TopologyPort | technology: in-process topology executor (`sequence`, `route`, `loop`, `parallel`, `handoff`, `graph`; `supervise` is planned) | prototype, production | implemented | experimental |
+| `topology` | [`basic-topology`](../adapters/basic-topology) | TopologyPort | technology: in-process topology executor (`sequence`, `route`, `loop`, `parallel`, `handoff`, `supervise`, `graph`) | prototype, production | implemented | experimental |
 | `execution` | [`memory-execution`](../adapters/memory-execution) | ExecutionPort | technology: in-process memory | prototype | implemented | experimental |
 | `execution` | [`sqlite-execution`](../adapters/sqlite-execution) | ExecutionPort | technology: SQLite through `node:sqlite` | prototype, production | implemented | experimental |
 
@@ -84,8 +94,7 @@ three descriptors:
 | `host-execution` | ExecutionPort | execution | technology: the host's `state` hook | planned | |
 | `judge-attribution` | AttributionPort | attribution | technology: a model reads the hop record | planned | Agent level only |
 | `replay-attribution` | AttributionPort | attribution | technology: offline counterfactual replay | planned | One member's output replaced, or one member swapped |
-| `basic-topology`: `supervise` | TopologyPort | topology | technology: in-process topology executor | planned | `check` and `bind` reject the kind today |
-| `agent-layers`: tool source of `supervise` | — | member | technology: agent-layers stack | planned | The stack's tools as what a supervisor can call; needs the `supervise` kind |
+| `agent-layers`: tool source of `supervise` | — | member | technology: agent-layers stack | planned | The stack's tools as what a supervisor can call; the `supervise` kind exists, its supervisor is a member today |
 
 ### Candidates
 

@@ -335,6 +335,17 @@ test('score: the stack evaluators score the case and map back to plexus scores',
   await stack.close();
 });
 
+test('score: expectations on members are checked on the texts the core reads back', async () => {
+  const { system, stack } = await fixture();
+  const sys = await system(['billing']);
+  const result = await sys.run('hello', { caller });
+  const scores = await sys.score({ id: 'c1', input: 'hello', expected: { members: { billing: { contains: 'echo:hello', status: 'completed' } } } }, result);
+  assert.deepEqual(scores.map((s) => [s.metric, s.value]), [['expected.member', 1]]);
+  const miss = await sys.score({ id: 'c2', input: 'hello', expected: { members: { billing: { contains: 'other' } } } }, result);
+  assert.deepEqual(miss.map((s) => [s.metric, s.value]), [['expected.member', 0]]);
+  await stack.close();
+});
+
 test('score: absent without evaluators; state is not provided', async () => {
   const { stack } = await fixture();
   stack.ports.eval.length = 0;

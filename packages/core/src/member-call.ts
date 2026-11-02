@@ -45,6 +45,18 @@ export interface RunState {
   waits?: WaitingCall[];
   /** The wait a `System.resume` answers: its call reads the reply with `Execution.wait`. */
   resuming?: WaitingCall;
+  /** Calls holding one of the `limits.system.maxParallel` slots, and those waiting for one, first come first served. */
+  slots?: Slots;
+  /** Cancels of the remote tasks of calls that ended waiting, by hop id: run when the topology abandons the call. */
+  tasks?: Map<string, () => Promise<void>>;
+  /** The latest `run:spent` write; writes are chained so the last one kept holds the latest totals. */
+  spentWrite?: Promise<void>;
+}
+
+/** The slots of `limits.system.maxParallel` in one run. */
+export interface Slots {
+  busy: number;
+  queue: (() => void)[];
 }
 
 /** A call a run waits on, kept under `run:waiting` so `System.resume` can answer it. */
@@ -61,10 +73,12 @@ export interface WaitingCall {
 
 /**
  * Keys the core keeps for a run with `Execution.remember`. `owner` is the identity of the caller that started the run
- * (null without one); `claimed` is the wait whose reply a resume delivered, so a run begun again after a crash reads it.
+ * (null without one); `claimed` is the wait whose reply a resume delivered, so a run begun again after a crash reads it;
+ * `spent` is what the run's calls spent, over all its invocations (`SpentTotals`).
  */
 export const RUN_KEYS = {
   input: 'run:input', lineage: 'run:lineage', owner: 'run:owner', waiting: 'run:waiting', status: 'run:status', claimed: 'run:claimed',
+  spent: 'run:spent',
 } as const;
 
 /** The step key `<prefix>:<node path>:<n>` of the next step of a node path, n counting that path's steps in the run. */
@@ -173,27 +187,138 @@ async function nextAttempt(run: RunState, key: string, now: number): Promise<Att
   return next;
 }
 
-/** The task handle kept by the latest earlier attempt of the call. */
+/**
+ * The task handle kept by the latest earlier attempt of the call; none once the core cancelled the task of this attempt
+ * or of a later earlier one (a kept null).
+ */
 async function keptHandle(execution: Execution, key: string, before: number): Promise<string | undefined> {
-  for (let n = before - 1; n >= 0; n--) {
+  for (let n = before; n >= 0; n--) {
     const ref = await execution.recall(`${stepName(key, n)}:task`);
-    if (typeof ref === 'string') return ref;
+    if (ref === null) return undefined;
+    if (n < before && typeof ref === 'string') return ref;
   }
   return undefined;
 }
+
+const isTaskRef = (ref: unknown): ref is string => typeof ref === 'string' && ref.length > 0 && ref.length <= MAX_TASK_REF;
+
+const writeFailed = (env: MemberCallEnv, key: string, err: unknown): void =>
+  env.host.telemetry.event(EVENT.writeFailed, { [ATTR.layer]: 'execution', [ATTR.system]: env.system, [ATTR.executionKey]: key, [ATTR.errorMessage]: errorMessage(err) });
 
 /**
  * Keeps the handle a waiting member returned without checkpointing it, so a resume can continue its task. A write that
  * fails is reported; without the handle a resume stops with `rejected`.
  */
 async function keepHandle(env: MemberCallEnv, execution: Execution, stepKey: string, taskRef: unknown): Promise<void> {
-  if (typeof taskRef !== 'string' || taskRef.length === 0 || taskRef.length > MAX_TASK_REF) return;
+  if (!isTaskRef(taskRef)) return;
   const key = `${stepKey}:task`;
   try {
     if ((await execution.recall(key)) === undefined) await execution.remember(key, taskRef);
   } catch (err) {
-    env.host.telemetry.event(EVENT.writeFailed, { [ATTR.layer]: 'execution', [ATTR.system]: env.system, [ATTR.executionKey]: key, [ATTR.errorMessage]: errorMessage(err) });
+    writeFailed(env, key, err);
   }
+}
+
+/**
+ * Keeps what the run has spent as `run:spent`, after every settle. Writes are chained, and each one takes the totals
+ * when it runs, so the value kept last is the latest. A write that fails is reported; the run goes on.
+ */
+function keepSpent(env: MemberCallEnv, run: RunState): Promise<void> {
+  const write = (run.spentWrite ?? Promise.resolve()).then(async () => {
+    try {
+      await run.execution.remember(RUN_KEYS.spent, run.ledger.spent());
+    } catch (err) {
+      writeFailed(env, RUN_KEYS.spent, err);
+    }
+  });
+  run.spentWrite = write;
+  return write;
+}
+
+/**
+ * Forgets the handle kept for a step once the core cancelled its task, so a later invocation of the run neither resumes
+ * nor cancels it again. A write that fails is reported.
+ */
+async function forgetHandle(env: MemberCallEnv, execution: Execution, stepKey: string): Promise<void> {
+  const key = `${stepKey}:task`;
+  try {
+    await execution.remember(key, null);
+  } catch (err) {
+    writeFailed(env, key, err);
+  }
+}
+
+/** A member's remote task, as known to the call that started or continued it. */
+interface Task {
+  ref: string;
+  ctx: MemberCallContext;
+}
+
+/**
+ * Asks the member to cancel a task, best effort: bounded by `limits.system.cancelTimeoutMs`, never rejects. A cancel
+ * that throws or takes longer is reported as `plexus.member.cancel_failed`.
+ */
+async function cancelTask(env: MemberCallEnv, port: MemberPort, member: string, hopId: string, task: Task): Promise<void> {
+  const ms = limitNumber(env.limits.cancelTimeoutMs);
+  const timer = new AbortController();
+  const handle = setTimeout(() => timer.abort(), Math.min(ms, MAX_TIMER_MS));
+  try {
+    const call = Promise.resolve().then(() => port.cancel!(task.ref, { ...task.ctx, signal: timer.signal }));
+    call.catch(() => {});
+    const late = new Promise<'late'>((done) => timer.signal.addEventListener('abort', () => done('late'), { once: true }));
+    if ((await Promise.race([call, late])) === 'late') throw new Error(`cancel took longer than ${ms} ms`);
+  } catch (err) {
+    env.host.telemetry.event(EVENT.cancelFailed, {
+      [ATTR.layer]: 'member', [ATTR.system]: env.system, [ATTR.member]: member, [ATTR.hop]: hopId, [ATTR.errorMessage]: errorMessage(err),
+    });
+  } finally {
+    clearTimeout(handle);
+  }
+}
+
+/**
+ * Waits for one of the `limits.system.maxParallel` slots of the run, first come first served. True once the call holds
+ * one; false when its signal aborts or the deadline (less `minRemainingMs`) comes first. A call never fails for want
+ * of a slot: it waits.
+ */
+function acquireSlot(env: MemberCallEnv, run: RunState, options: CallOptions, clock: () => number): Promise<boolean> {
+  const slots = run.slots ??= { busy: 0, queue: [] };
+  if (slots.busy < limitNumber(env.limits.maxParallel) && slots.queue.length === 0) {
+    slots.busy++;
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const signals = [run.ctx.signal, options.signal].filter((x): x is AbortSignal => !!x);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const settle = (held: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      for (const signal of signals) signal.removeEventListener('abort', leave);
+      resolve(held);
+    };
+    const grant = (): void => { slots.busy++; settle(true); };
+    function leave(): void {
+      const at = slots.queue.indexOf(grant);
+      if (at < 0) return;
+      slots.queue.splice(at, 1);
+      settle(false);
+    }
+    slots.queue.push(grant);
+    if (signals.some((signal) => signal.aborted)) return leave();
+    for (const signal of signals) signal.addEventListener('abort', leave, { once: true });
+    const wait = deadlineMs(run.ledger.bounds) - limitNumber(env.limits.minRemainingMs) - clock();
+    if (wait <= 0) return leave();
+    if (wait <= MAX_TIMER_MS) timer = setTimeout(leave, wait);
+  });
+}
+
+/** Gives the slot to the call that waited longest, or frees it. */
+function releaseSlot(run: RunState): void {
+  const slots = run.slots!;
+  slots.busy--;
+  slots.queue.shift()?.();
 }
 
 function stop(code: string, layer?: string, by?: string, detail?: string, status: MemberResult['status'] = 'stopped', stage?: StopReason['stage']): MemberResult {
@@ -245,17 +370,47 @@ const withText = (input: RunInput, text: string): RunInput => (typeof input === 
 
 const partCount = (input: RunInput): number => (typeof input === 'string' || !Array.isArray(input.parts) ? 0 : input.parts.length);
 
+const amount = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
+
+/** Why a figure a member reported was dropped, by field. */
+const FIGURE_PROBLEM = {
+  usage: 'usage is not two finite non-negative token counts',
+  costUsd: 'costUsd is not a finite non-negative number',
+} as const;
+
 /**
- * A member's answer as the pipeline relies on it: a known status, a text, and a reason when it did not complete. A
- * `wait` is the core's to set, so the member's own is dropped.
+ * A member's reason as the core keeps it: a member speaks only for layer `member`. A plexus layer or `host` it names is
+ * its own name for where it stopped, so it moves to `memberLayer` (unless one is set) and `layer` becomes `member`.
  */
-function normalize(value: unknown): MemberResult {
+function memberReason(reason: StopReason | undefined): StopReason {
+  if (!reason) return { code: 'error', layer: 'member' };
+  const { layer } = reason;
+  if (layer === undefined || layer === 'member') return reason;
+  const own = reason.memberLayer === undefined && typeof layer === 'string' && layer !== '' ? { memberLayer: layer } : {};
+  return { ...reason, layer: 'member', ...own };
+}
+
+/**
+ * A member's answer as the pipeline relies on it: a known status, a text, and a reason (its own, see `memberReason`)
+ * when it did not complete. `usage` and `costUsd` that are not finite non-negative numbers are dropped and reported
+ * through `dropped`, so totals stay numbers. A `wait` is the core's to set, so the member's own is dropped.
+ */
+function normalize(value: unknown, dropped: (field: keyof typeof FIGURE_PROBLEM) => void): MemberResult {
   const r = value as Partial<MemberResult> | null;
   if (!r || typeof r !== 'object' || !RUN_STATUSES.includes(r.status as never) || typeof r.output !== 'string') {
     return stop('error', 'member', undefined, 'invalid member result', 'failed');
   }
-  const { wait: _wait, ...own } = r;
-  return (own.status !== 'completed' && !own.reason ? { ...own, reason: { code: 'error', layer: 'member' } } : own) as MemberResult;
+  const { wait: _wait, usage, costUsd, ...own } = r;
+  const result = own as MemberResult;
+  if (usage !== undefined) {
+    if (isPlainObject(usage) && amount(usage.inputTokens) && amount(usage.outputTokens)) result.usage = usage;
+    else dropped('usage');
+  }
+  if (costUsd !== undefined) {
+    if (amount(costUsd)) result.costUsd = costUsd;
+    else dropped('costUsd');
+  }
+  return result.status === 'completed' ? result : { ...result, reason: memberReason(result.reason) };
 }
 
 interface Invocation {
@@ -272,22 +427,32 @@ interface Invocation {
   taskRef?: string;
   /** Send `input` with the handle: the reply a waiting member asked for. */
   send?: boolean;
+  /** Reports a figure of the member's result that was dropped. */
+  dropped: (field: keyof typeof FIGURE_PROBLEM) => void;
 }
 
 /**
  * What a member call came to. `final` when the member returned it (whatever its status); not when the call threw, timed
- * out or was aborted, which a later attempt may not repeat.
+ * out or was aborted, which a later attempt may not repeat. `cut` when the core cut the call off: its signal aborted
+ * (the run's, the call's, or the core's own step or deadline timer) before the member answered.
  */
 interface Invoked {
   result: MemberResult;
   final: boolean;
+  cut: boolean;
 }
 
-/** Calls the member (or continues its remote work); never rejects. A member that ignores its signal is still cut off at the deadline. */
+/** The reason of the call signal when the core's own step or deadline timer cuts a call off. */
+const timeoutReason = (): DOMException => new DOMException('the call ran out of time', 'TimeoutError');
+
+/**
+ * Calls the member (or continues its remote work); never rejects. A member that ignores its signal is still cut off at
+ * the deadline; the core's own timer aborts the signal with a `TimeoutError` reason.
+ */
 async function invoke(inv: Invocation): Promise<Invoked> {
   const { signal } = inv.ctx as { signal: AbortSignal };
   const handle = Number.isFinite(inv.timeoutMs) && inv.timeoutMs <= MAX_TIMER_MS
-    ? setTimeout(() => inv.timer.abort(), Math.max(0, inv.timeoutMs))
+    ? setTimeout(() => inv.timer.abort(timeoutReason()), Math.max(0, inv.timeoutMs))
     : undefined;
   const cutOff = (): MemberResult => inv.timer.signal.aborted
     ? (inv.stepBinding ? stop('timeout', 'member', 'limits.system.stepTimeoutMs') : stop('timeout', 'topology', inv.deadlineBy))
@@ -301,9 +466,11 @@ async function invoke(inv: Invocation): Promise<Invoked> {
   call.catch(() => {});
   try {
     const raced = await Promise.race([call.then((result) => ({ result })), aborted.then(() => undefined)]);
-    return raced ? { result: normalize(raced.result), final: true } : { result: cutOff(), final: false };
+    return raced ? { result: normalize(raced.result, inv.dropped), final: true, cut: false } : { result: cutOff(), final: false, cut: true };
   } catch (err) {
-    return { result: signal.aborted ? cutOff() : stop('error', 'member', undefined, errorMessage(err), 'failed'), final: false };
+    return signal.aborted
+      ? { result: cutOff(), final: false, cut: true }
+      : { result: stop('error', 'member', undefined, errorMessage(err), 'failed'), final: false, cut: false };
   } finally {
     clearTimeout(handle);
   }
@@ -330,8 +497,12 @@ async function pipeline(
     if (refused.reason?.code !== 'aborted') host.telemetry.event(EVENT.limit, { [ATTR.layer]: 'topology', [ATTR.member]: member, [ATTR.runReason]: refused.reason!.code });
     return { result: refused };
   }
-  const reservation = ledger.reserve(options.share);
-  if (!reservation) return { result: stop('limit', 'topology') };
+  // A run whose earlier invocations spent its budget still replays their steps, which need none: such a call is stopped
+  // with `limit` once its step key is known and the step has no stored result, before the gate.
+  const reserved = ledger.reserve(options.share);
+  if (!reserved && !ledger.inherited) return { result: stop('limit', 'topology') };
+  const unfunded = !reserved;
+  const reservation: Reservation = reserved ?? {};
   run.steps++;
   // Keyed by node path, not by the order calls happen in: parallel branches replay to the same keys whatever finishes first.
   const key = nextStepKey(run.calls ??= new Map(), 'call', options.node);
@@ -368,6 +539,17 @@ async function pipeline(
     return early(stop('error', 'execution', undefined, errorMessage(err), 'failed'));
   }
   const done = (result: MemberResult, wait?: WaitingCall['kind']): Outcome => ({ ...early(result), key, attempt: attempt.n, ...(wait ? { wait } : {}) });
+  const stepKey = stepName(key, attempt.n);
+
+  // A run whose budget earlier invocations spent goes on only through steps that replay: any other call stops here,
+  // before the gate is asked or a credential minted.
+  let stored: MemberResult | undefined;
+  if (unfunded) {
+    const kept = await storedStep(run.execution, stepKey);
+    if (kept === undefined) return done(stop('limit', 'topology'));
+    if ('error' in kept) return done(stop('error', 'execution', undefined, kept.error, 'failed'));
+    stored = kept.result;
+  }
 
   // 2. May this caller invoke this member.
   try {
@@ -413,9 +595,22 @@ async function pipeline(
 
   // 5. Call, as a journal step, with outbound bounds and lineage. Each attempt is a step of its own.
   const inputRef = await safePut(run.execution, sent.text);
-  const stepKey = stepName(key, attempt.n);
-  const { result, replayed } = await callAsStep(env, run, hopId, port!, sentInput, credential, reservation, options, stepKey, clock, span, handle);
+  const { result, replayed, task, cut } = stored
+    ? { result: stored, replayed: true, cut: false }
+    : await callAsStep(env, run, hopId, port!, sentInput, credential, reservation, options, stepKey, clock, span, handle);
   if (result.status === 'waiting') await keepHandle(env, run.execution, stepKey, result.taskRef);
+
+  // A remote task left behind is cancelled: now when the core cut the call off (an abort, or its own timeout), when the
+  // topology abandons the call if it ended waiting. A cancelled task's handle is forgotten. What the member returned
+  // itself (failed, stopped, a journaled waiting) is never cancelled here.
+  if (task && port!.cancel) {
+    const cancel = async (): Promise<void> => {
+      await cancelTask(env, port!, member, hopId, task);
+      await forgetHandle(env, run.execution, stepKey);
+    };
+    if (cut) await cancel();
+    else if (result.status === 'waiting') (run.tasks ??= new Map()).set(hopId, cancel);
+  }
 
   // 6. Check what comes back.
   const spent = { ...(result.usage ? { usage: result.usage } : {}), ...(result.costUsd !== undefined ? { costUsd: result.costUsd } : {}) };
@@ -427,9 +622,14 @@ async function pipeline(
     final = 'blocked' in received ? { ...received.blocked, ...spent } : { ...result, output: received.text };
   }
 
-  // 7. Settle the reservation (a replayed step spends nothing in this run); the caller writes the record.
+  // 7. Settle the reservation and keep what the run spent. A replayed step was counted by the invocation that ran it
+  // (in the kept `run:spent`), so it spends nothing here. A call that ended waiting goes on later: it spends what it
+  // reported, and its continuation settles the rest. The caller writes the record.
   if (replayed) ledger.release(reservation);
-  else ledger.settle(reservation, spent);
+  else {
+    ledger.settle(reservation, spent, final.status === 'waiting');
+    await keepSpent(env, run);
+  }
   const outputRef = blocked ? undefined : await safePut(run.execution, final.output);
   return {
     result: final, key, attempt: attempt.n, ...(final.status === 'waiting' ? { wait: 'member' as const } : {}),
@@ -437,25 +637,44 @@ async function pipeline(
   };
 }
 
-/** Carries a call's outcome that is not final out of `Execution.step`, so the step stores nothing and a later attempt calls again. */
-class NotFinal extends Error {
-  readonly result: MemberResult;
-  constructor(result: MemberResult) {
-    super('not final');
-    this.result = result;
+/**
+ * The result a journal step `key` stored, without running anything: undefined when the step has none (the probe's
+ * function runs, throws and so stores nothing), an error when the journal fails.
+ */
+async function storedStep(execution: Execution, key: string): Promise<{ result: MemberResult } | { error: string } | undefined> {
+  let ran = false;
+  try {
+    const result = await execution.step(key, async (): Promise<MemberResult> => {
+      ran = true;
+      throw new Error('no stored result');
+    });
+    return { result };
+  } catch (err) {
+    return ran ? undefined : { error: errorMessage(err) };
   }
 }
 
+/**
+ * Runs the call as the journal step `key`. An outcome that is not final makes the step's function reject, so the step
+ * stores nothing and a later attempt calls again; the outcome itself is carried out in a variable, not in the error,
+ * so an engine that rejects with an error of its own (serialised, wrapped) changes nothing. `task` is the member's
+ * remote task as this call last knew it.
+ */
 async function callAsStep(
   env: MemberCallEnv, run: RunState, hopId: string, port: MemberPort, input: RunInput, credential: string | undefined,
   reservation: Reservation, options: CallOptions, key: string, clock: () => number, span: SpanHandle, handle?: string,
-): Promise<{ result: MemberResult; replayed: boolean }> {
+): Promise<{ result: MemberResult; replayed: boolean; task?: Task; cut: boolean }> {
   const { ctx, ledger, execution } = run;
   const taskKey = `${key}:task`;
   let ran = false;
+  let notFinal: MemberResult | undefined;
+  let cut = false;
+  let task: Task | undefined;
   try {
     const result = await execution.step(key, async () => {
       ran = true;
+      notFinal = undefined;
+      cut = false;
       // A task handle journaled by an attempt that did not finish the step: continue that work, do not send again.
       const prior = await execution.recall(taskKey);
       const kept = typeof prior === 'string' && port.resume ? prior : undefined;
@@ -475,32 +694,41 @@ async function callAsStep(
         ...(credential ? { credential } : {}),
         outbound: ledger.outbound(ctx.runId, run.rootRunId, reservation, limitNumber(env.limits.marginMs), stepMs),
         checkpoint: async (ref) => {
-          if (typeof ref !== 'string' || ref.length === 0 || ref.length > MAX_TASK_REF) {
+          if (!isTaskRef(ref)) {
             span.event(EVENT.checkpointIgnored);
             return;
           }
           await execution.remember(taskKey, ref);
+          task = { ref, ctx: memberCtx };
         },
       };
+      if (taskRef !== undefined) task = { ref: taskRef, ctx: memberCtx };
       const invoked = await invoke({
         port, input, ctx: memberCtx, timeoutMs: Math.min(remaining, stepMs), stepBinding: stepMs <= remaining, deadlineBy: ledger.deadlineBy, timer,
         ...(taskRef !== undefined ? { taskRef, send: kept === undefined } : {}),
+        dropped: (field) => span.event(EVENT.figureDropped, { [ATTR.errorMessage]: FIGURE_PROBLEM[field] }),
       });
+      if (isTaskRef(invoked.result.taskRef)) task = { ref: invoked.result.taskRef, ctx: memberCtx };
       // Only what the member returned is journaled; a throw, a timeout or an abort is retried by a later attempt.
-      if (!invoked.final) throw new NotFinal(invoked.result);
+      if (!invoked.final) {
+        notFinal = invoked.result;
+        cut = invoked.cut;
+        throw new Error('not final');
+      }
       return invoked.result;
     });
-    return { result, replayed: !ran };
+    return { result, replayed: !ran, cut: false, ...(ran && task ? { task } : {}) };
   } catch (err) {
-    if (err instanceof NotFinal) return { result: err.result, replayed: false };
-    return { result: stop('error', 'execution', undefined, errorMessage(err), 'failed'), replayed: false };
+    if (notFinal) return { result: notFinal, replayed: false, cut, ...(task ? { task } : {}) };
+    return { result: stop('error', 'execution', undefined, errorMessage(err), 'failed'), replayed: false, cut: false, ...(task ? { task } : {}) };
   }
 }
 
 /**
- * The only way to reach a member: limits and budget, the registry when it must list members, the host's allow and content
- * checks, a credential for the member's audience, the call as a journal step, the check of the answer, and a hop record. Refusals and failures are
- * results, never exceptions, and every call writes a record.
+ * The only way to reach a member: a slot of `limits.system.maxParallel`, limits and budget, the registry when it must
+ * list members, the host's allow and content checks, a credential for the member's audience, the call as a journal step,
+ * the check of the answer, and a hop record. Refusals and failures are results, never exceptions, and every call writes
+ * a record.
  */
 export async function memberCall(env: MemberCallEnv, run: RunState, member: string, input: RunInput, options: CallOptions): Promise<CallOutcome> {
   const hopId = randomUUID();
@@ -510,7 +738,19 @@ export async function memberCall(env: MemberCallEnv, run: RunState, member: stri
     [ATTR.layer]: 'member', [ATTR.system]: env.system, [ATTR.member]: member, [ATTR.hop]: hopId, [ATTR.nodePath]: options.node,
   };
   const result = await env.host.telemetry.span(SPAN.hop, attrs, async (span) => {
-    const outcome = await pipeline(env, run, hopId, member, input, options, clock, span);
+    let outcome: Outcome;
+    if (await acquireSlot(env, run, options, clock)) {
+      try {
+        outcome = await pipeline(env, run, hopId, member, input, options, clock, span);
+      } finally {
+        releaseSlot(run);
+      }
+    } else {
+      // The run or the call was cancelled, or its time ran out, while it waited for a slot.
+      const aborted = run.ctx.signal?.aborted || options.signal?.aborted;
+      if (!aborted) env.host.telemetry.event(EVENT.limit, { [ATTR.layer]: 'topology', [ATTR.member]: member, [ATTR.runReason]: 'timeout' });
+      outcome = { result: aborted ? stop('aborted') : stop('timeout', 'topology') };
+    }
     let { result: r } = outcome;
     run.records.push({
       hopId,

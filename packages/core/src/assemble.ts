@@ -4,7 +4,7 @@ import { loadConditionFns, matchesCondition } from './condition.ts';
 import type { ResolvedConfig } from './config.ts';
 import type { GateAnswer, Host, ResumeQuestion } from './hooks.ts';
 import { isRunBusy } from './errors.ts';
-import { deadlineBy, deadlineMs, Ledger, openBounds } from './ledger.ts';
+import { deadlineBy, deadlineMs, Ledger, openBounds, spentTotals, type SpentTotals } from './ledger.ts';
 import {
   memberCall, nextStepKey, replyName, replyWait, resumeReply, RUN_KEYS, waitingCall, waitRef, waitToken, type MemberCallEnv, type RunState,
   type WaitingCall,
@@ -14,13 +14,13 @@ import type {
   AgentRouterPort, AttributionPort, BoundTopology, Execution, ExecutionPort, MemberPort, RecordSource, RegistryPort, RouteRequest,
   RunScope, TopologyPort,
 } from './ports.ts';
-import { prototypeHost, noopTelemetry } from './prototype-host.ts';
+import { expectedScores, prototypeHost, noopTelemetry } from './prototype-host.ts';
 import { readinessFindings, type Finding } from './readiness.ts';
-import { createAdapter, loadDescriptor, type DescriptorLoader } from './resolve.ts';
+import { createAdapter, pluginLoader, type DescriptorLoader } from './resolve.ts';
 import {
   callerIdentity, inputText, isRunInput, sameIdentity, type AgentEntry, type Attribution, type CallerIdentity, type EvalCase,
   type HopRecord, type Lineage, type MemberResult, type ResumeReply, type RouteDecision, type RunContext, type RunInput, type RunStatus,
-  type Score, type SystemResult,
+  type Score, type SystemResult, type Usage,
 } from './shapes.ts';
 import { DEFAULT_ROUTER } from './topology-check.ts';
 import { limitNumber, type Env } from './system-limits.ts';
@@ -114,11 +114,26 @@ export interface System {
 const failed = (code: string, layer: string, detail: string): MemberResult =>
   ({ status: 'failed', output: '', reason: { code, layer, detail } });
 
+/**
+ * What an invocation spent, from its own hop records: replayed calls were spent by an earlier invocation and are left
+ * out. A dimension no record reports is absent.
+ */
+function invocationTotals(records: readonly HopRecord[]): { usage?: Usage; costUsd?: number } {
+  let usage: Usage | undefined;
+  let costUsd: number | undefined;
+  for (const r of records) {
+    if (r.replayed) continue;
+    if (r.usage) usage = { inputTokens: (usage?.inputTokens ?? 0) + r.usage.inputTokens, outputTokens: (usage?.outputTokens ?? 0) + r.usage.outputTokens };
+    if (r.costUsd !== undefined) costUsd = (costUsd ?? 0) + r.costUsd;
+  }
+  return { ...(usage ? { usage } : {}), ...(costUsd !== undefined ? { costUsd } : {}) };
+}
+
 /** Creates the members, ports and host of a resolved config and returns the system that runs them. */
 export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {}): Promise<System> {
   const cwd = opts.cwd ?? config.cwd;
   const env = opts.env ?? process.env;
-  const load = opts.resolveAdapter ?? loadDescriptor;
+  const load = opts.resolveAdapter ?? pluginLoader(config.plugins);
   const limits = config.limits;
   const used: { path: string; descriptor: Awaited<ReturnType<typeof createAdapter>>['descriptor']; options: Record<string, unknown> }[] = [];
   const instances: unknown[] = [];
@@ -299,6 +314,12 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
       abandon: (hopId) => {
         const record = state.records.find((r) => r.hopId === hopId);
         if (record) record.abandoned = true;
+        // A call that ended waiting on a remote task: the member is asked to cancel it, best effort, without waiting.
+        const cancel = state.tasks?.get(hopId);
+        if (cancel) {
+          state.tasks!.delete(hopId);
+          void cancel();
+        }
       },
     };
   }
@@ -362,9 +383,12 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
     }
     let opening: Opening;
     let fresh = false;
+    let spent: SpentTotals | undefined;
     try {
       const kept: Kept = { input: await run.recall(RUN_KEYS.input), owner: await run.recall(RUN_KEYS.owner) };
       fresh = kept.input === undefined && kept.owner === undefined;
+      // What earlier invocations of the run spent: the budget is the run's.
+      spent = spentTotals(await run.recall(RUN_KEYS.spent));
       opening = await open(run, kept);
     } catch (err) {
       opening = { refused: failed('error', 'execution', errorMessage(err)) };
@@ -378,7 +402,7 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
     const { input, ctx, resuming } = opening;
     const rootRunId = ctx.lineage?.rootRunId ?? ctx.runId;
     const now = Date.now();
-    const ledger = new Ledger(openBounds(ctx, limits, now), Date.now, deadlineBy(ctx, limits, now));
+    const ledger = new Ledger(openBounds(ctx, limits, now), Date.now, deadlineBy(ctx, limits, now), spent);
     const state: RunState = { ctx, rootRunId, ledger, execution: run, steps: 0, recent: [], records: [], ...(resuming ? { resuming } : {}) };
     let result: MemberResult;
     if (!bound) result = failed('error', 'topology', bindError ?? 'topology is not bound');
@@ -392,8 +416,10 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
     }
     // A resume answers the wait the result reports, and the result names the wait the run keeps.
     const waiting = result.status === 'waiting' ? keptWait(result, state.waits) : undefined;
-    const { wait: _wait, ...rest } = result;
-    const final: MemberResult = { ...rest, ...(waiting ? { wait: waitRef(waiting) } : {}) };
+    // Usage and cost are the core's totals over this invocation's calls, whatever the topology summed.
+    const { wait: _wait, usage: _usage, costUsd: _costUsd, ...rest } = result;
+    await state.spentWrite;
+    const final: MemberResult = { ...rest, ...invocationTotals(state.records), ...(waiting ? { wait: waitRef(waiting) } : {}) };
     if (await keep(run, RUN_KEYS.waiting, waiting ?? null)) await keep(run, RUN_KEYS.status, result.status);
     await end(run, result.status);
     const records = [...state.records].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
@@ -484,7 +510,9 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
       return found;
     },
     async score(evalCase, result) {
-      return host.score ? host.score.score(evalCase, result) : [];
+      // Without a host scorer the built-in `expected` checks apply: a case is never passed unchecked.
+      const read = async (key: string) => execution?.read?.(key);
+      return host.score ? host.score.score(evalCase, result, { read }) : expectedScores(evalCase, result, read);
     },
     async check() {
       const described: AgentEntry[] = [];
@@ -500,7 +528,7 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
         try { registryIds = (await registry.list()).map((e) => e.id); } catch (err) { registryError = errorMessage(err); }
       }
       const findings = readinessFindings({
-        config, host, adapters: used, entries: described,
+        config, host, adapters: used, entries: described, execution: journal,
         topologyKinds: topology.kinds, routers: [...routers.keys()],
         ...(registryIds ? { registryIds } : {}), ...(registryError ? { registryError } : {}), ...(bindError ? { bindError } : {}),
       });

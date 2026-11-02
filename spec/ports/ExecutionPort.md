@@ -1,6 +1,6 @@
 # ExecutionPort
 
-Layer: `execution` (L4 Execution) · Version: 0.1.0 · Conformance: planned
+Layer: `execution` (L4 Execution) · Version: 0.1.0 · Conformance: [`checkExecution`](../../packages/conformance) in `@agent-plexus/conformance`
 
 ## Purpose
 
@@ -24,15 +24,18 @@ that runs once and replays its stored result on resume.
 An `Execution` has:
 
 - `step(name: String, fn: () → T) → T`
-  Run `fn` once; on resume return its stored result. A `fn` that throws stores nothing. The result must be
-  JSON-serialisable.
+  Run `fn` once; on resume return its stored result. The result must be JSON-serialisable. `fn` MUST run in the
+  caller's process, inside the `step` call, and MAY call `recall` and `remember` on the same run while it runs. A `fn`
+  that rejects stores nothing, and the `step` rejects; the error it rejects with may be any error (a serialised or
+  wrapped one is fine): the core does not read it to tell its own outcomes apart.
 - `wait(name: String, untilAt: String) → Any`
   Suspend until `signal(runKey, name, value)` or `untilAt`; returns the value, or nothing at the deadline.
 - `put(text: String) → String`
   Store a text and return its key.
 - `remember(key: String, value: Any) → ()`
   Keep a small JSON value under a key for this run; the value is cloned through JSON and survives a restart when the
-  adapter is durable. A later `remember` of the same key replaces it.
+  adapter is durable. A later `remember` of the same key replaces it. `null` is a value like any other: a key kept
+  as `null` recalls `null`, not nothing.
 - `recall(key: String) → Any`
   The value kept under the key, cloned, or nothing. Keys of other runs are not visible.
 - `end(status: runStatus) → ()`
@@ -50,7 +53,9 @@ An `Execution` has:
   `call:<node path>:<n>#<attempt>` for a resumed attempt of that call) and once per routing decision
   (`route:<node path>:<n>`), `put` for the text sent to and received from a member, and `end` with the final status.
   `<n>` counts the calls (or decisions) of that node path in the run, from 0, so keys do not depend on the order in
-  which parallel branches finish.
+  which parallel branches finish. The topology MUST give every member call site a node path of its own, the same on
+  every invocation of the run (see [TopologyPort](TopologyPort.md#semantics)): replay keys depend on it, and two call
+  sites sharing a path would read each other's results.
 - Only final outcomes are stored in a call's step: what the member returned, whatever its status. A call that threw,
   timed out or was aborted stores nothing, so a later invocation of the run calls the member again. Likewise a routing
   step stores only a decision: a router or registry that failed stores nothing.
@@ -59,7 +64,8 @@ An `Execution` has:
   `run:lineage` when the run starts; `run:waiting` (`{key, attempt, kind, member, node}` of the call a run that ends
   `waiting` waits on, else `null`) and `run:status` (the status the run ended with) when it ends; `run:claimed` (the
   wait whose reply a resume delivered); and `<key>:attempt` (the attempt a resumed call makes and the reply it carries,
-  an approval with `by`, the id of the caller that resumed). A failed write of a value the core keeps (a `run:*` key,
+  an approval with `by`, the id of the caller that resumed); and `run:spent` (`{tokens, costUsd}`, what the run's calls
+  spent over all its invocations) after every call that settles its budget. A failed write of a value the core keeps (a `run:*` key,
   a waiting member's handle `<step name>:task`) or a failed `end` or `release` is reported as the telemetry event
   `plexus.execution.write_failed` with the key (`end`, `release` for those two) and the error, never the value.
 - A run whose `run:owner` or `run:input` cannot be kept when it starts does not start: `failed`, code `error`, layer
@@ -88,6 +94,30 @@ An `Execution` has:
   wrong kind, the gate refused it, the input differs) changes nothing in the run: the core calls `release`, never
   `end`, so the run keeps its last status. Only a run that has kept nothing (`run:owner` and `run:input` absent, so
   this `begin` created it) ends `failed`, so the adapter may drop it.
+- Inside each step the core calls `recall("<step name>:task")`, and `remember("<step name>:task", taskRef)` when the
+  member checkpoints. The kept value stays after the step finishes and is read again only if the step has no stored
+  result. A crash before the step result is stored therefore leaves the handle, and the next run of the same key
+  continues the remote work (see [MemberPort](MemberPort.md#two-phase-call)). A failing `recall` fails the step. Once
+  the core cancelled the task of a step, it keeps `null` under that key: the handle is forgotten.
+- Before the host's gate, a call of a run whose budget earlier invocations spent asks whether its step has a stored
+  result by calling `step(name, fn)` with a `fn` that throws: a stored result replays, otherwise `fn` throws and the
+  step stores nothing, and the call stops with `limit`.
+- `remember` and `recall` are separate from `step`: they are not replayed from a result, so they belong to the run
+  and not to a step attempt.
+- The core tells the outcome of a call that is not final (it threw, timed out or was aborted) apart by what its `fn`
+  saw, not by the error `step` rejects with: an engine that serialises or wraps errors works unchanged.
+- Concurrent calls of the same step share one run of the function.
+- Step results and signal values are cloned through JSON, so a replay returns exactly what a resume would.
+- The budget is the run's, not the invocation's: an invocation starts from the bounds of its context less the kept
+  `run:spent`. A replayed step spends nothing in the invocation that replays it (the one that ran it already counted
+  it in `run:spent`), and needs no budget: when earlier invocations spent the whole budget, steps still replay, and a
+  call stops with `limit` only when it would reach the member. Its hop record is marked `replayed` and keeps the step's
+  `usage` and `costUsd`; the result handed to the topology leaves them out, and the `usage` and `costUsd` of the
+  system result are the core's totals over the records of the invocation that are not `replayed`.
+- A crash after a step stores its result and before `run:spent` is written leaves that call out of `run:spent`: a
+  later invocation replays it without counting it.
+- Hop records carry the keys of stored texts (`inputRef`, `outputRef`), never the texts.
+- A prototype adapter may lose everything on restart; the readiness gate refuses it on a production tier.
 
 ## Hold
 
@@ -104,19 +134,6 @@ two processes on one store may then run one run at once.
 
 The hold ensures a refused invocation never ends or drops a run another one is running, a `run` racing a `resume`
 never writes a stale `run:waiting`, and an ended run is never dropped while it is held.
-- Inside each step the core calls `recall("<step name>:task")`, and `remember("<step name>:task", taskRef)` when the
-  member checkpoints. The kept value stays after the step finishes and is read again only if the step has no stored
-  result. A crash before the step result is stored therefore leaves the handle, and the next run of the same key
-  continues the remote work (see [MemberPort](MemberPort.md#two-phase-call)). A failing `recall` fails the step.
-- `remember` and `recall` are separate from `step`: they are not replayed from a result, so they belong to the run
-  and not to a step attempt.
-- A step whose function throws stores nothing. Concurrent calls of the same step share one run of the function.
-- Step results and signal values are cloned through JSON, so a replay returns exactly what a resume would.
-- A replayed step spends nothing from the budget of the run that replays it. Its hop record is marked `replayed` and
-  keeps the step's `usage` and `costUsd`; the result handed to the topology leaves them out, so the totals of an
-  invocation count only what it spent.
-- Hop records carry the keys of stored texts (`inputRef`, `outputRef`), never the texts.
-- A prototype adapter may lose everything on restart; the readiness gate refuses it on a production tier.
 
 ## Errors
 
@@ -130,10 +147,8 @@ change the result; `end` and `release` are reported.
 
 ## Conformance
 
-A `checkExecution` suite is planned. It will verify: a step runs once and replays; a signal releases a wait; the first
-signal of a name wins and a second returns `false`; `put` and `read` agree; a value kept with `remember` is recalled, also by a resumed run; a resumed run returns the same results; an adapter that holds runs refuses a second
-holder with `RUN_BUSY` until `end`, `release` or `close`, and never drops a held run.
+`checkExecution` in [`@agent-plexus/conformance`](../../packages/conformance) checks this port: rules E1-E14. Among them: a step runs once and replays; the first signal of a name wins; `put` and `read` agree; `remember` and `recall` survive a restart; an exclusive adapter refuses a second holder with `RUN_BUSY`; `close` settles pending waits. The package README lists all the rules.
 
 ## Version history
 
-- 0.1.0: initial; `remember`, `recall`, the hold (`RUN_BUSY`) and `release` added before release.
+- 0.1.0: initial; `remember`, `recall`, the hold (`RUN_BUSY`), `release` and `run:spent` added before release.

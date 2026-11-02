@@ -89,7 +89,9 @@ flowchart LR
   OpenAI-compatible and MCP when the runtime plugin `agent-plexus` of the agent-layers adapter is loaded through the
   `plugins` of the agent-layers config (`@agent-plexus/adapter-agent-layers/runtime`).
 - An adapter package is named after what it maps (`@agent-plexus/adapter-function-member`) and exports an `adapters`
-  array of descriptors; one package may fill several ports.
+  array of descriptors; one package may fill several ports. A package with another name is listed in the config's
+  `plugins` and its adapters are named like the others. Every descriptor loaded is checked (`checkDescriptor`): its
+  shape, and a `portVersion` compatible with `PORT_VERSIONS` (same major; same minor while the major is `0`).
 
 ## The memberCall pipeline
 
@@ -117,12 +119,12 @@ each with a prototype default that the readiness gate refuses on a production ti
 |---|---|---|---|
 | `gate` | `allow`, `token`, `check` | Allow every call, no token, no check | Required; errors are a deny |
 | `telemetry` | `span`, `event`, `metric` | One line per hop on stderr | Required |
-| `score` | `score(case, result)` | `expected` checks only | Optional |
+| `score` | `score(case, result, ctx?)`; `ctx.read` reads member outputs back | `expected` checks only | Optional; without it the core applies the `expected` checks |
 | `state` | `get`, `set`, `delete` | None | Optional; for the planned `host-execution` adapter. The `agent-layers` host provides none |
 
 The reference is [spec/hooks.md](../spec/hooks.md). The `agent-layers` adapter builds a host from a stack: `gate` from
 its AuthorizationPort, ApprovalPort, CredentialPort and GuardPorts, `telemetry` from its TelemetryPort, `score` from its
-EvaluatorPorts. It provides no `state`: agent-layers' StatePort is an append-only event log per session, not a key/value
+EvaluatorPorts plus the `expected.member` checks. It provides no `state`: agent-layers' StatePort is an append-only event log per session, not a key/value
 store. Another host is another adapter of the same four hooks.
 
 ## Prototype defaults and readiness
@@ -136,6 +138,10 @@ store. Another host is another adapter of the same four hooks.
 | Any tier | A topology that cannot be bound, a member that cannot describe itself | FAIL |
 | Any tier | `registry.requireSigned` and a member with neither a signed card nor a pinned endpoint | FAIL |
 | Any tier | `registry.requireListed` and a member the registry does not list, or no registry | FAIL |
+| Any tier | A `route` or `handoff` node, at any depth, and no `ports.registry` | FAIL |
+| Any tier | A member adapter whose `capabilities` declare `waits` but not `resume` | WARN |
+| Any tier | A `parallel` with `join: "first"` racing a member whose adapter declares `checkpoint` but not `cancel` | WARN |
+| Any tier | An execution adapter without `read`: attribution cannot trace stored texts, expectations on member outputs cannot be scored | WARN |
 | Production | The host is a prototype host | FAIL |
 | Production | An adapter that is not tiered for production | FAIL |
 | Production | A system or adapter limit set to `"unbounded"` where the limit says so | FAIL or WARN per limit; see [limits.md](limits.md) |
@@ -197,7 +203,8 @@ sequenceDiagram
 
 1. A new technology is an adapter plus its tests, never a core change.
 2. A core change starts with a spec change: the port page in `spec/ports/` and the version in `PORT_VERSIONS`.
-3. Adapters depend only on `@agent-plexus/core` (peer). Conformance suites per port are planned.
+3. Adapters depend only on `@agent-plexus/core` (peer). The port contract tests are the conformance kit
+   `@agent-plexus/conformance`.
 4. Framework and protocol names appear only in adapter packages. The core speaks one language and names no framework or
    protocol, not even in comments.
 5. Extra data goes in `ext`, never in a new field: keys are `<adapter>.<name>`; the core never reads an adapter key.

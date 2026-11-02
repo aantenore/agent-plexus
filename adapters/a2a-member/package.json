@@ -1,6 +1,6 @@
 {
   "name": "@agent-plexus/adapter-a2a-member",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Calls a remote agent over the Agent2Agent (A2A) protocol as an agent-plexus member",
   "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-plexus-adapter", "member"],
   "homepage": "https://github.com/aantenore/agent-plexus/tree/main/adapters/a2a-member#readme",
@@ -40,7 +40,7 @@
     "@a2a-js/sdk": "^1.3.0"
   },
   "peerDependencies": {
-    "@agent-plexus/core": "^0.1.0"
+    "@agent-plexus/core": "^0.2.0"
   },
   "devDependencies": {
     "@agent-layers/adapter-a2a": "0.2.0",
@@ -49,10 +49,11 @@
     "@agent-layers/adapter-static-identity": "0.2.0",
     "@agent-layers/core": "0.2.0",
     "@agent-layers/gateway": "0.2.0",
-    "@agent-plexus/adapter-basic-topology": "0.1.0",
-    "@agent-plexus/adapter-function-member": "0.1.0",
-    "@agent-plexus/adapter-memory-execution": "0.1.0",
-    "@agent-plexus/core": "0.1.0",
+    "@agent-plexus/adapter-basic-topology": "0.2.0",
+    "@agent-plexus/adapter-function-member": "0.2.0",
+    "@agent-plexus/adapter-memory-execution": "0.2.0",
+    "@agent-plexus/conformance": "0.2.0",
+    "@agent-plexus/core": "0.2.0",
     "@types/node": "^24.19.0",
     "typescript": "^7.0.2"
   }

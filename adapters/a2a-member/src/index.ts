@@ -190,7 +190,10 @@ export function createA2AMember(options: A2AMemberOptions, ctx: Pick<AdapterCont
 
   /**
    * Runs one call: `begin` sends or reads the task, then the task is polled until it ends or waits. The time is bounded
-   * by the smaller of `timeoutMs` and the time left of the run; an abort or the deadline cancels the remote task.
+   * by the smaller of `timeoutMs` and the time left of the run. This side's own deadline or a failure cancels the remote
+   * task. When the core cuts the call off (its signal aborts: the run's or the call's abort, or the core's own step or
+   * deadline timeout) the core cancels a task whose handle it has (checkpointed or resumed), so that is left to it; a
+   * task the core does not know yet is cancelled here.
    */
   async function drive(
     call: MemberCallContext,
@@ -205,11 +208,20 @@ export function createA2AMember(options: A2AMemberOptions, ctx: Pick<AdapterCont
     let target: Target | undefined;
     let taskId = known ? decodeRef(known)?.taskId : undefined;
     let checkpointedId = taskId;
+    // Whether the core had the task's handle when it cut the call off: it then cancels the task itself.
+    let coreCancels = false;
+    const onAbort = () => {
+      coreCancels = taskId !== undefined && checkpointedId === taskId;
+    };
+    if (call.signal?.aborted) onAbort();
+    else call.signal?.addEventListener('abort', onAbort, { once: true });
 
+    // The core's own timeout aborts the call signal with a `TimeoutError` reason.
+    const coreTimeout = () => (call.signal?.reason as { name?: unknown } | undefined)?.name === 'TimeoutError';
     const stopped = (): MemberResult => ({
       status: 'stopped',
       output: '',
-      reason: { code: call.signal?.aborted && remaining() > 0 ? 'aborted' : 'timeout', layer: 'member', by: name },
+      reason: { code: call.signal?.aborted && remaining() > 0 && !coreTimeout() ? 'aborted' : 'timeout', layer: 'member', by: name },
     });
 
     try {
@@ -230,12 +242,15 @@ export function createA2AMember(options: A2AMemberOptions, ctx: Pick<AdapterCont
       }
     } catch (error) {
       if (signal.aborted) {
-        if (target && taskId) await cancelRemote(target, taskId, call);
-        return stopped();
+        const result = stopped();
+        if (target && taskId && !(call.signal?.aborted && coreCancels)) await cancelRemote(target, taskId, call);
+        return result;
       }
       // the remote task must not be left running when this side gives up
       if (target && taskId) await cancelRemote(target, taskId, call);
       return failed(error instanceof Refused ? error.message : FAILED);
+    } finally {
+      call.signal?.removeEventListener('abort', onAbort);
     }
   }
 
@@ -292,6 +307,7 @@ export const adapter = defineAdapter<'MemberPort', A2AMemberOptions>({
   portVersion: PORT_VERSIONS.MemberPort,
   tiers: ['prototype', 'production'],
   description: 'Calls a remote agent over A2A: card checks, endpoint pinning, bounded polling, resume and cancel.',
+  capabilities: { resume: true, cancel: true, checkpoint: true, waits: true },
   optionsSchema: {
     type: 'object',
     properties: {

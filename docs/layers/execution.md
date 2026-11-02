@@ -138,9 +138,10 @@ sequenceDiagram
   resumed); the host decides. Kind `member`: the input goes through the send check, then `resume(taskRef, input)` of
   the member; see [members](member.md).
 - A run begun again with `run` instead of `resume` replays and still waits; nobody is called again.
-- A resume is a new invocation: deadline and budget come from its own context and the limits. Replayed steps spend
-  nothing from that budget, and their hop records are marked `replayed`: their `usage` and `costUsd` stay on the
-  record but are not counted again in the resume's result.
+- A resume is a new invocation: the deadline comes from its own context and the limits, the budget from its context
+  less what the run spent before (`run:spent`). Replayed steps spend nothing from that budget, and their hop records
+  are marked `replayed`: their `usage` and `costUsd` stay on the record but are not counted again in the resume's
+  result, whose totals the core sums over the records that are not `replayed`.
 - A value the core cannot keep (a `run:*` key, a waiting member's handle) and a failed `end` or `release` are reported
   as the telemetry event `plexus.execution.write_failed` (the key, `end` or `release`, and the error, never the value);
   the run goes on but may not be resumable.
@@ -162,11 +163,18 @@ sequenceDiagram
   `sqlite-execution` and the example `file-execution` keep it, and it survives a restart only where the journal does.
   A crash before the handle is kept can still send the request twice; see [members](member.md).
 - Texts sent to and received from a member are stored with `put`; hop records carry the keys (`inputRef`,
-  `outputRef`), never the texts. The host's `score` hook reads member outputs through `read`.
+  `outputRef`), never the texts. Any host's `score` hook reads member outputs through the `read` the core passes it
+  (`ScoreContext.read`, the execution adapter's `read`).
 - A host verdict `ask` ends the call as `waiting` with code `needs_input`; `resume` answers it (see above). The core
   calls `wait` only for a reply it has just signalled, with a deadline already passed.
-- The budget ledger of a run is held in memory by the core; keeping it in the journal so it resumes with the run is
-  planned.
+- The budget is the run's: after every call that settles its budget the core keeps what the run spent as
+  `run:spent`, and an invocation starts from its bounds less that. A replayed step spends nothing (the invocation that
+  ran it counted it) and needs no budget, so a run whose budget is spent still replays; any other call stops with
+  `limit` before the host's gate is asked or a credential minted (the core asks the journal whether the step has a
+  stored result first). A call that ends `waiting` spends only what its member reported, so the resume that continues
+  it is still funded; the continuation settles what it spends.
+- A step's function runs in the caller's process inside `step`; the core keeps the outcome of a call that is not final
+  in its own state, so an engine that serialises or wraps the error `step` rejects with works unchanged.
 - Prototype adapters lose the journal on restart; the readiness gate refuses them on a production tier.
 
 ## Configuration
@@ -187,8 +195,9 @@ with a reply delivered earlier) and `plexus.execution.wait_inferred` (a waiting 
 
 ## Evaluation
 
-Expectations on a member's output (`contains`, `matches`) read the stored text through `read`; an adapter without `read`
-leaves only `status` to check, and a case that asks for more fails with `output unavailable`.
+Expectations on a member's output (`contains`, `matches`) read the stored text through `read`, which the core passes
+to any host's scorer; a host without `score` gets the built-in `expected` checks. An adapter without `read` leaves only
+`status` to check, and a case that asks for more fails with `output unavailable`.
 
 ## How to swap
 

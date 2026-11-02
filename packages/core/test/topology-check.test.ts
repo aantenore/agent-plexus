@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { TopologyKind, TopologySpec } from '../src/shapes.ts';
-import { topologyProblems } from '../src/topology-check.ts';
+import { membersIn, topologyProblems } from '../src/topology-check.ts';
 
 const ALL: TopologyKind[] = ['sequence', 'parallel', 'route', 'loop', 'handoff', 'supervise', 'graph'];
 const check = (spec: TopologySpec | string, kinds: TopologyKind[] = ALL, routers = ['router']) => topologyProblems(spec, ['a', 'b'], kinds, routers);
@@ -48,4 +48,12 @@ test('graph: unknown nodes and unreachable ends', () => {
 
 test('graph node members are checked too', () => {
   assert.deepEqual(check({ kind: 'graph', nodes: { s: 'nope' }, start: 's', edges: [], end: ['s'] }), ['root.nodes.s: unknown member "nope"']);
+});
+
+test('membersIn: ids at any depth, route candidates (every member for a filter), handoff and supervise members', () => {
+  const all = ['a', 'b', 'c', 'd', 'e'];
+  assert.deepEqual(membersIn({ kind: 'sequence', steps: ['a', { kind: 'route', candidates: ['b'], fallback: 'c' }] }, all).sort(), ['a', 'b', 'c']);
+  assert.deepEqual(membersIn({ kind: 'route', candidates: { skills: ['x'] } }, all), all);
+  assert.deepEqual(membersIn({ kind: 'handoff', start: 'a', members: ['b'] }, all), ['a', 'b']);
+  assert.deepEqual(membersIn({ kind: 'supervise', supervisor: 'd', members: ['e'] }, all), ['d', 'e']);
 });

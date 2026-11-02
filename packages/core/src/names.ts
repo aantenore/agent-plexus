@@ -27,6 +27,20 @@ export const EVENT = {
   replyKept: 'plexus.execution.reply_kept',
   /** A `waiting` result named no wait the run recorded: the run keeps the latest recorded wait. */
   waitInferred: 'plexus.execution.wait_inferred',
+  /** `MemberPort.cancel` of an abandoned or aborted call threw or outlived `limits.system.cancelTimeoutMs`. */
+  cancelFailed: 'plexus.member.cancel_failed',
+  /** A member reported `usage` or `costUsd` that is not a finite non-negative number: the figure is dropped. */
+  figureDropped: 'plexus.member.figure_dropped',
 } as const;
+
+/**
+ * `ext` keys of the protocol between a member and the topology, in the reserved `plexus.` namespace: a member's result
+ * names the member a `supervise` node delegates to (`{ member, input? }`) or a `handoff` node hands over to (a member
+ * id). The bare `delegate` and `handoff` of 0.1.0 are deprecated.
+ */
+export const EXT_KEYS = { delegate: 'plexus.delegate', handoff: 'plexus.handoff' } as const;
+
+/** The deprecated bare `ext` keys of 0.1.0, by the protocol key that replaces them. */
+export const DEPRECATED_EXT_KEYS: Readonly<Record<string, string>> = { delegate: EXT_KEYS.delegate, handoff: EXT_KEYS.handoff };
 
 export const METRIC = { hops: 'plexus.hops', attributions: 'plexus.attributions' } as const;

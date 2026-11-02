@@ -74,11 +74,12 @@ export interface WaitingCall {
 /**
  * Keys the core keeps for a run with `Execution.remember`. `owner` is the identity of the caller that started the run
  * (null without one); `claimed` is the wait whose reply a resume delivered, so a run begun again after a crash reads it;
- * `spent` is what the run's calls spent, over all its invocations (`SpentTotals`).
+ * `spent` is what the run's calls spent, over all its invocations (`SpentTotals`); `cancelled` marks a run `System.cancel`
+ * closed (`{ at, by?, reason? }`): it is never continued.
  */
 export const RUN_KEYS = {
   input: 'run:input', lineage: 'run:lineage', owner: 'run:owner', waiting: 'run:waiting', status: 'run:status', claimed: 'run:claimed',
-  spent: 'run:spent',
+  spent: 'run:spent', cancelled: 'run:cancelled',
 } as const;
 
 /** The step key `<prefix>:<node path>:<n>` of the next step of a node path, n counting that path's steps in the run. */
@@ -274,6 +275,37 @@ async function cancelTask(env: MemberCallEnv, port: MemberPort, member: string, 
   } finally {
     clearTimeout(handle);
   }
+}
+
+/**
+ * Asks the member a run waits on to cancel its remote task, best effort: the handle is the one kept for the waiting
+ * attempt, and nothing happens for a wait without one or a member without `cancel`. A cancelled task's handle is
+ * forgotten. Never rejects.
+ */
+export async function cancelWait(env: MemberCallEnv, run: RunState, waiting: WaitingCall): Promise<void> {
+  const port = env.members.get(waiting.member);
+  if (!port?.cancel) return;
+  const stepKey = stepName(waiting.key, waiting.attempt);
+  let ref: unknown;
+  try {
+    ref = await run.execution.recall(`${stepKey}:task`);
+  } catch (err) {
+    writeFailed(env, `${stepKey}:task`, err);
+    return;
+  }
+  if (!isTaskRef(ref)) return;
+  const { ctx, ledger } = run;
+  const hopId = randomUUID();
+  const memberCtx: MemberCallContext = {
+    ...ctx,
+    ...(ctx.caller ? { caller: withoutCredential(ctx.caller) } : {}),
+    lineage: { rootRunId: run.rootRunId, parentRunId: ctx.runId },
+    hopId,
+    outbound: ledger.outbound(ctx.runId, run.rootRunId, {}, limitNumber(env.limits.marginMs), limitNumber(env.limits.stepTimeoutMs)),
+    checkpoint: async () => {},
+  };
+  await cancelTask(env, port, waiting.member, hopId, { ref, ctx: memberCtx });
+  await forgetHandle(env, run.execution, stepKey);
 }
 
 /**

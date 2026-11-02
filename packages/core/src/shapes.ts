@@ -102,7 +102,7 @@ export const RUN_STATUSES = ['completed', 'failed', 'stopped', 'waiting'] as con
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
 /** Core stop codes; config may add values that behave like one of them. */
-export const STOP_CODES = ['guard_block', 'denied', 'aborted', 'timeout', 'limit', 'hop_limit', 'needs_input', 'needs_auth', 'rejected', 'error'] as const;
+export const STOP_CODES = ['guard_block', 'denied', 'aborted', 'timeout', 'limit', 'hop_limit', 'needs_input', 'needs_auth', 'rejected', 'error', 'cancelled', 'not_found', 'conflict'] as const;
 export type CoreStopCode = (typeof STOP_CODES)[number];
 export type StopCode = CoreStopCode | (string & {});
 

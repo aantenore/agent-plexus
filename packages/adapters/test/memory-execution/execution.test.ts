@@ -241,6 +241,7 @@ test('signal is first wins: a second signal of a name, before or after its wait,
 async function waitingSystem(journal: AdapterDescriptor, options: Record<string, unknown> = {}) {
   const resumed: string[] = [];
   const invoked: string[] = [];
+  const cancelled: string[] = [];
   const maps = { technology: 'test' };
   const tiers: ('prototype' | 'production')[] = ['prototype'];
   const member = defineAdapter({
@@ -256,6 +257,9 @@ async function waitingSystem(journal: AdapterDescriptor, options: Record<string,
         resumed.push(input === undefined ? '-' : inputText(input));
         await new Promise((done) => setTimeout(done, 20));
         return { status: 'completed', output: `D:${input === undefined ? '-' : inputText(input)}` };
+      },
+      cancel: async (ref) => {
+        cancelled.push(ref);
       },
     }),
   });
@@ -282,7 +286,7 @@ async function waitingSystem(journal: AdapterDescriptor, options: Record<string,
       return found;
     },
   });
-  return { system, resumed, invoked };
+  return { system, resumed, invoked, cancelled };
 }
 
 test('two concurrent resumes of one run: the first runs it, the other fails as in progress; the member resumes once', async () => {
@@ -311,5 +315,18 @@ test('a resume refused while another holds the run neither ends it nor lets maxR
   const again = await system.run('hi', { runId: 'x1', caller: alice });
   assert.deepEqual([again.status, again.output], ['completed', 'D:ok']);
   assert.deepEqual([invoked, resumed], [['hi', 'other'], ['ok']]);
+  await system.close();
+});
+
+test('a cancelled run is closed in the journal: the member task is cancelled once and the run cannot be resumed', async () => {
+  const alice = { id: 'alice', kind: 'user' as const, roles: [], scopes: [] };
+  const { system, resumed, cancelled } = await waitingSystem(adapter as unknown as AdapterDescriptor, {});
+  assert.equal((await system.run('hi', { runId: 'k1', caller: alice })).status, 'waiting');
+  const res = await system.cancel('k1', { by: alice });
+  assert.deepEqual([res.status, res.reason?.code], ['stopped', 'cancelled']);
+  assert.equal((await system.cancel('k1', { by: alice })).reason?.code, 'cancelled');
+  const refused = await system.resume('k1', { input: 'late' }, { caller: alice });
+  assert.deepEqual([refused.status, refused.reason?.detail], ['failed', 'run k1 was cancelled']);
+  assert.deepEqual([cancelled, resumed], [['task-1'], []]);
   await system.close();
 });

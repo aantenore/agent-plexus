@@ -46,7 +46,7 @@ const askingHost = (): Host => {
     gate: {
       ...host.gate,
       allow: async (q) => {
-        if (q.action === 'resume') return host.gate.allow(q);
+        if (q.action !== 'invoke') return host.gate.allow(q);
         if (q.member.id !== 'billing') return { effect: 'allow' };
         if (!q.answer) return { effect: 'ask', reason: 'approval pending' };
         return q.answer.approved ? { effect: 'allow' } : { effect: 'deny', reason: 'refused' };

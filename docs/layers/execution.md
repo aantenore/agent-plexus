@@ -138,6 +138,30 @@ sequenceDiagram
   resumed); the host decides. Kind `member`: the input goes through the send check, then `resume(taskRef, input)` of
   the member; see [members](member.md).
 - A run begun again with `run` instead of `resume` replays and still waits; nobody is called again.
+
+## Cancel
+
+`System.cancel(runId, { by?, reason?, signal? })` closes a run that is not over, so an application that abandons a
+waiting run (its config changed) does not leave it in the journal until `maxRuns` drops it; `agent-plexus cancel
+<runId>` does the same from the command line.
+
+- The run must be known: an unknown id is refused `failed`, code `not_found` (the run `begin` created ends `failed`, so
+  the journal may drop it). A run that already completed, failed or stopped is refused `conflict`. A run another
+  invocation holds is refused as in progress, as for a resume; cancelling a run that is running is not supported, only
+  one that waits or was left unfinished.
+- The host's gate is asked `allow` with action `cancel`, `by` as `caller`, the run's `owner` and the waiting member,
+  before anything changes. `deny` is `stopped`/`denied`, `ask` is `waiting`/`needs_input` (layer `host`); the run stays as
+  it was. The prototype host lets only the owner cancel; the `agent-layers` host does too and then asks the stack's
+  authorization with action `cancel`.
+- It keeps `run:cancelled` (`{at, by?, reason?}`) first, then asks the member the run waits on to cancel its remote task
+  (`MemberPort.cancel` of the handle kept for the waiting attempt, bounded by `limits.system.cancelTimeoutMs`; a member
+  without `cancel` or a call without a handle is skipped, a failure is reported as `plexus.member.cancel_failed` and does
+  not stop the cancel), forgets the handle, sets `run:waiting` and `run:claimed` to `null` and `run:status` to `stopped`,
+  ends the run `stopped` (which releases the hold) and emits `plexus.run.cancelled`. `run:owner`, `run:input` and
+  `run:lineage` stay, so nobody can take the id over.
+- The result is `stopped`, code `cancelled`, layer `execution`. A `resume` or `run` of a cancelled run is refused
+  (`failed`, `error`, "run <id> was cancelled"); a second `cancel` returns the same result. With a durable execution
+  adapter the cancellation survives a restart.
 - A resume is a new invocation: the deadline comes from its own context and the limits, the budget from its context
   less what the run spent before (`run:spent`). Replayed steps spend nothing from that budget, and their hop records
   are marked `replayed`: their `usage` and `costUsd` stay on the record but are not counted again in the resume's

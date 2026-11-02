@@ -9,6 +9,7 @@ export const ATTR = {
   nodePath: 'plexus.node.path',
   nodeKind: 'plexus.node.kind',
   routeChoice: 'plexus.route.choice',
+  runId: 'plexus.run.id',
   runStatus: 'plexus.run.status',
   runReason: 'plexus.run.reason',
   partsCount: 'plexus.parts.count',
@@ -29,6 +30,8 @@ export const EVENT = {
   waitInferred: 'plexus.execution.wait_inferred',
   /** `MemberPort.cancel` of an abandoned or aborted call threw or outlived `limits.system.cancelTimeoutMs`. */
   cancelFailed: 'plexus.member.cancel_failed',
+  /** `System.cancel` closed a run. */
+  runCancelled: 'plexus.run.cancelled',
   /** A member reported `usage` or `costUsd` that is not a finite non-negative number: the figure is dropped. */
   figureDropped: 'plexus.member.figure_dropped',
 } as const;

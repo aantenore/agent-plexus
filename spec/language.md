@@ -47,8 +47,9 @@ Every shape has an optional `ext` unless noted. Required fields are marked; the 
 | `HopRecord` | [AttributionPort](ports/AttributionPort.md), `SystemResult` |
 | `Score`, `EvalCase` | [`score`](hooks.md#score), [AttributionPort](ports/AttributionPort.md) |
 | `Attribution` | [AttributionPort](ports/AttributionPort.md) |
-| `SystemResult` | `System.run`, `System.resume` |
+| `SystemResult` | `System.run`, `System.resume`, `System.cancel` |
 | `ResumeReply` | `System.resume` |
+| `CancelOptions` | `System.cancel` |
 
 ### RunInput
 
@@ -69,6 +70,19 @@ code `denied`, layer `host`, and delivers nothing. A resume while another invoca
 `error`, layer `execution` ("run <id> is in progress"). One reply per wait, the first delivered wins: a reply already
 delivered by a resume that did not finish answers the wait, and the new one is not used. An approval is kept with
 `by`, the id of the caller that resumed.
+
+### CancelOptions
+
+Given to `System.cancel(runId, opts?)`: `{ by?: Caller, reason?: String, signal?: AbortSignal }`. `by` is who cancels (the
+gate is asked `cancel` with it, never with its credential, see [hooks](hooks.md#gate)); `reason` is kept with the run
+as the `detail` of its stop reason. The result is a `SystemResult` without records. A run that is not over (waiting, or
+left unfinished by an invocation that died) is closed: the member it waits on is asked to cancel its remote task, best
+effort, and the run ends `stopped`, code `cancelled`, layer `execution`, with `by` the id of the caller; it is kept
+as `run:cancelled`, and a `run` or `resume` of it is refused afterwards (`failed`, code `error`, "run <id> was
+cancelled"). Cancelling a cancelled run returns that result again. Refusals leave the run as it was: `failed`, code
+`not_found` (the journal has no such run), `conflict` (the run already completed, failed or stopped), `error` (invalid
+run id, or "run <id> is in progress" while another invocation holds the run), `stopped`/`aborted` (the signal was
+aborted first), and the gate's `denied` and `needs_input`.
 
 ### Caller
 
@@ -208,6 +222,9 @@ the block yet.
 | `needs_input` | The run waits for a person | `gate.allow` returned `ask` (also for a `resume`), or a member |
 | `needs_auth` | No credential for the member's audience | `gate.token`, layer `host`; or a member |
 | `rejected` | A remote member declined or stopped | a member; over A2A today every remote stop except a cancellation; layer `member` for a resume with input to a member without `resume` or without a kept task handle |
+| `cancelled` | `System.cancel` closed the run | layer `execution`; the result of `System.cancel` |
+| `not_found` | The journal has no such run | `System.cancel`, layer `execution`, status `failed` |
+| `conflict` | The run is already over | `System.cancel` of a completed, failed or stopped run, layer `execution`, status `failed` |
 | `error` | Something failed | a member that threw or answered an unknown status; the topology; routing, layer `routing`, when the router or the registry failed; the journal, also a `System.resume` of a run that is not waiting or waits on another step, a `run` or `resume` of a run in progress, a run whose owner or input could not be kept, and a `run` with the id of a known run and a different input |
 
 ## Extensions (`ext`)
@@ -261,8 +278,8 @@ The core names its spans, events and metrics `plexus.*` only, and sets `plexus.l
 | Kind | Name |
 | --- | --- |
 | span | `plexus.run`, `plexus.hop`, `plexus.route`; `plexus.node` is declared but not emitted yet |
-| attribute | `plexus.layer`, `plexus.system`, `plexus.member`, `plexus.hop`, `plexus.node.path`, `plexus.node.kind`, `plexus.route.choice`, `plexus.run.status`, `plexus.run.reason`, `plexus.parts.count`, `plexus.execution.key`, `plexus.error.message`; `plexus.node.kind` is declared but not emitted yet |
-| event | `plexus.limit`, `plexus.parts.dropped`, `plexus.member.resumed`, `plexus.checkpoint.ignored`, `plexus.execution.write_failed` (a value the core keeps, or the run's `end` or `release`, could not be written: the key and the error, never the value), `plexus.execution.reply_kept` (a resume went on with the reply an earlier resume delivered), `plexus.execution.wait_inferred` (a `waiting` result named no wait of the run: the latest is kept), `plexus.member.cancel_failed` (a `cancel` of an abandoned or cut-off call threw or outlived `limits.system.cancelTimeoutMs`), `plexus.member.figure_dropped` (a member's `usage` or `costUsd` was not a finite non-negative number and was dropped) |
+| attribute | `plexus.layer`, `plexus.system`, `plexus.member`, `plexus.hop`, `plexus.node.path`, `plexus.node.kind`, `plexus.route.choice`, `plexus.run.id`, `plexus.run.status`, `plexus.run.reason`, `plexus.parts.count`, `plexus.execution.key`, `plexus.error.message`; `plexus.node.kind` is declared but not emitted yet |
+| event | `plexus.run.cancelled` (`System.cancel` closed a run: the run id, `stopped`, `cancelled` and the member it waited on), `plexus.limit`, `plexus.parts.dropped`, `plexus.member.resumed`, `plexus.checkpoint.ignored`, `plexus.execution.write_failed` (a value the core keeps, or the run's `end` or `release`, could not be written: the key and the error, never the value), `plexus.execution.reply_kept` (a resume went on with the reply an earlier resume delivered), `plexus.execution.wait_inferred` (a `waiting` result named no wait of the run: the latest is kept), `plexus.member.cancel_failed` (a `cancel` of an abandoned or cut-off call threw or outlived `limits.system.cancelTimeoutMs`), `plexus.member.figure_dropped` (a member's `usage` or `costUsd` was not a finite non-negative number and was dropped) |
 | metric | `plexus.hops`, `plexus.attributions` |
 
 Credentials never appear in attributes.

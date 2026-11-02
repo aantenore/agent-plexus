@@ -451,6 +451,31 @@ test('resume: only the run owner may resume; the owner is asked as action resume
   await stack.close();
 });
 
+test('cancel: only the run owner may cancel; the owner is asked as action cancel about the waiting member', async () => {
+  const { host, stack } = await fixture({ risk: { billing: 'read' } });
+  const asked: AccessQuestion[] = [];
+  const authorization = stack.ports.authorization!;
+  const evaluate = authorization.evaluate.bind(authorization);
+  authorization.evaluate = async (q, o) => { asked.push(structuredClone(q)); return evaluate(q, o); };
+  const member = { id: 'billing', name: 'billing', description: '', skills: [], endpoint: { protocol: 'function' }, trust: { signed: false, pinned: true } };
+  const owner = { id: 'alice', kind: 'user' as const };
+  const mallory = { id: 'mallory', kind: 'user' as const, roles: ['staff'], scopes: [] };
+
+  assert.deepEqual(await host.gate.allow({ action: 'cancel', runId: 'r1', caller: mallory, owner, member }), { effect: 'deny', reason: 'only the caller that started the run may cancel it' });
+  assert.equal(asked.length, 0, 'a cancel by someone else never reaches the policy');
+
+  await host.gate.allow({ action: 'cancel', runId: 'r1', caller: publicAlice, owner, member });
+  assert.deepEqual(asked[0], {
+    caller: publicAlice,
+    action: 'cancel',
+    target: { kind: 'agent', id: 'billing', layer: 'harness', risk: 'read', agent: 'agent-plexus' },
+    ext: { 'agent-plexus.owner': { id: 'alice', kind: 'user' } },
+  });
+  authorization.evaluate = async (q) => ({ allowed: q.action !== 'cancel', reason: 'no cancels' });
+  assert.deepEqual(await host.gate.allow({ action: 'cancel', runId: 'r1', caller: publicAlice, owner, member }), { effect: 'deny', reason: 'no cancels' });
+  await stack.close();
+});
+
 test('resume with an answer: the approval is decided by the resuming owner, then the call goes on once', async () => {
   const { system, stack } = await fixture({ approve: ['audited'] });
   const approval = stack.ports.approval!;

@@ -1,5 +1,6 @@
 import { AdapterError, ConfigError, type ResumeReply } from '@agent-plexus/core';
 import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
+import { cancel } from './commands/cancel.ts';
 import { check } from './commands/check.ts';
 import { dev } from './commands/dev.ts';
 import { evaluate } from './commands/eval.ts';
@@ -15,6 +16,7 @@ const HELP = `agent-plexus <command> [options]
   check                      load and assemble the system, print findings (FAIL, WARN), exit 1 on any FAIL
   run <text>                 one run of the system: the output, then one line per hop (--run-id <id>, --json, --quiet)
   resume <runId>             answer a waiting run and run it again (--input <text> | --approve | --deny [--reason <text>]) [--wait <token>]
+  cancel <runId>             close a run that is not over, e.g. a waiting one (--reason <text>, --json)
   dev                        terminal loop: each line is a run, /exit quits (--quiet)
   eval <cases.json>          run, score and attribute a file of cases, exit 1 when a case fails (--json)
 
@@ -128,6 +130,18 @@ The run must be in the journal: across processes this needs a durable execution 
 keeps runs in the memory of one process cannot resume a run started by another "agent-plexus run".`,
     options: { ...COMMON, json: { type: 'boolean' }, quiet: { type: 'boolean' }, input: { type: 'string' }, approve: { type: 'boolean' }, deny: { type: 'boolean' }, reason: { type: 'string' }, wait: { type: 'string' } },
     exec: (io, f, pos) => resume(io, { ...project(f), runId: runIdOf(pos), reply: replyOf(f), ...flag(f, 'json'), ...flag(f, 'quiet') }),
+  },
+  cancel: {
+    usage: 'agent-plexus cancel <runId> [--reason <text>] [--config <file>] [--profile <name>] [--json]',
+    help: `Closes a run that is not over, typically one that ended waiting: the member it waits on is asked to cancel its remote
+task (best effort), the run ends stopped with the code "cancelled", and it can no longer be resumed or run again.
+Prints "cancelled <runId>" and exits 0. Exit 1 when the run is unknown (not_found), already over (conflict), refused by
+the host's gate (denied) or held by another invocation.
+  --reason <text>   kept with the run
+  --json            print the SystemResult as JSON
+The run must be in the journal: across processes this needs a durable execution adapter.`,
+    options: { ...COMMON, json: { type: 'boolean' }, reason: { type: 'string' } },
+    exec: (io, f, pos) => cancel(io, { ...project(f), runId: runIdOf(pos), ...(f.reason !== undefined ? { reason: f.reason } : {}), ...flag(f, 'json') }),
   },
   dev: {
     usage: 'agent-plexus dev [--config <file>] [--profile <name>] [--quiet]',

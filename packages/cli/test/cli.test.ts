@@ -194,7 +194,7 @@ test('dev runs each line and stops at /exit', async () => {
 });
 
 test('--help per command exits 0; wrong usage and unknown commands exit 2', async () => {
-  for (const name of ['check', 'run', 'resume', 'dev', 'eval']) {
+  for (const name of ['check', 'run', 'resume', 'cancel', 'dev', 'eval']) {
     const c = captureIo();
     assert.equal(await main([name, '--help'], c.io), 0);
     assert.match(c.out(), new RegExp(`^agent-plexus ${name}`));
@@ -255,6 +255,37 @@ test('resume answers a waiting run from another process through a durable journa
     assert.deepEqual([result.status, result.reason], ['failed', { code: 'error', layer: 'execution' }]);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('cancel closes a waiting run from another process; the run is then neither resumed nor cancelled twice as new', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-cli-'));
+  try {
+    const file = await waitingSystem(dir);
+    const started = captureIo();
+    assert.equal(await main(['run', '--config', file, '--run-id', 'order-7', 'start'], started.io), 3);
+
+    const cancelled = captureIo();
+    assert.equal(await main(['cancel', 'order-7', '--config', file, '--reason', 'config changed'], cancelled.io), 0, cancelled.err());
+    assert.equal(cancelled.out(), 'cancelled order-7');
+
+    const resumed = captureIo();
+    assert.equal(await main(['resume', 'order-7', '--config', file, '--json', '--input', 'x'], resumed.io), 1);
+    assert.deepEqual(JSON.parse(resumed.out()).reason, { code: 'error', layer: 'execution' });
+
+    const unknown = captureIo();
+    assert.equal(await main(['cancel', 'nope', '--config', file, '--json'], unknown.io), 1);
+    assert.deepEqual(JSON.parse(unknown.out()).reason, { code: 'not_found', layer: 'execution' });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('cancel needs exactly one run id', async () => {
+  for (const args of [['cancel'], ['cancel', 'a', 'b']]) {
+    const c = captureIo();
+    assert.equal(await main(args, c.io), 2, args.join(' '));
+    assert.match(c.err(), /usage: agent-plexus cancel/);
   }
 });
 

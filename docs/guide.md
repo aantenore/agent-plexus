@@ -177,6 +177,11 @@ earlier invocations spent (`run:spent`), and its result counts only what it spen
 while another invocation runs the same run ("in progress") gives `failed` with code `error`. Details:
 [execution](layers/execution.md#waiting-and-resume).
 
+To abandon a waiting run instead of answering it, `system.cancel(runId, { by, reason })` (or `agent-plexus cancel
+<runId>`) asks the waiting member to cancel its remote task and ends the run `stopped` with code `cancelled`; a
+cancelled run is never resumed. The gate is asked action `cancel`, and the prototype host allows only the owner.
+Details: [execution](layers/execution.md#cancel).
+
 ## Write an adapter
 
 An adapter is a module with a factory and a descriptor: a subpath `@agent-plexus/adapters/<name>` in this repository, or a package of its own elsewhere. A router that picks the
@@ -556,6 +561,7 @@ The attribution rules are in [layers/attribution.md](layers/attribution.md).
 | `check` | Load the config, assemble the system, apply the readiness gate of the profile's tier; print `FAIL` and `WARN` lines and a summary |
 | `run <text>` | One run: the output on stdout, one line per hop on stderr (`<member> <status> <code?> <ms>ms`); `--json` prints the result with the hop record, `--quiet` drops the hop lines, `--run-id <id>` runs under a chosen id (1 to 128 characters) instead of a generated one; a waiting run ends with the `resume` command that answers it |
 | `resume <runId>` | Answer a waiting run and run it again: `--input <text>`, or `--approve` / `--deny` with `--reason <text>`, and `--wait <token>` to answer only that wait; output as `run`. Needs a durable execution adapter across processes; see [Resume a waiting run](#resume-a-waiting-run) |
+| `cancel <runId>` | Close a run that is not over, typically a waiting one: its member is asked to cancel the remote task, the run ends `stopped` with code `cancelled` and cannot be resumed; `--reason <text>`, `--json`. Prints `cancelled <runId>`. Needs a durable execution adapter across processes; see [Resume a waiting run](#resume-a-waiting-run) |
 | `dev` | Terminal loop: each line of input is one run; `/exit` or end of input quits; `--quiet` |
 | `eval <cases.json>` | Run, score and attribute a file of cases; `--json` prints counts and, per case, status, output, scores and attributions |
 

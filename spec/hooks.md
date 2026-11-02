@@ -29,7 +29,8 @@ Authorization, credentials and content checks for every member call, and authori
 - `allow(question: GateQuestion) → GateDecision`
   May this caller invoke this member, or continue this run? `GateQuestion` is one of
   `{runId, sessionId?, caller?, action: "invoke", member: AgentEntry, answer?: GateAnswer}` and
-  `{runId, sessionId?, caller?, action: "resume", owner?: CallerIdentity, member?: AgentEntry, answer?: GateAnswer}`;
+  `{runId, sessionId?, caller?, action: "resume", owner?: CallerIdentity, member?: AgentEntry, answer?: GateAnswer}` and
+  `{runId, sessionId?, caller?, action: "cancel", owner?: CallerIdentity, member?: AgentEntry}`;
   `GateAnswer` is `{approved, reason?, by?}`; `GateDecision` is `{effect: "allow" | "deny" | "ask", reason?}`.
 - `token(caller: Caller?, audience: String) → String?`
   A credential for the member's audience, on behalf of the caller. Absent when none is needed.
@@ -56,6 +57,11 @@ Authorization, credentials and content checks for every member call, and authori
   as is a resume whose `wait` token names another wait. The prototype host allows a
   resume only when the resumer is the owner (same `id`, `kind` and `actors`; two absent callers are the same) and
   denies anyone else with "only the caller that started the run may resume it".
+- Action `cancel` is asked by `System.cancel` before anything of the run changes, with the same fields as `resume`
+  (`caller` is who cancels, `owner`, `member`) and no `answer`. `deny` returns `stopped`, code `denied`, layer `host`;
+  `ask` returns `waiting`, code `needs_input`, layer `host`; the run stays as it was. The prototype host allows a cancel
+  only when the caller is the owner, as for a resume, and denies anyone else with "only the caller that started the run
+  may cancel it".
 - `redact` replaces the text that goes on. A verdict that is not one of the three actions, or a `redact` without
   `text`, is a block.
 - `token` is called only for a member with an `audience`. A failure is `needs_auth`. A production-tier host that

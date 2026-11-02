@@ -4,6 +4,8 @@ import { sameIdentity, type EvalCase, type HopRecord, type Score, type SystemRes
 
 /** Why the prototype host refuses a resume by anyone but the run's owner. */
 export const RESUME_OWNER_ONLY = 'only the caller that started the run may resume it';
+/** Why the prototype host refuses a cancel by anyone but the run's owner. */
+export const CANCEL_OWNER_ONLY = 'only the caller that started the run may cancel it';
 
 export interface PrototypeHostOptions {
   /** Print nothing. */
@@ -106,9 +108,9 @@ export function prototypeHost(options: PrototypeHostOptions = {}): Host {
     name: 'prototype',
     tier: 'prototype',
     gate: {
-      // Every call is allowed; a run is continued only by the caller that started it.
-      allow: async (q) => (q.action === 'resume' && !sameIdentity(q.caller, q.owner)
-        ? { effect: 'deny', reason: RESUME_OWNER_ONLY }
+      // Every call is allowed; a run is continued or cancelled only by the caller that started it.
+      allow: async (q) => (q.action !== 'invoke' && !sameIdentity(q.caller, q.owner)
+        ? { effect: 'deny', reason: q.action === 'resume' ? RESUME_OWNER_ONLY : CANCEL_OWNER_ONLY }
         : { effect: 'allow' }),
       token: async () => undefined,
       check: async () => ({ action: 'allow' }),

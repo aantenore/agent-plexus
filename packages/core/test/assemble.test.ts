@@ -424,11 +424,12 @@ test('limits.attribution.historyRuns bounds the runs kept for attribution', asyn
 
 // Waiting runs and resume -------------------------------------------------------------------------------------------
 
-interface AskingOptions { ask?: boolean; resume?: boolean; tokens?: number; slow?: number; slowResume?: number; flaky?: boolean }
+interface AskingOptions { ask?: boolean; resume?: boolean; cancel?: boolean | 'throws'; tokens?: number; slow?: number; slowResume?: number; flaky?: boolean }
 
 /**
  * Members that complete with `<id>:<input>`, or wait for input (`ask`) and continue through `resume`. `slow` delays the
- * answer by that many milliseconds, `slowResume` the answer to `resume`; `flaky` throws on the first call.
+ * answer by that many milliseconds, `slowResume` the answer to `resume`; `flaky` throws on the first call; `cancel` gives
+ * the member a `cancel` (`throws`: one that fails).
  */
 const askingMember = (calls: string[]) => defineAdapter({
   fills: 'MemberPort', name: 'asking-member', maps, tiers: both, portVersion: '0.1.0',
@@ -449,6 +450,12 @@ const askingMember = (calls: string[]) => defineAdapter({
         calls.push(`resume:${ctx.name}:${ref}:${input === undefined ? '-' : inputText(input)}`);
         if (o.slowResume) await new Promise((done) => setTimeout(done, o.slowResume));
         return { status: 'completed', output: `${ctx.name}:${input === undefined ? '-' : inputText(input)}` };
+      };
+    }
+    if (o.cancel) {
+      port.cancel = async (ref) => {
+        calls.push(`cancel:${ctx.name}:${ref}`);
+        if (o.cancel === 'throws') throw new Error('cancel refused');
       };
     }
     return port;
@@ -480,7 +487,7 @@ const boss = { id: 'boss', kind: 'user' as const, roles: [], scopes: [], credent
 const askingGate = (questions: unknown[] = []) => recordingHost({
   allow: (q) => {
     questions.push(q);
-    if (q.action === 'resume' || q.member.id !== 'billing') return { effect: 'allow' };
+    if (q.action !== 'invoke' || q.member.id !== 'billing') return { effect: 'allow' };
     if (!q.answer) return { effect: 'ask', reason: 'approval pending' };
     return q.answer.approved ? { effect: 'allow' } : { effect: 'deny', reason: q.answer.reason ?? 'refused' };
   },
@@ -767,6 +774,96 @@ test('an approval kept for the next attempt records who gave it, and the gate se
   const resume = questions.find((q) => q.action === 'resume')!;
   assert.deepEqual(resume.answer, { approved: true, reason: 'fine', by: 'boss' });
   assert.deepEqual(journal.kept.get('own3')!.get('call:root.steps[1]:0:attempt'), { n: 1, answer: { approved: true, reason: 'fine', by: 'boss' } });
+});
+
+// Cancel ------------------------------------------------------------------------------------------------------------
+
+test('cancel closes a waiting run: the member task is cancelled, the run ends stopped/cancelled, and neither resume nor run continues it', async () => {
+  const h = recordingHost();
+  const { system, calls, journal } = await resumable({ triage: {}, billing: { ask: true, cancel: true } }, { kind: 'sequence', steps: ['triage', 'billing'] }, { host: h.host });
+  assert.equal((await system.run('hi', { runId: 'c1', caller: alice })).status, 'waiting');
+  const res = await system.cancel('c1', { by: alice, reason: 'config changed' });
+  assert.deepEqual([res.status, res.runId, res.reason?.code, res.reason?.layer, res.reason?.by, res.reason?.detail], ['stopped', 'c1', 'cancelled', 'execution', 'alice', 'config changed']);
+  assert.deepEqual(calls, ['invoke:triage', 'invoke:billing', 'cancel:billing:task-billing']);
+  const kept = journal.kept.get('c1')!;
+  assert.deepEqual([kept.get('run:waiting'), kept.get('run:status'), journal.statuses.get('c1'), kept.get('call:root.steps[1]:0:task')], [null, 'stopped', 'stopped', null]);
+  assert.equal((kept.get('run:cancelled') as { by: string }).by, 'alice');
+  assert.ok(!JSON.stringify([...kept]).includes('ALICE-CREDENTIAL'));
+  assert.deepEqual(h.events.find((e) => e.name === 'plexus.run.cancelled')?.attrs, {
+    'plexus.layer': 'execution', 'plexus.system': 'support', 'plexus.run.id': 'c1', 'plexus.run.status': 'stopped', 'plexus.run.reason': 'cancelled', 'plexus.member': 'billing',
+  });
+
+  const resumed = await system.resume('c1', { input: 'late' }, { caller: alice });
+  assert.deepEqual([resumed.status, resumed.reason?.code, resumed.reason?.layer, resumed.reason?.detail], ['failed', 'error', 'execution', 'run c1 was cancelled']);
+  const rerun = await system.run('hi', { runId: 'c1', caller: alice });
+  assert.deepEqual([rerun.status, rerun.reason?.detail], ['failed', 'run c1 was cancelled']);
+  const again = await system.cancel('c1', { by: alice });
+  assert.deepEqual([again.status, again.reason?.code, again.reason?.detail], ['stopped', 'cancelled', 'config changed']);
+  assert.deepEqual(calls, ['invoke:triage', 'invoke:billing', 'cancel:billing:task-billing']);
+});
+
+test('cancel of a run unknown to the journal is refused not_found and leaves nothing behind', async () => {
+  const { system, journal } = await resumable({ billing: {} }, { kind: 'sequence', steps: ['billing'] });
+  const res = await system.cancel('nope');
+  assert.deepEqual([res.status, res.runId, res.reason?.code, res.reason?.layer, res.reason?.detail], ['failed', 'nope', 'not_found', 'execution', 'run nope not found']);
+  assert.equal(journal.statuses.get('nope'), 'failed');
+  assert.deepEqual([(await system.cancel('')).reason?.detail, (await system.cancel('x'.repeat(200))).reason?.code], ['invalid run id', 'error']);
+});
+
+test('cancel by anyone but the owner is denied by the host and the run stays waiting; the owner cancels it', async () => {
+  const { system, calls, journal } = await resumable({ billing: { ask: true, cancel: true } }, { kind: 'sequence', steps: ['billing'] });
+  assert.equal((await system.run('hi', { runId: 'c2', caller: alice })).status, 'waiting');
+  for (const by of [mallory, undefined]) {
+    const denied = await system.cancel('c2', by ? { by } : {});
+    assert.deepEqual([denied.status, denied.reason?.code, denied.reason?.layer, denied.reason?.detail], ['stopped', 'denied', 'host', 'only the caller that started the run may cancel it']);
+  }
+  assert.deepEqual([journal.statuses.get('c2'), journal.kept.get('c2')!.has('run:cancelled'), calls], ['waiting', false, ['invoke:billing']]);
+  assert.equal((await system.resume('c2', { input: 'still open' }, { caller: alice })).status, 'completed');
+});
+
+test('the gate is asked cancel with the owner and the waiting member, never with a credential; ask keeps the run waiting', async () => {
+  const questions: GateQuestion[] = [];
+  let effect: 'ask' | 'allow' = 'ask';
+  const h = recordingHost({ allow: (q) => { questions.push(q); return q.action === 'cancel' ? { effect, reason: 'second person' } : { effect: 'allow' }; } });
+  const { system, journal } = await resumable({ billing: { ask: true } }, { kind: 'sequence', steps: ['billing'] }, { host: h.host });
+  assert.equal((await system.run('hi', { runId: 'c3', caller: alice })).status, 'waiting');
+  const asked = await system.cancel('c3', { by: mallory });
+  assert.deepEqual([asked.status, asked.reason?.code, asked.reason?.layer, asked.reason?.detail], ['waiting', 'needs_input', 'host', 'second person']);
+  const question = questions.at(-1)!;
+  assert.deepEqual({ ...question, member: question.member?.id }, {
+    action: 'cancel', runId: 'c3', caller: { id: 'mallory', kind: 'user', roles: [], scopes: [] }, owner: { id: 'alice', kind: 'user' }, member: 'billing',
+  });
+  assert.equal(journal.statuses.get('c3'), 'waiting');
+  effect = 'allow';
+  assert.equal((await system.cancel('c3', { by: mallory })).reason?.code, 'cancelled');
+});
+
+test('cancel of a run that is over is refused conflict; a failing member cancel is reported and the run is still cancelled', async () => {
+  const done = await resumable({ billing: {} }, { kind: 'sequence', steps: ['billing'] });
+  assert.equal((await done.system.run('hi', { runId: 'c4', caller: alice })).status, 'completed');
+  const over = await done.system.cancel('c4', { by: alice });
+  assert.deepEqual([over.status, over.reason?.code, over.reason?.detail], ['failed', 'conflict', 'run c4 is already completed']);
+  assert.equal(done.journal.kept.get('c4')!.has('run:cancelled'), false);
+
+  const h = recordingHost();
+  const { system, calls } = await resumable({ billing: { ask: true, cancel: 'throws' } }, { kind: 'sequence', steps: ['billing'] }, { host: h.host });
+  assert.equal((await system.run('hi', { runId: 'c5', caller: alice })).status, 'waiting');
+  assert.equal((await system.cancel('c5', { by: alice })).reason?.code, 'cancelled');
+  assert.deepEqual(calls, ['invoke:billing', 'cancel:billing:task-billing']);
+  assert.ok(h.events.some((e) => e.name === 'plexus.member.cancel_failed'));
+});
+
+test('cancel of a run another invocation holds is refused as in progress; an aborted signal changes nothing', async () => {
+  const { system, journal } = await resumable({ billing: { ask: true, slowResume: 40 } }, { kind: 'sequence', steps: ['billing'] });
+  assert.equal((await system.run('hi', { runId: 'c6', caller: alice })).status, 'waiting');
+  const aborted = AbortSignal.abort();
+  const stopped = await system.cancel('c6', { by: alice, signal: aborted });
+  assert.deepEqual([stopped.status, stopped.reason?.code], ['stopped', 'aborted']);
+  assert.equal(journal.kept.get('c6')!.has('run:cancelled'), false);
+  const resuming = system.resume('c6', { input: 'x' }, { caller: alice });
+  await new Promise((done) => setTimeout(done, 10));
+  assert.equal((await system.cancel('c6', { by: alice })).reason?.detail, 'run c6 is in progress');
+  assert.equal((await resuming).status, 'completed');
 });
 
 test('run with the id of a known run: the owner continues it; anyone else asks the gate; a different input fails and is never kept', async () => {

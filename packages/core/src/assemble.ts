@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 import type { AdapterContext, Fills, FillTypes, Tier } from './adapter.ts';
 import { loadConditionFns, matchesCondition } from './condition.ts';
 import type { ResolvedConfig } from './config.ts';
-import type { GateAnswer, Host, ResumeQuestion } from './hooks.ts';
+import type { CancelQuestion, GateAnswer, Host, ResumeQuestion } from './hooks.ts';
 import { isRunBusy } from './errors.ts';
 import { deadlineBy, deadlineMs, Ledger, openBounds, spentTotals, type SpentTotals } from './ledger.ts';
 import {
-  memberCall, nextStepKey, replyName, replyWait, resumeReply, RUN_KEYS, waitingCall, waitRef, waitToken, type MemberCallEnv, type RunState,
+  cancelWait, memberCall, nextStepKey, replyName, replyWait, resumeReply, RUN_KEYS, waitingCall, waitRef, waitToken, type MemberCallEnv, type RunState,
   type WaitingCall,
 } from './member-call.ts';
 import { ATTR, EVENT, METRIC, SPAN } from './names.ts';
@@ -19,7 +19,7 @@ import { readinessFindings, type Finding } from './readiness.ts';
 import { createAdapter, pluginLoader, type DescriptorLoader } from './resolve.ts';
 import {
   callerIdentity, inputText, isRunInput, sameIdentity, type AgentEntry, type Attribution, type CallerIdentity, type EvalCase,
-  type HopRecord, type Lineage, type MemberResult, type ResumeReply, type RouteDecision, type RunContext, type RunInput, type RunStatus,
+  type Caller, type HopRecord, type Lineage, type MemberResult, type ResumeReply, type RouteDecision, type RunContext, type RunInput, type RunStatus,
   type Score, type SystemResult, type Usage,
 } from './shapes.ts';
 import { DEFAULT_ROUTER } from './topology-check.ts';
@@ -52,6 +52,12 @@ const sameInput = (a: RunInput, b: RunInput): boolean => {
   return inputText(a) === inputText(b) && parts(a) === parts(b);
 };
 
+/** A kept `run:cancelled`: who cancelled the run and why, or undefined when the run was not cancelled. */
+function cancelMarker(value: unknown): { by?: string; reason?: string } | undefined {
+  if (!isPlainObject(value)) return undefined;
+  return { ...(typeof value.by === 'string' ? { by: value.by } : {}), ...(typeof value.reason === 'string' ? { reason: value.reason } : {}) };
+}
+
 /** What the run had kept when an invocation began it: its input and its owner (undefined for a new run). */
 interface Kept {
   input: unknown;
@@ -83,6 +89,15 @@ export interface AssembleOptions {
   quiet?: boolean;
 }
 
+/** Who cancels a run and why, and a signal that stops the cancel before it changes the run. */
+export interface CancelOptions {
+  /** The caller that cancels, asked of the host's gate as `caller` (never with its credential). */
+  by?: Caller;
+  /** Kept with the run as the `detail` of its stop reason; never passed to a member. */
+  reason?: string;
+  signal?: AbortSignal;
+}
+
 /** An assembled system: run it, ask for its members, attribute a failure, check its readiness. */
 export interface System {
   name: string;
@@ -104,6 +119,17 @@ export interface System {
    * wins. Across processes it needs a durable execution adapter.
    */
   resume(runId: string, reply: ResumeReply, ctx?: Partial<RunContext>): Promise<SystemResult>;
+  /**
+   * Closes a run that is not over: a waiting run, or one an earlier invocation left unfinished. The member it waits on
+   * is asked to cancel its remote task (best effort, as the core does for an abandoned call), and the run ends
+   * `stopped` with the code `cancelled`, kept with `run:cancelled`; a `run` or `resume` of it is refused afterwards.
+   * The host's gate is asked `cancel` first (with the run's owner): the prototype host and the agent-layers host allow
+   * the owner only. Refused without changing the run:
+   * `not_found` (the journal has no such run), `conflict` (it already completed, failed or stopped), `denied` and
+   * `needs_input` (the gate), and `error` for a run another invocation holds. Cancelling a cancelled run returns its
+   * result again. Needs a durable execution adapter to be seen across processes.
+   */
+  cancel(runId: string, opts?: CancelOptions): Promise<SystemResult>;
   entries(): Promise<AgentEntry[]>;
   attribute(result: SystemResult, scores?: Score[]): Promise<Attribution[]>;
   score(evalCase: EvalCase, result: SystemResult): Promise<Score[]>;
@@ -324,22 +350,18 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
     };
   }
 
-  /**
-   * Asks the gate whether the caller of `ctx` may continue the run that `owner` started (null: started without a
-   * caller). Undefined when allowed; otherwise the result of the refused invocation: `denied`, or `waiting` on `ask`.
-   */
-  async function mayResume(ctx: RunContext, owner: CallerIdentity | null, waiting: WaitingCall | undefined, answer?: GateAnswer): Promise<MemberResult | undefined> {
-    let member: AgentEntry | undefined;
-    if (waiting && members.has(waiting.member)) {
-      try {
-        member = await entry(waiting.member);
-      } catch { /* asked without the member */ }
+  /** The description of the member a run waits on, for the gate; undefined when there is none or it cannot describe itself. */
+  async function waitingMember(waiting: WaitingCall | undefined): Promise<AgentEntry | undefined> {
+    if (!waiting || !members.has(waiting.member)) return undefined;
+    try {
+      return await entry(waiting.member);
+    } catch {
+      return undefined; // asked without the member
     }
-    const question: ResumeQuestion = {
-      action: 'resume', runId: ctx.runId, ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
-      ...(ctx.caller ? { caller: withoutCredential(ctx.caller) } : {}), ...(owner ? { owner } : {}),
-      ...(member ? { member } : {}), ...(answer ? { answer } : {}),
-    };
+  }
+
+  /** Undefined when the gate allows the question; otherwise the result of the refused invocation: `denied`, or `waiting` on `ask`. */
+  async function gateRefusal(question: ResumeQuestion | CancelQuestion): Promise<MemberResult | undefined> {
     const refusal = (code: string, status: RunStatus, detail?: string): MemberResult =>
       ({ status, output: '', reason: { code, layer: 'host', by: host.name, ...(detail ? { detail } : {}) } });
     try {
@@ -349,6 +371,19 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
     } catch (err) {
       return refusal('denied', 'stopped', errorMessage(err));
     }
+  }
+
+  /**
+   * Asks the gate whether the caller of `ctx` may continue the run that `owner` started (null: started without a
+   * caller). Undefined when allowed; otherwise the result of the refused invocation: `denied`, or `waiting` on `ask`.
+   */
+  async function mayResume(ctx: RunContext, owner: CallerIdentity | null, waiting: WaitingCall | undefined, answer?: GateAnswer): Promise<MemberResult | undefined> {
+    const member = await waitingMember(waiting);
+    return gateRefusal({
+      action: 'resume', runId: ctx.runId, ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
+      ...(ctx.caller ? { caller: withoutCredential(ctx.caller) } : {}), ...(owner ? { owner } : {}),
+      ...(member ? { member } : {}), ...(answer ? { answer } : {}),
+    });
   }
 
   function traced(ctx: RunContext, open: (run: Execution, kept: Kept) => Promise<Opening>): Promise<SystemResult> {
@@ -428,6 +463,93 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
     return record(final, records);
   }
 
+  /** The result of a cancelled run: `stopped`, code `cancelled`, `by` the cancelling caller and `detail` the reason. */
+  const cancelledResult = (runId: string, kept: { by?: string; reason?: string }): SystemResult => ({
+    status: 'stopped', output: '',
+    reason: { code: 'cancelled', layer: 'execution', ...(kept.by ? { by: kept.by } : {}), ...(kept.reason ? { detail: kept.reason } : {}) },
+    runId, record: [],
+  });
+
+  /** A cancel that changed nothing, and why. */
+  const cancelRefused = (runId: string, code: string, detail: string, status: RunStatus = 'failed'): SystemResult =>
+    ({ status, output: '', reason: { code, layer: 'execution', detail }, runId, record: [] });
+
+  /** One cancel of a run no other invocation of this process holds. */
+  async function cancelHeld(runId: string, opts: CancelOptions): Promise<SystemResult> {
+    let run: Execution;
+    try {
+      run = await journal.begin(runId);
+    } catch (err) {
+      return cancelRefused(runId, 'error', isRunBusy(err) ? `run ${runId} is in progress` : errorMessage(err));
+    }
+    const caller = opts.by;
+    try {
+      const kept = await run.recall(RUN_KEYS.owner);
+      if (kept === undefined && (await run.recall(RUN_KEYS.input)) === undefined) {
+        // Unknown: the journal created it by `begin`, and ends it failed so it may drop it, as for a run refused at its start.
+        await end(run, 'failed');
+        return cancelRefused(runId, 'not_found', `run ${runId} not found`);
+      }
+      const owner = ownerOf(kept);
+      if (owner === undefined) {
+        await release(run);
+        return cancelRefused(runId, 'error', `run ${runId} has no kept owner`);
+      }
+      const waiting = waitingCall(await run.recall(RUN_KEYS.waiting));
+      const member = await waitingMember(waiting);
+      const refused = await gateRefusal({
+        action: 'cancel', runId, ...(caller ? { caller: withoutCredential(caller) } : {}), ...(owner ? { owner } : {}), ...(member ? { member } : {}),
+      });
+      if (refused) {
+        await release(run);
+        return { ...refused, runId, record: [] };
+      }
+      const already = cancelMarker(await run.recall(RUN_KEYS.cancelled));
+      if (already) {
+        await release(run);
+        return cancelledResult(runId, already);
+      }
+      const status = await run.recall(RUN_KEYS.status);
+      if (status === 'completed' || status === 'failed' || status === 'stopped') {
+        await release(run);
+        return cancelRefused(runId, 'conflict', `run ${runId} is already ${status}`);
+      }
+      if (opts.signal?.aborted) {
+        await release(run);
+        return cancelRefused(runId, 'aborted', 'the cancel was aborted before it changed the run', 'stopped');
+      }
+      // The marker first: a run it marks is never continued, whatever happens to the rest.
+      const cancelled = { ...(caller ? { by: caller.id } : {}), ...(opts.reason ? { reason: opts.reason } : {}) };
+      if (!(await keep(run, RUN_KEYS.cancelled, { at: new Date().toISOString(), ...cancelled }))) {
+        await release(run);
+        return cancelRefused(runId, 'error', `run ${runId} could not be cancelled`);
+      }
+      if (waiting) {
+        const lineage = lineageOf(await run.recall(RUN_KEYS.lineage));
+        const ctx: RunContext = { runId, system: config.name, ...(caller ? { caller } : {}), ...(lineage ? { lineage } : {}), ...(opts.signal ? { signal: opts.signal } : {}) };
+        const now = Date.now();
+        const state: RunState = {
+          ctx, rootRunId: lineage?.rootRunId ?? runId, ledger: new Ledger(openBounds(ctx, limits, now), Date.now, deadlineBy(ctx, limits, now)),
+          execution: run, steps: 0, recent: [], records: [],
+        };
+        await cancelWait(callEnv, state, waiting);
+      }
+      // The run waits on nothing, whatever the stop of its last invocation, and no reply is claimed for it.
+      await keep(run, RUN_KEYS.waiting, null);
+      await keep(run, RUN_KEYS.claimed, null);
+      await keep(run, RUN_KEYS.status, 'stopped');
+      await end(run, 'stopped');
+      host.telemetry.event(EVENT.runCancelled, {
+        [ATTR.layer]: 'execution', [ATTR.system]: config.name, [ATTR.runId]: runId, [ATTR.runStatus]: 'stopped', [ATTR.runReason]: 'cancelled',
+        ...(waiting ? { [ATTR.member]: waiting.member } : {}),
+      });
+      return cancelledResult(runId, cancelled);
+    } catch (err) {
+      await release(run);
+      return cancelRefused(runId, 'error', errorMessage(err));
+    }
+  }
+
   return {
     name: config.name,
     tier: config.tier,
@@ -450,6 +572,7 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
           const refused = await mayResume(ctx, owner, waitingCall(await run.recall(RUN_KEYS.waiting)));
           if (refused) return { refused };
         }
+        if (cancelMarker(await run.recall(RUN_KEYS.cancelled))) return { refused: failed('error', 'execution', `run ${runId} was cancelled`) };
         if (kept.input !== undefined && !(isRunInput(kept.input) && sameInput(kept.input, input))) {
           return { refused: failed('error', 'execution', `run ${runId} exists with a different input`) };
         }
@@ -469,6 +592,7 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
       }
       const ctx: RunContext = { ...partial, runId, system: config.name };
       return traced(ctx, async (run, kept): Promise<Opening> => {
+        if (cancelMarker(await run.recall(RUN_KEYS.cancelled))) return { refused: failed('error', 'execution', `run ${runId} was cancelled`) };
         const waiting = waitingCall(await run.recall(RUN_KEYS.waiting));
         if (!waiting) return { refused: failed('error', 'execution', `run ${runId} is not waiting`) };
         // A reply that names its wait answers only that one: a late or repeated resume cannot answer a later wait.
@@ -502,6 +626,18 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
         await keep(run, RUN_KEYS.status, null);
         return { input, ctx: { ...ctx, ...(lineage ? { lineage } : {}) }, resuming: waiting };
       });
+    },
+    async cancel(runId, opts = {}) {
+      if (!isRunId(runId)) return cancelRefused(String(runId), 'error', 'invalid run id');
+      let held = holds.get(journal);
+      if (!held) holds.set(journal, (held = new Set()));
+      if (held.has(runId)) return cancelRefused(runId, 'error', `run ${runId} is in progress`);
+      held.add(runId);
+      try {
+        return await cancelHeld(runId, opts);
+      } finally {
+        held.delete(runId);
+      }
     },
     entries,
     async attribute(result, scores = []) {

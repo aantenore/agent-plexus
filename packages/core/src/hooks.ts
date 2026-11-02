@@ -45,7 +45,19 @@ export interface ResumeQuestion extends GateQuestionBase {
   answer?: GateAnswer;
 }
 
-export type GateQuestion = InvokeQuestion | ResumeQuestion;
+/**
+ * May `caller` cancel a run that `owner` started: `System.cancel`. Asked before anything of the run changes; the owner
+ * and the member are as for a resume.
+ */
+export interface CancelQuestion extends GateQuestionBase {
+  action: 'cancel';
+  /** The caller that started the run, identity only; absent when the run started without a caller. */
+  owner?: CallerIdentity;
+  /** The member the run waits on; absent when the run waits on nothing or the member cannot describe itself. */
+  member?: AgentEntry;
+}
+
+export type GateQuestion = InvokeQuestion | ResumeQuestion | CancelQuestion;
 
 export interface GateDecision {
   effect: 'allow' | 'deny' | 'ask';
@@ -70,7 +82,7 @@ export interface GateVerdict {
   reason?: string;
 }
 
-/** Authorization, credentials and content checks for every member call, and authorization of a resume. Errors are a deny. */
+/** Authorization, credentials and content checks for every member call, and authorization of a resume or a cancel. Errors are a deny. */
 export interface GateHook {
   allow(question: GateQuestion): Promise<GateDecision>;
   /** A credential for the member's audience, on behalf of the caller; undefined when none is needed. */

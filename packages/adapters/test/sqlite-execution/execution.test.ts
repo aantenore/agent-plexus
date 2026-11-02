@@ -466,6 +466,7 @@ test('two begin of one run in a process share a step in flight: the function run
 async function waitingSystem(journal: AdapterDescriptor, options: Record<string, unknown> = {}) {
   const resumed: string[] = [];
   const invoked: string[] = [];
+  const cancelled: string[] = [];
   const maps = { technology: 'test' };
   const tiers: ('prototype' | 'production')[] = ['prototype'];
   const member = defineAdapter({
@@ -481,6 +482,9 @@ async function waitingSystem(journal: AdapterDescriptor, options: Record<string,
         resumed.push(input === undefined ? '-' : inputText(input));
         await new Promise((done) => setTimeout(done, 20));
         return { status: 'completed', output: `D:${input === undefined ? '-' : inputText(input)}` };
+      },
+      cancel: async (ref) => {
+        cancelled.push(ref);
       },
     }),
   });
@@ -507,7 +511,7 @@ async function waitingSystem(journal: AdapterDescriptor, options: Record<string,
       return found;
     },
   });
-  return { system, resumed, invoked };
+  return { system, resumed, invoked, cancelled };
 }
 
 test('two concurrent resumes of one run: the first runs it, the other fails as in progress; the member resumes once', async () => {
@@ -662,4 +666,29 @@ test('a process that delivered a reply and died before keeping its claim: once i
   assert.deepEqual([res.status, res.output], ['completed', 'D:LOST'], JSON.stringify(res.reason));
   assert.deepEqual([invoked, resumed], [['hi'], ['LOST']]);
   await system.close();
+});
+
+test('a cancelled run stays cancelled after a restart: the member task was cancelled once, and the run is neither resumed nor run again', async () => {
+  const path = fresh();
+  const alice = { id: 'alice', kind: 'user' as const, roles: [], scopes: [] };
+  const first = await waitingSystem(adapter as unknown as AdapterDescriptor, { path });
+  assert.equal((await first.system.run('hi', { runId: 'k1', caller: alice })).status, 'waiting');
+  const res = await first.system.cancel('k1', { by: alice, reason: 'config changed' });
+  assert.deepEqual([res.status, res.reason?.code, res.reason?.by, res.reason?.detail], ['stopped', 'cancelled', 'alice', 'config changed']);
+  assert.deepEqual(first.cancelled, ['task-1']);
+  await first.system.close();
+
+  const db = new DatabaseSync(path, { readOnly: true });
+  assert.deepEqual({ ...(db.prepare('SELECT status, lease IS NOT NULL AS held FROM runs WHERE key = ?').get('k1') as object) }, { status: 'stopped', held: 0 });
+  db.close();
+
+  const second = await waitingSystem(adapter as unknown as AdapterDescriptor, { path });
+  const again = await second.system.cancel('k1', { by: alice });
+  assert.deepEqual([again.status, again.reason?.code, again.reason?.detail], ['stopped', 'cancelled', 'config changed']);
+  const resumed = await second.system.resume('k1', { input: 'late' }, { caller: alice });
+  assert.deepEqual([resumed.status, resumed.reason?.code, resumed.reason?.detail], ['failed', 'error', 'run k1 was cancelled']);
+  const rerun = await second.system.run('hi', { runId: 'k1', caller: alice });
+  assert.deepEqual([rerun.status, rerun.reason?.detail], ['failed', 'run k1 was cancelled']);
+  assert.deepEqual([second.cancelled, second.resumed, second.invoked], [[], [], []]);
+  await second.system.close();
 });

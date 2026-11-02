@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { stableStringify, runGuards } from '@agent-layers/core';
 import type { AccessQuestion, ApprovalPort, ComposeOptions, JsonValue, Risk, Stack } from '@agent-layers/core';
-import { defineAdapter, expectedScores, RESUME_OWNER_ONLY, sameIdentity } from '@agent-plexus/core';
+import { CANCEL_OWNER_ONLY, defineAdapter, expectedScores, RESUME_OWNER_ONLY, sameIdentity } from '@agent-plexus/core';
 import type {
-  AgentEntry, GateAnswer, GateCheck, GateDecision, GateHook, GateQuestion, GateVerdict, Host, ResumeQuestion, ScoreHook, StateHook,
+  AgentEntry, CancelQuestion, GateAnswer, GateCheck, GateDecision, GateHook, GateQuestion, GateVerdict, Host, ResumeQuestion, ScoreHook, StateHook,
   TelemetryHook,
 } from '@agent-plexus/core';
 import { evalRunOf, guardStageOf, layersCaller, layersEvalCase, NAMESPACE, plexusScore, questionCaller } from './map.ts';
@@ -15,7 +15,9 @@ const DEFAULT_RISK: Risk = 'exec';
 const HARNESS = 'harness';
 /** Action of the access question for continuing a waiting run; `call` is the one for calling a member. */
 export const RESUME_ACTION = 'resume';
-/** `ext` key of a resume question that carries the identity of the caller that started the run. */
+/** Action of the access question for cancelling a run. */
+export const CANCEL_ACTION = 'cancel';
+/** `ext` key of a resume or cancel question that carries the identity of the caller that started the run. */
 export const OWNER_KEY = `${NAMESPACE}.owner`;
 /** Namespace of the StorePort keys the `state` hook writes: `plexus.<key>`. */
 export const STATE_NAMESPACE = 'plexus';
@@ -101,15 +103,15 @@ function gateOf(stack: Stack, options: StackHostOptions): GateHook {
   });
 
   /**
-   * The access question of a resume: the call's question with action `resume`, about the member the run waits on (or
-   * the run itself when it waits on none), and the owner's identity under `ext`.
+   * The access question of a resume or a cancel: the call's question with that action, about the member the run waits
+   * on (or the run itself when it waits on none), and the owner's identity under `ext`.
    */
-  const resumeQuestion = ({ caller, member, owner, runId }: ResumeQuestion): AccessQuestion => ({
+  const controlQuestion = ({ caller, member, owner, runId }: ResumeQuestion | CancelQuestion, action: string): AccessQuestion => ({
     ...(member ? question(member, caller) : {
       caller: questionCaller(caller),
       target: { kind: 'run', id: runId, layer: HARNESS, risk: DEFAULT_RISK, agent },
     }),
-    action: RESUME_ACTION,
+    action,
     ...(owner ? { ext: { [OWNER_KEY]: { id: owner.id, kind: owner.kind } } } : {}),
   });
 
@@ -127,8 +129,9 @@ function gateOf(stack: Stack, options: StackHostOptions): GateHook {
 
   return {
     async allow(q) {
-      // A run is continued only by its owner, whatever the policy; the policy may still refuse the owner.
-      if (q.action === 'resume') return sameIdentity(q.caller, q.owner) ? (await authorize(resumeQuestion(q))) ?? allow() : deny(RESUME_OWNER_ONLY);
+      // A run is continued or cancelled only by its owner, whatever the policy; the policy may still refuse the owner.
+      if (q.action === 'resume') return sameIdentity(q.caller, q.owner) ? (await authorize(controlQuestion(q, RESUME_ACTION))) ?? allow() : deny(RESUME_OWNER_ONLY);
+      if (q.action === 'cancel') return sameIdentity(q.caller, q.owner) ? (await authorize(controlQuestion(q, CANCEL_ACTION))) ?? allow() : deny(CANCEL_OWNER_ONLY);
       const { caller, member, runId } = q;
       const asked = question(member, caller);
       const denied = await authorize(asked);

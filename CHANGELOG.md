@@ -43,6 +43,14 @@ The agent-layers adapters the tests and examples use follow the same layout in a
 - `a2a-member` sends the bounds extension under its canonical agent-layers URI (`boundsUri: "plexus"` for the alias)
   and reads a bounds stop (`timeout`, `limit`, `hop_limit`) from the remote report.
 - `scripts/publish-unpublished.mjs --pause=<seconds>` waits between publishes.
+- `System.cancel(runId, { by?, reason?, signal? })` closes a run that is not over, such as a waiting one: the member it
+  waits on is asked to cancel its remote task (best effort), and the run ends `stopped` with the new code `cancelled`,
+  so it can no longer be resumed or run again. Authorized like a resume, by the host's gate with the new `cancel`
+  action (`CancelQuestion`; the prototype and `agent-layers` hosts allow the owner only; `agent-layers` exports
+  `CANCEL_ACTION`). Refusals carry the new codes `not_found` (unknown run) and `conflict` (the run is already over).
+  `agent-plexus cancel <runId>` does the same from the command line. `GateQuestion` gains the `cancel` variant: a host
+  that told `invoke` from `resume` by `action === 'resume'` should test `action === 'invoke'` instead (an unhandled
+  question is a deny).
 
 ### Earlier in 0.2.0
 

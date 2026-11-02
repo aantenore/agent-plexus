@@ -58,7 +58,8 @@ flowchart LR
   exp -.-> sys
   sys --> tp --> mc
   mc --> m
-  tp --> ro --> r
+  tp --> ro
+  sys -->|"candidates"| r
   mc --> ex
   sys --> at
   mc --> g
@@ -185,7 +186,9 @@ sequenceDiagram
   topology-->>core: MemberResult
   core->>execution: end(status)
   core-->>host: SystemResult with record
-  host->>attribution: attribute(record, result, scores)
+  host->>core: attribute(result, scores)
+  core->>attribution: attribute(record, result, scores, source)
+  attribution-->>core: layer, member, confidence, evidence
   Note over core,host: every call is a plexus.hop span with plexus.layer
 ```
 

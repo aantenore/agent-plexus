@@ -81,6 +81,30 @@ records beat log text. See [research/protocols.md](../research/protocols.md).
 Confidence values: high 0.9, medium 0.6, low 0.3. The option `echoShare` (a number in (0, 1], default 0.5) sets the share of an output that the repeated input must be for the member to count as having only repeated it. Over A2A the layer that stopped a remote run is unknown (`reason.layer` is absent) and the stop code does not cross the
 boundary yet ([proposal](../proposals/agent-layers-delegation-bounds.md)).
 
+### Rules at a glance
+
+The candidate's stop code decides the branch; waiting (`needs_input`, a member's `needs_auth`, `aborted`) gives no
+attribution.
+
+```mermaid
+flowchart TB
+  rec["Hop records and scores<br/>abandoned hops skipped"]:::external --> cand{"Earliest hop not completed,<br/>or below 1 on an expectation"}:::insight
+  cand -->|"route chose no member"| r["L2 routing<br/>high"]:::model
+  cand -->|"hop_limit, system limit or deadline"| t["L3 topology<br/>high"]:::agent
+  cand -->|"denied, needs_auth, guard_block by the host"| h["host gate<br/>high"]:::control
+  cand -->|"failed, error, member limit or timeout"| m["L0 member<br/>the hop"]:::foundation
+  cand -->|"guard_block by a member"| walk{"Upstream members<br/>only repeated their input?"}:::external
+  walk -->|"no"| up["L0 member<br/>first upstream member that added text"]:::foundation
+  walk -->|"yes: origin:input"| m
+  cand -->|"all completed, a score below 1"| last["L0 member<br/>last completed hop, low"]:::foundation
+  classDef foundation fill:#d9dde3,stroke:#57606a,color:#1f2328
+  classDef model fill:#ffd8a8,stroke:#a85400,color:#1f2328
+  classDef agent fill:#a5d8ff,stroke:#1864ab,color:#1f2328
+  classDef control fill:#ffc9c9,stroke:#b42318,color:#1f2328
+  classDef insight fill:#d0bfff,stroke:#5f3dc4,color:#1f2328
+  classDef external fill:#ffffff,stroke:#57606a,color:#1f2328,stroke-dasharray:4 3
+```
+
 ## Configuration
 
 ```json

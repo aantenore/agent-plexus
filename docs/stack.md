@@ -4,6 +4,8 @@ A multi-agent system needs six layers between its agents. agent-plexus names the
 adapters for them from a config. The core is technology neutral: every framework or protocol below is an adapter, and
 each can be swapped by changing one line of config. The design is in [architecture.md](architecture.md).
 
+![The agent-plexus system: six layers in four planes, one question per layer, and the host hooks](assets/system-overview.svg)
+
 ## Layers by plane
 
 | Plane | L | Layer (id) | The question it answers | Port | Reference adapters |
@@ -53,7 +55,7 @@ flowchart TB
   flw -->|"which agent"| dsc
   flw -->|"memberCall"| mbr
   flw -.->|"hop records"| ins
-  tel -.-> ins
+  tel -.->|"scores"| ins
   classDef foundation fill:#d9dde3,stroke:#57606a,color:#1f2328
   classDef model fill:#ffd8a8,stroke:#a85400,color:#1f2328
   classDef agent fill:#a5d8ff,stroke:#1864ab,color:#1f2328
@@ -66,28 +68,28 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-  client([Person, app, agent, event]):::external --> host[host<br/>verify the caller, expose]:::control
-  host --> topology[L3 topology]:::agent
-  topology --> routing[L2 routing]:::model
-  routing --> registry[L1 registry]:::model
-  topology --> mc[memberCall]:::external
-  mc --> gate[host gate<br/>allow, check, token]:::control
-  mc --> execution[L4 execution<br/>journal step]:::agent
-  execution --> member[L0 member]:::foundation
-  mc -.-> telemetry[host telemetry]:::insight
-  member -.-> telemetry
-  telemetry --> attribution[L5 attribution]:::insight
-  score[host score]:::insight -.-> attribution
+  client(["Person, app, agent, event"]):::external --> host["Host exposure<br/>verified caller, system.run"]:::experience
+  host --> topology["L3 topology<br/>walks the nodes"]:::agent
+  topology -->|"candidates"| registry["L1 registry"]:::model
+  topology -->|"which agent"| routing["L2 routing"]:::model
+  topology -->|"scope.call"| mc["memberCall"]:::external
+  mc --> gate["host gate<br/>allow, check, token"]:::control
+  mc --> execution["L4 execution<br/>journal step"]:::agent
+  execution --> member["L0 member"]:::foundation
+  mc -.->|"plexus.hop span"| telemetry["host telemetry"]:::insight
+  mc -.->|"hop records"| attribution["L5 attribution"]:::insight
+  score["host score"]:::insight -.->|"scores"| attribution
   classDef foundation fill:#d9dde3,stroke:#57606a,color:#1f2328
   classDef model fill:#ffd8a8,stroke:#a85400,color:#1f2328
   classDef agent fill:#a5d8ff,stroke:#1864ab,color:#1f2328
   classDef control fill:#ffc9c9,stroke:#b42318,color:#1f2328
+  classDef experience fill:#b2f2bb,stroke:#2a7a38,color:#1f2328
   classDef insight fill:#d0bfff,stroke:#5f3dc4,color:#1f2328
   classDef external fill:#ffffff,stroke:#57606a,color:#1f2328,stroke-dasharray:4 3
 ```
 
 A host starts a run with the verified caller and the bounds it holds. The topology walks its nodes. A `route` node asks
-the router, which reads candidates from the registry. Every member call goes through `memberCall`: the host's gate
+the core, which reads candidates from the registry and hands them to the router. Every member call goes through `memberCall`: the host's gate
 allows, checks what is sent, mints a token for the member's audience; the call runs as a journal step; the gate checks
 what comes back; a hop record is written. Telemetry names every span `plexus.*`. Attribution reads the hop records and
 the host's scores.

@@ -1,5 +1,7 @@
 # agent-plexus
 
+![The agent-plexus system: six layers in four planes, one question per layer, and the host hooks](docs/assets/system-overview.svg)
+
 agent-plexus composes agents into a multi-agent system. It owns the six layers that lie between agents: how an agent
 is called, which agents exist, which one handles a request, how work flows, how a long run survives, and which agent
 caused a failure.
@@ -65,19 +67,20 @@ flowchart TB
     routing["L2 routing"]:::model
     registry["L1 registry"]:::model
     member["L0 member<br/>function, agent-layers stack,<br/>A2A agent"]:::foundation
-    execution["L4 execution<br/>journal, bounds ledger"]:::agent
+    execution["L4 execution<br/>journal of steps"]:::agent
   end
   tel["Host telemetry<br/>plexus.* spans"]:::insight
   score["Host score"]:::insight
   attribution["L5 attribution<br/>layer and member of a failure"]:::insight
   caller --> expose -->|"system.run"| topology
-  topology -->|"which agent"| routing --> registry
-  topology -->|"memberCall"| member
-  topology --> execution
+  topology -->|"candidates"| registry
+  topology -->|"which agent"| routing
+  topology -->|"memberCall"| execution
+  execution -->|"journal step"| member
   gate -.->|"every call"| member
   run -.-> tel
-  tel -.->|"hop records"| attribution
-  score -.-> attribution
+  run -.->|"hop records"| attribution
+  score -.->|"scores"| attribution
   classDef foundation fill:#d9dde3,stroke:#57606a,color:#1f2328
   classDef model fill:#ffd8a8,stroke:#a85400,color:#1f2328
   classDef agent fill:#a5d8ff,stroke:#1864ab,color:#1f2328

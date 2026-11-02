@@ -1,7 +1,13 @@
 # Diagrams
 
 Conventions for the diagrams in these docs, and an index of all of them. Diagrams are [Mermaid](https://mermaid.js.org)
-blocks, which GitHub renders. There is no static figure.
+blocks, which GitHub renders, plus one static figure.
+
+![The agent-plexus system: six layers in four planes, one question per layer, and the host hooks](assets/system-overview.svg)
+
+The figure is `docs/assets/system-overview.svg`, a hand-written SVG on a neutral background so it reads in light and
+dark themes. It lists the layers from `LAYERS` in `packages/core/src/layers.ts` and the host hooks from
+[spec/hooks.md](../spec/hooks.md); keep both in step.
 
 The conventions are those of agent-layers, so a diagram of a system that runs on an agent-layers host reads the same
 way. agent-plexus adds no plane colours of its own: it maps its planes onto the existing palette.
@@ -67,6 +73,7 @@ The command renders every Mermaid block of a Markdown file and fails on a syntax
 
 | Diagram | Where | Shows |
 |---|---|---|
+| System figure | [README](../README.md), [stack.md](stack.md), this page | Six layers in four planes, one question per layer, and the four host hooks |
 | Request through the system | [README](../README.md#request-through-the-system) | A run across the layers, with the host's gate, telemetry and score around it |
 | Planes at a glance | [stack.md](stack.md#planes-at-a-glance) | How the member, discovery, flow and insight planes relate to the host |
 | Request flow | [stack.md](stack.md#request-flow) | Which layer calls which, in more detail |
@@ -78,19 +85,25 @@ The command renders every Mermaid block of a Markdown file and fails on a syntax
 
 ### Layers
 
-Each layer page has a **Where it sits** diagram: its port, what calls it and what it calls.
+Each layer page has a **Where it sits** diagram: its port, what calls it and what it calls. Some pages add one more.
 
-| Layer | Where it sits |
-|---|---|
-| `member` (L0) | [member.md](layers/member.md#where-it-sits) |
-| `registry` (L1) | [registry.md](layers/registry.md#where-it-sits) |
-| `routing` (L2) | [routing.md](layers/routing.md#where-it-sits) |
-| `topology` (L3) | [topology.md](layers/topology.md#where-it-sits) |
-| `execution` (L4) | [execution.md](layers/execution.md#where-it-sits) |
-| `attribution` (L5) | [attribution.md](layers/attribution.md#where-it-sits) |
+| Layer | Where it sits | Additional diagram |
+|---|---|---|
+| `member` (L0) | [member.md](layers/member.md#where-it-sits) | [Remote call and resume](layers/member.md#remote-call-and-resume): sequence of a two-phase call over A2A, checkpoint, then resume after a restart |
+| `registry` (L1) | [registry.md](layers/registry.md#where-it-sits) | |
+| `routing` (L2) | [routing.md](layers/routing.md#where-it-sits) | [Decision flow](layers/routing.md#decision-flow): candidates, the router's answer checked, no member to fallback or `rejected` |
+| `topology` (L3) | [topology.md](layers/topology.md#where-it-sits) | [Reference topology](layers/topology.md#reference-topology): the offline example with the node path of each hop |
+| `execution` (L4) | [execution.md](layers/execution.md#where-it-sits) | [Step and replay](layers/execution.md#step-and-replay): replay a stored result, resume a kept task handle, or invoke |
+| `attribution` (L5) | [attribution.md](layers/attribution.md#where-it-sits) | [Rules at a glance](layers/attribution.md#rules-at-a-glance): which stop code points to which layer |
 
 ### Cross-cutting
 
 | Diagram | Where | Shows |
 |---|---|---|
 | Threat map | [security.md](cross-cutting/security.md#threat-map) | Which layer or hook mitigates which threat |
+
+### Proposals
+
+| Diagram | Where | Shows |
+|---|---|---|
+| Delegation bounds | [agent-layers-delegation-bounds.md](proposals/agent-layers-delegation-bounds.md#diagram) | Sequence across four stacks: deadline, hops and actors passed on, the fourth stopped with `hop_limit` |

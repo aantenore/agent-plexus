@@ -40,6 +40,26 @@ flowchart LR
 None. Routing metadata (skills, tags, attrs) comes from the registry entry. A2A skills are free text without cost,
 latency or SLA fields, so richer metadata is agent-plexus' own and rides in the entry's `ext`.
 
+## Decision flow
+
+The core reads the candidates and checks the answer, so a router only picks among what it is given. A route that chose
+nobody is a hop record of its own; the topology decides what happens next.
+
+```mermaid
+flowchart TB
+  node["L3 topology<br/>route node"]:::agent -->|"scope.route"| cands["RegistryPort.list or get<br/>cut at limits.router.maxCandidates"]:::model
+  cands --> ask["AgentRouterPort.route<br/>input, candidates, caller, bounds"]:::model
+  ask --> valid{"A member among<br/>the candidates?"}:::model
+  valid -->|"yes"| call["memberCall<br/>the chosen member"]:::external
+  valid -->|"none, outside, or the router threw"| none["Decision with no member<br/>hop record: rejected, layer routing"]:::external
+  none --> fb{"fallback<br/>in the node?"}:::agent
+  fb -->|"yes"| fallback["fallback node<br/>node path .fallback"]:::agent
+  fb -->|"no"| stop["stopped, rejected<br/>layer routing"]:::external
+  classDef model fill:#ffd8a8,stroke:#a85400,color:#1f2328
+  classDef agent fill:#a5d8ff,stroke:#1864ab,color:#1f2328
+  classDef external fill:#ffffff,stroke:#57606a,color:#1f2328,stroke-dasharray:4 3
+```
+
 ## Boundaries
 
 - Routing picks; [topology](topology.md) decides what a missing choice means (`fallback`, else `rejected`).

@@ -38,6 +38,26 @@ flowchart LR
 
 None. Durable engines (DBOS, Temporal, Hatchet) are candidates for adapters on this port.
 
+## Step and replay
+
+Each member call is one step, named `call:<node path>:<index>`. A finished step replays; an unfinished step with a kept
+task handle continues the remote task.
+
+```mermaid
+flowchart TB
+  mc["memberCall<br/>step call:path:index"]:::external --> stored{"Execution.step<br/>stored result?"}:::agent
+  stored -->|"yes"| replay["Stored result replayed<br/>the member is not called"]:::agent
+  stored -->|"no"| handle{"Execution.recall<br/>task handle kept?"}:::agent
+  handle -->|"yes, and the member has resume"| resume["MemberPort.resume<br/>continue the remote task"]:::foundation
+  handle -->|"no"| invoke["MemberPort.invoke<br/>send the request"]:::foundation
+  invoke -.->|"ctx.checkpoint"| keep["Execution.remember<br/>call:path:index:task"]:::agent
+  resume --> save["Step result stored<br/>cloned through JSON"]:::agent
+  invoke --> save
+  classDef foundation fill:#d9dde3,stroke:#57606a,color:#1f2328
+  classDef agent fill:#a5d8ff,stroke:#1864ab,color:#1f2328
+  classDef external fill:#ffffff,stroke:#57606a,color:#1f2328,stroke-dasharray:4 3
+```
+
 ## Boundaries
 
 - The run key is the run id. A durable adapter resumes an existing run with the same key.

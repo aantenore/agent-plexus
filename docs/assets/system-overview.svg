@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 712" width="960" height="712" role="img" aria-labelledby="t d" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="t">The agent-plexus system: six layers in four planes, and the host hooks</title>
+  <desc id="d">Members (L0) in the Member plane; Registry (L1) and Routing (L2) in the Discovery plane; Topology (L3) and Execution (L4) in the Flow plane; Attribution (L5) in the Insight plane. Each layer is shown with the question it answers. Below, the host hooks, which are not layers: gate in host control; telemetry, score and state in host insight.</desc>
+  <rect width="960" height="712" rx="12" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="20" y="34" font-size="20" font-weight="700" fill="#1f2328">agent-plexus: six layers, four planes</text>
+  <text x="20" y="54" font-size="13" fill="#424a53">Each layer answers one question and has its own port; adapters fill the ports from a system config.</text>
+
+  <!-- Member plane -->
+  <rect x="20" y="70" width="920" height="56" rx="10" fill="#d9dde3" stroke="#57606a" stroke-width="1.5"/>
+  <text x="36" y="103" font-size="15" font-weight="700" fill="#1f2328">Member plane</text>
+  <rect x="190" y="78" width="738" height="40" rx="6" fill="#ffffff" stroke="#57606a"/>
+  <rect x="198" y="86" width="40" height="24" rx="5" fill="#57606a"/>
+  <text x="218" y="103" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">L0</text>
+  <text x="250" y="96" font-size="14" font-weight="700" fill="#1f2328">Members</text>
+  <text x="250" y="111" font-size="12.5" font-style="italic" fill="#424a53">Who does the work, and how is it called?</text>
+  <text x="918" y="103" font-size="12.5" font-family="ui-monospace, Menlo, Consolas, monospace" fill="#424a53" text-anchor="end">member</text>
+
+  <!-- Discovery plane -->
+  <rect x="20" y="136" width="920" height="102" rx="10" fill="#ffd8a8" stroke="#a85400" stroke-width="1.5"/>
+  <text x="36" y="192" font-size="15" font-weight="700" fill="#1f2328">Discovery plane</text>
+  <rect x="190" y="144" width="738" height="40" rx="6" fill="#ffffff" stroke="#a85400"/>
+  <rect x="198" y="152" width="40" height="24" rx="5" fill="#a85400"/>
+  <text x="218" y="169" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">L1</text>
+  <text x="250" y="162" font-size="14" font-weight="700" fill="#1f2328">Registry</text>
+  <text x="250" y="177" font-size="12.5" font-style="italic" fill="#424a53">Which agents exist, what can they do, can their cards be trusted?</text>
+  <text x="918" y="169" font-size="12.5" font-family="ui-monospace, Menlo, Consolas, monospace" fill="#424a53" text-anchor="end">registry</text>
+  <rect x="190" y="190" width="738" height="40" rx="6" fill="#ffffff" stroke="#a85400"/>
+  <rect x="198" y="198" width="40" height="24" rx="5" fill="#a85400"/>
+  <text x="218" y="215" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">L2</text>
+  <text x="250" y="208" font-size="14" font-weight="700" fill="#1f2328">Routing</text>
+  <text x="250" y="223" font-size="12.5" font-style="italic" fill="#424a53">Which agent should handle this request?</text>
+  <text x="918" y="215" font-size="12.5" font-family="ui-monospace, Menlo, Consolas, monospace" fill="#424a53" text-anchor="end">routing</text>
+
+  <!-- Flow plane -->
+  <rect x="20" y="248" width="920" height="102" rx="10" fill="#a5d8ff" stroke="#1864ab" stroke-width="1.5"/>
+  <text x="36" y="304" font-size="15" font-weight="700" fill="#1f2328">Flow plane</text>
+  <rect x="190" y="256" width="738" height="40" rx="6" fill="#ffffff" stroke="#1864ab"/>
+  <rect x="198" y="264" width="40" height="24" rx="5" fill="#1864ab"/>
+  <text x="218" y="281" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">L3</text>
+  <text x="250" y="274" font-size="14" font-weight="700" fill="#1f2328">Topology</text>
+  <text x="250" y="289" font-size="12.5" font-style="italic" fill="#424a53">In what order and shape does work flow between agents?</text>
+  <text x="918" y="281" font-size="12.5" font-family="ui-monospace, Menlo, Consolas, monospace" fill="#424a53" text-anchor="end">topology</text>
+  <rect x="190" y="302" width="738" height="40" rx="6" fill="#ffffff" stroke="#1864ab"/>
+  <rect x="198" y="310" width="40" height="24" rx="5" fill="#1864ab"/>
+  <text x="218" y="327" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">L4</text>
+  <text x="250" y="320" font-size="14" font-weight="700" fill="#1f2328">Execution</text>
+  <text x="250" y="335" font-size="12.5" font-style="italic" fill="#424a53">Does a long run survive a restart, and wait for a person?</text>
+  <text x="918" y="327" font-size="12.5" font-family="ui-monospace, Menlo, Consolas, monospace" fill="#424a53" text-anchor="end">execution</text>
+
+  <!-- Insight plane -->
+  <rect x="20" y="360" width="920" height="56" rx="10" fill="#d0bfff" stroke="#5f3dc4" stroke-width="1.5"/>
+  <text x="36" y="393" font-size="15" font-weight="700" fill="#1f2328">Insight plane</text>
+  <rect x="190" y="368" width="738" height="40" rx="6" fill="#ffffff" stroke="#5f3dc4"/>
+  <rect x="198" y="376" width="40" height="24" rx="5" fill="#5f3dc4"/>
+  <text x="218" y="393" font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">L5</text>
+  <text x="250" y="386" font-size="14" font-weight="700" fill="#1f2328">Attribution</text>
+  <text x="250" y="401" font-size="12.5" font-style="italic" fill="#424a53">When the system fails, which agent and which layer caused it?</text>
+  <text x="918" y="393" font-size="12.5" font-family="ui-monospace, Menlo, Consolas, monospace" fill="#424a53" text-anchor="end">attribution</text>
+
+  <!-- Host hooks: not layers -->
+  <line x1="20" y1="428" x2="940" y2="428" stroke="#d0d7de" stroke-dasharray="4 3"/>
+  <text x="20" y="448" font-size="13" fill="#424a53"><tspan font-weight="700" fill="#1f2328">Host hooks, not layers:</tspan> control and insight come from a host through four hooks.</text>
+
+  <!-- Host control -->
+  <rect x="20" y="460" width="920" height="56" rx="10" fill="#ffc9c9" stroke="#b42318" stroke-width="1.5" stroke-dasharray="6 3"/>
+  <text x="36" y="493" font-size="15" font-weight="700" fill="#1f2328">Host control</text>
+  <rect x="190" y="468" width="738" height="40" rx="6" fill="#ffffff" stroke="#b42318"/>
+  <rect x="198" y="476" width="40" height="24" rx="5" fill="#ffffff" stroke="#b42318" stroke-width="1.5"/>
+  <text x="218" y="492" font-size="11.5" font-weight="700" fill="#b42318" text-anchor="middle">hook</text>
+  <text x="250" y="486" font-size="14" font-weight="700" fill="#1f2328">Gate: allow, token, check</text>
+  <text x="250" y="501" font-size="12.5" font-style="italic" fill="#424a53">May this call happen, and what may cross?</text>
+  <text x="918" y="493" font-size="12.5" font-family="ui-monospace, Menlo, Consolas, monospace" fill="#424a53" text-anchor="end">gate</text>
+
+  <!-- Host insight -->
+  <rect x="20" y="526" width="920" height="148" rx="10" fill="#d0bfff" stroke="#5f3dc4" stroke-width="1.5" stroke-dasharray="6 3"/>
+  <text x="36" y="605" font-size="15" font-weight="700" fill="#1f2328">Host insight</text>
+  <rect x="190" y="534" width="738" height="40" rx="6" fill="#ffffff" stroke="#5f3dc4"/>
+  <rect x="198" y="542" width="40" height="24" rx="5" fill="#ffffff" stroke="#5f3dc4" stroke-width="1.5"/>
+  <text x="218" y="558" font-size="11.5" font-weight="700" fill="#5f3dc4" text-anchor="middle">hook</text>
+  <text x="250" y="552" font-size="14" font-weight="700" fill="#1f2328">Telemetry: spans, events, metrics</text>
+  <text x="250" y="567" font-size="12.5" font-style="italic" fill="#424a53">What is traced? Every name is plexus.*</text>
+  <text x="918" y="559" font-size="12.5" font-family="ui-monospace, Menlo, Consolas, monospace" fill="#424a53" text-anchor="end">telemetry</text>
+  <rect x="190" y="580" width="738" height="40" rx="6" fill="#ffffff" stroke="#5f3dc4"/>
+  <rect x="198" y="588" width="40" height="24" rx="5" fill="#ffffff" stroke="#5f3dc4" stroke-width="1.5"/>
+  <text x="218" y="604" font-size="11.5" font-weight="700" fill="#5f3dc4" text-anchor="middle">hook</text>
+  <text x="250" y="598" font-size="14" font-weight="700" fill="#1f2328">Score</text>
+  <text x="250" y="613" font-size="12.5" font-style="italic" fill="#424a53">How does a run score? Attribution reads the scores.</text>
+  <text x="918" y="605" font-size="12.5" font-family="ui-monospace, Menlo, Consolas, monospace" fill="#424a53" text-anchor="end">score</text>
+  <rect x="190" y="626" width="738" height="40" rx="6" fill="#ffffff" stroke="#5f3dc4"/>
+  <rect x="198" y="634" width="40" height="24" rx="5" fill="#ffffff" stroke="#5f3dc4" stroke-width="1.5"/>
+  <text x="218" y="650" font-size="11.5" font-weight="700" fill="#5f3dc4" text-anchor="middle">hook</text>
+  <text x="250" y="644" font-size="14" font-weight="700" fill="#1f2328">State: key/value storage</text>
+  <text x="250" y="659" font-size="12.5" font-style="italic" fill="#424a53">Optional; the planned host-execution keeps the journal there.</text>
+  <text x="918" y="651" font-size="12.5" font-family="ui-monospace, Menlo, Consolas, monospace" fill="#424a53" text-anchor="end">state</text>
+
+  <text x="20" y="696" font-size="12" fill="#424a53">Layer numbers are for reading only; the ids on the right are the stable identifiers. Hooks are not ports: a host passes them in.</text>
+</svg>

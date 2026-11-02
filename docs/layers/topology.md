@@ -63,6 +63,25 @@ does not exist and a graph end that no edge reaches.
 
 None. The topology language is agent-plexus' own; other formats (framework graph definitions) would be import adapters.
 
+## Reference topology
+
+The topology of [`examples/offline`](../../examples/offline/README.md), with the node path each hop record carries. The
+edges from the route node are the rules of `skill-router` in that example.
+
+```mermaid
+flowchart LR
+  input(["Input"]):::external --> triage["L0 member triage<br/>root.steps[0]"]:::foundation
+  triage -->|"output"| route{"route<br/>root.steps[1]"}:::agent
+  route -->|"which agent"| routing["L2 routing<br/>skill-router"]:::model
+  route -->|"invoice, refund, charge"| billing["L0 member billing<br/>root.steps[1]"]:::foundation
+  route -->|"manual, setup, product"| manuals["L0 member manuals<br/>root.steps[1]"]:::foundation
+  route -->|"anything else"| fallback["L0 member triage<br/>root.steps[1].fallback"]:::foundation
+  classDef foundation fill:#d9dde3,stroke:#57606a,color:#1f2328
+  classDef model fill:#ffd8a8,stroke:#a85400,color:#1f2328
+  classDef agent fill:#a5d8ff,stroke:#1864ab,color:#1f2328
+  classDef external fill:#ffffff,stroke:#57606a,color:#1f2328,stroke-dasharray:4 3
+```
+
 ## Boundaries
 
 - Which agent runs is [routing](routing.md); whether a call may happen is the host's `gate`; surviving restarts is

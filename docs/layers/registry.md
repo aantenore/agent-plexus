@@ -24,11 +24,12 @@ An `AgentEntry` has `id`, `name`, `description`, `skills` (`id`, `name`, `descri
 
 ```mermaid
 flowchart LR
-  routing["L2 routing"]:::model --> rg
-  topology["L3 topology<br/>route node"]:::agent -->|"candidates"| rg
+  topology["L3 topology<br/>route node"]:::agent -->|"scope.route"| core["core<br/>candidates, cut at maxCandidates"]:::external
+  core -->|"list, get"| rg
   subgraph sg["L1 registry"]
     rg["RegistryPort<br/>list, get"]:::model
   end
+  core -->|"candidates"| routing["L2 routing"]:::model
   rg --> src["member list,<br/>agent cards (planned),<br/>directory (candidate)"]:::external
   check["check<br/>registry.requireSigned"]:::external -.-> rg
   classDef model fill:#ffd8a8,stroke:#a85400,color:#1f2328

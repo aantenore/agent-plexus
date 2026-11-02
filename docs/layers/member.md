@@ -48,6 +48,34 @@ Mapped by adapters, not by the port:
 - A2A 1.0, and 0.3 through the SDK, for agents in any framework (adapter `a2a-member`, JSON-RPC binding).
 - The agent-layers stack, in process (adapter `agent-layers`).
 
+## Remote call and resume
+
+A remote call is two-phase. The member checkpoints the remote task as soon as the other side has the work; a run begun
+again with the same run id continues that task instead of sending the request again. Shown with `a2a-member`.
+
+```mermaid
+sequenceDiagram
+  participant core
+  participant execution as execution (L4)
+  participant member as member (L0)
+  participant remote as remote agent (A2A)
+  core->>execution: step(call:path:index)
+  execution->>member: invoke(input, ctx)
+  member->>remote: SendMessage
+  remote-->>member: task, still working
+  member->>core: ctx.checkpoint(taskRef)
+  core->>execution: remember(call:path:index:task)
+  member->>remote: GetTask, polling
+  Note over core,remote: the run stops before the step has a result
+  core->>execution: begin(runId), the same run id
+  core->>execution: step(call:path:index), no stored result
+  core->>execution: recall(call:path:index:task)
+  execution->>member: resume(taskRef, undefined, ctx)
+  member->>remote: GetTask until the task ends
+  remote-->>member: task completed
+  member-->>execution: MemberResult, stored as the step result
+```
+
 ## Boundaries
 
 - Members are reached only through `memberCall`; a topology cannot call a port directly.

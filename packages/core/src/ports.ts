@@ -159,6 +159,8 @@ export interface RecordSource {
   name: string;
   records(rootRunId: string): Promise<HopRecord[]>;
   spans?(hopId: string): Promise<MemberSpan[]>;
+  /** Reads a text stored in the execution journal by its key (`inputRef`, `outputRef`). */
+  text?(key: string): Promise<string | undefined>;
 }
 
 export interface AttributionInput {

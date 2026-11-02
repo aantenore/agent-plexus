@@ -21,7 +21,8 @@ layer id, for instance). `confidence` is in [0, 1]; `evidence` is a list of shor
 paths), never texts.
 
 A `RecordSource` is an interface inside this layer, not a port: `records(rootRunId)` and, when available,
-`spans(hopId)` with the member's own spans (`name`, `layer?`, `status?`, `attrs?`).
+`spans(hopId)` with the member's own spans (`name`, `layer?`, `status?`, `attrs?`) and `text(key)` with a text stored in
+the execution journal (the `inputRef` and `outputRef` of a hop).
 
 ### Where it sits
 
@@ -32,7 +33,7 @@ flowchart LR
   subgraph sg["L5 attribution"]
     ap["AttributionPort<br/>attribute"]:::insight
   end
-  src["RecordSource<br/>records, spans"]:::external --> ap
+  src["RecordSource<br/>records, spans, text"]:::external --> ap
   ap --> out["layer, member,<br/>confidence, evidence"]:::external
   sys -.->|"plexus.attributions metric"| telemetry["host telemetry"]:::insight
   classDef insight fill:#d0bfff,stroke:#5f3dc4,color:#1f2328
@@ -50,7 +51,11 @@ records beat log text. See [research/protocols.md](../research/protocols.md).
 - Hops the topology abandoned are skipped.
 - Waiting is not a failure: `needs_input`, a member's `needs_auth` and `aborted` give no attribution.
 - The upstream rule is an approximation: the record does not say which hop's output fed which, so the upstream hop is
-  the previous completed hop in record order.
+  the previous completed hop in record order. When the source reads texts, a hop that only repeated its input (its
+  output holds the input and the input is at least `echoShare` of the output) is passed over: the walk goes on to the
+  hop before it, as long as that hop's output is the echoing hop's input, and stops at the first hop that added text or
+  at the caller's input. The adapter compares texts and never copies them into evidence. Without `text`, or when a
+  read fails, the previous completed hop is blamed.
 - `system.attribute` reads at most `limits.attribution.maxRecords` records and gives the adapter an in-memory record
   source, `memory`, of the last `limits.attribution.historyRuns` runs (default 100). It has records only; member spans need a trace-backed source (planned).
 
@@ -65,14 +70,15 @@ records beat log text. See [research/protocols.md](../research/protocols.md).
 | 3 | `timeout`, `limit` with `reason.layer` `topology` (the system's own limit or deadline) | `topology` | none | high |
 | 3 | `timeout`, `limit` otherwise | `member` | `limit`: the hop with the most tokens, else the highest cost, else the longest duration. `timeout`: the longest duration | medium |
 | 3 | `denied`, `needs_auth` from the host | `host` | none | high |
-| 3 | `guard_block` from the host | `host` | `receive`: the hop's own member; `send`: the previous completed hop's member | high |
+| 3 | `guard_block` from the host | `host` | `receive`: the hop's own member; `send`: the first upstream member that added text (the previous completed hop's member when texts are not readable); none when every upstream member only repeated the caller's input (evidence `origin:input`) | high |
 | 3 | Any other code with `reason.layer` `topology` | `topology` | none | medium |
-| 3 | `guard_block` from a member, with an earlier completed hop | `member` | That upstream hop's member | medium |
+| 3 | `guard_block` from a member, with an earlier completed hop | `member` | The first upstream member that added text (the previous completed hop's member when texts are not readable) | medium |
+| 3 | `guard_block` from a member, every upstream member only repeated the caller's input | `member` | The hop; evidence has `echo:<hopId>` and `origin:input` | high with a member layer, else medium |
 | 3 | `guard_block` otherwise, `failed`, `error`, other codes | `member` | The hop | high with a member layer, else medium |
 | 3 | `rejected` | `member` | The hop | low |
 | 4 | Every hop completed and a score is below 1 | `member` | The last completed hop | low |
 
-Confidence values: high 0.9, medium 0.6, low 0.3. Over A2A the layer that stopped a remote run is unknown (`reason.layer` is absent) and the stop code does not cross the
+Confidence values: high 0.9, medium 0.6, low 0.3. The option `echoShare` (a number in (0, 1], default 0.5) sets the share of an output that the repeated input must be for the member to count as having only repeated it. Over A2A the layer that stopped a remote run is unknown (`reason.layer` is absent) and the stop code does not cross the
 boundary yet ([proposal](../proposals/agent-layers-delegation-bounds.md)).
 
 ## Configuration

@@ -19,6 +19,14 @@ export const CONFIDENCE = { high: 0.9, medium: 0.6, low: 0.3 } as const;
 
 export const ADAPTER_NAME = 'rule-attribution';
 
+/** Smallest share of a member's output that its input must be for the member to count as having only repeated its input. */
+export const DEFAULT_ECHO_SHARE = 0.5;
+
+export interface RuleAttributionOptions {
+  /** In (0, 1]; defaults to `DEFAULT_ECHO_SHARE`. */
+  echoShare?: number;
+}
+
 const ERROR_REASON: StopReason = { code: 'error' };
 
 interface Finding {
@@ -48,6 +56,45 @@ const at = (hop: HopRecord): Pick<Finding, 'hopId' | 'member'> => ({ hopId: hop.
 /** The member hop before `index` in record order that completed: the one whose output fed this hop. */
 const previousCompleted = (hops: HopRecord[], index: number) => hops.slice(0, index).reverse().find((h) => h.status === 'completed' && h.member !== '');
 
+/** A stored text of the journal; undefined when the key, the reader or the text is missing, or the read fails. */
+async function readText(source: RecordSource | undefined, key: string | undefined): Promise<string | undefined> {
+  if (!key || !source?.text) return undefined;
+  try {
+    return await source.text(key);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The member only repeated what it received: its output holds its input, and the input is at least `share` of the output. */
+async function echoed(hop: HopRecord, source: RecordSource | undefined, share: number): Promise<boolean> {
+  const [input, output] = await Promise.all([readText(source, hop.inputRef), readText(source, hop.outputRef)]);
+  const sent = input?.trim();
+  return Boolean(sent && output !== undefined && output.includes(sent) && sent.length >= share * output.length);
+}
+
+/** Where a blocked content came from: the first upstream member that added text, or the caller's input when every one only repeated it. */
+interface Origin {
+  blamed?: HopRecord;
+  echoes: string[];
+}
+
+/** Walks upstream from the hop at `index` through the members that only repeated their input. Undefined: no upstream member. */
+async function traceOrigin(hops: HopRecord[], index: number, source: RecordSource | undefined, share: number): Promise<Origin | undefined> {
+  let current = previousCompleted(hops, index);
+  if (!current) return undefined;
+  const echoes: string[] = [];
+  while (await echoed(current, source, share)) {
+    echoes.push(`echo:${current.hopId}`);
+    const prev = previousCompleted(hops, hops.indexOf(current));
+    if (!prev) return { echoes };
+    const [given, received] = await Promise.all([readText(source, prev.outputRef), readText(source, current.inputRef)]);
+    if (given === undefined || received === undefined || given !== received) return { echoes };
+    current = prev;
+  }
+  return { blamed: current, echoes };
+}
+
 /** The member hop with the largest value of `measure`; the earliest wins a tie. Hops where it is undefined are not counted. */
 function largest(hops: HopRecord[], measure: (hop: HopRecord) => number | undefined): HopRecord | undefined {
   let best: HopRecord | undefined;
@@ -76,7 +123,7 @@ function findCandidate(hops: HopRecord[], scores: AttributionInput['scores']): H
 }
 
 /** Rule 3: the stop code of the candidate decides layer, member and confidence. Undefined: not a failure. */
-function byStopCode(candidate: HopRecord, index: number, hops: HopRecord[]): Finding | undefined {
+async function byStopCode(candidate: HopRecord, index: number, hops: HopRecord[], source: RecordSource | undefined, share: number): Promise<Finding | undefined> {
   const reason = candidate.reason ?? (candidate.status === 'waiting' ? undefined : ERROR_REASON);
   if (!reason) return undefined;
   const { code } = reason;
@@ -89,14 +136,16 @@ function byStopCode(candidate: HopRecord, index: number, hops: HopRecord[]): Fin
     // A refused receive blocked this hop's own output; a refused send or call blocked what an upstream member produced.
     const receive = reason.stage === 'receive' && candidate.member !== '';
     // Only a content block names a member; `denied` and `needs_auth` refuse the call itself.
-    const upstream = receive || code !== 'guard_block' ? undefined : previousCompleted(hops, index);
+    const origin = receive || code !== 'guard_block' ? undefined : await traceOrigin(hops, index, source, share);
+    const upstream = origin?.blamed;
     const member = receive ? candidate.member : upstream?.member;
+    const tail = receive ? ['stage:receive'] : upstream ? [`upstream:${upstream.hopId}`, ...origin.echoes] : origin ? [...origin.echoes, 'origin:input'] : [];
     return {
       layer: 'host',
       hopId: candidate.hopId,
       ...(member ? { member } : {}),
       confidence: CONFIDENCE.high,
-      evidence: [...base, 'layer:host', ...(receive ? ['stage:receive'] : upstream ? [`upstream:${upstream.hopId}`] : [])],
+      evidence: [...base, 'layer:host', ...tail],
     };
   }
 
@@ -125,15 +174,18 @@ function byStopCode(candidate: HopRecord, index: number, hops: HopRecord[]): Fin
 
   if (code === 'rejected') return { layer: 'member', ...at(candidate), confidence: CONFIDENCE.low, evidence: base, layerFrom: candidate, reason };
 
+  let evidence = base;
   if (code === 'guard_block') {
-    const upstream = previousCompleted(hops, index);
+    const origin = await traceOrigin(hops, index, source, share);
+    const upstream = origin?.blamed;
     if (upstream) {
-      return { layer: 'member', ...at(upstream), confidence: CONFIDENCE.medium, evidence: [...base, `upstream:${upstream.hopId}`], layerFrom: upstream, reason };
+      return { layer: 'member', ...at(upstream), confidence: CONFIDENCE.medium, evidence: [...base, `upstream:${upstream.hopId}`, ...origin.echoes], layerFrom: upstream, reason };
     }
+    if (origin) evidence = [...base, ...origin.echoes, 'origin:input'];
   }
 
-  // guard_block otherwise, failed, error, and codes this adapter does not know: the hop itself.
-  return { layer: 'member', ...at(candidate), confidence: CONFIDENCE.high, evidence: base, layerFrom: candidate, reason, graded: true };
+  // guard_block traced to the input or without upstream, failed, error, and codes this adapter does not know: the hop itself.
+  return { layer: 'member', ...at(candidate), confidence: CONFIDENCE.high, evidence, layerFrom: candidate, reason, graded: true };
 }
 
 /** The member's own name for where it failed: the first failed span with a layer, else the reason's layer. */
@@ -153,7 +205,8 @@ async function memberLayerOf(finding: Finding, source: RecordSource | undefined)
 }
 
 /** Deterministic attribution over the hop record. */
-export function createRuleAttribution(_options: Record<string, never> = {}, ctx: Pick<AdapterContext, 'name'>): AttributionPort {
+export function createRuleAttribution(options: RuleAttributionOptions = {}, ctx: Pick<AdapterContext, 'name'>): AttributionPort {
+  const echoShare = options.echoShare ?? DEFAULT_ECHO_SHARE;
   return {
     name: ctx.name,
     async attribute({ record, scores, source }: AttributionInput): Promise<Attribution[]> {
@@ -168,7 +221,7 @@ export function createRuleAttribution(_options: Record<string, never> = {}, ctx:
         } else if (routeChoseNothing(candidate)) {
           finding = { layer: 'routing', hopId: candidate.hopId, confidence: CONFIDENCE.high, evidence: ['route:none', ...hopEvidence(candidate)] };
         } else {
-          finding = byStopCode(candidate, hops.indexOf(candidate), hops);
+          finding = await byStopCode(candidate, hops.indexOf(candidate), hops, source, echoShare);
         }
       } else {
         const failed = scores.find((s) => s.value < 1);
@@ -194,14 +247,14 @@ export function createRuleAttribution(_options: Record<string, never> = {}, ctx:
   };
 }
 
-export const adapter = defineAdapter<'AttributionPort', Record<string, never>>({
+export const adapter = defineAdapter<'AttributionPort', RuleAttributionOptions>({
   fills: 'AttributionPort',
   name: ADAPTER_NAME,
   maps: { technology: 'deterministic rules on hop records' },
   portVersion: PORT_VERSIONS.AttributionPort,
   tiers: ['prototype', 'production'],
   description: 'Names the layer and member behind a failed run from stop codes, expectations and member spans.',
-  optionsSchema: { type: 'object', properties: {}, additionalProperties: false },
+  optionsSchema: { type: 'object', properties: { echoShare: { type: 'number', exclusiveMinimum: 0, maximum: 1 } }, additionalProperties: false },
   create: (options, ctx) => createRuleAttribution(options, ctx),
 });
 

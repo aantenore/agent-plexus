@@ -38,3 +38,11 @@ test('additionalProperties as a schema validates the other values', () => {
   const s: JsonSchema = { type: 'object', additionalProperties: { type: 'number' } };
   assert.equal(validate({ a: 1, b: 'x' }, s).length, 1);
 });
+
+test('exclusiveMinimum rejects the bound itself', () => {
+  const s: JsonSchema = { type: 'number', exclusiveMinimum: 0, maximum: 1 };
+  assert.equal(validate(0, s).length, 1);
+  assert.equal(validate(0.1, s).length, 0);
+  assert.equal(validate(1, s).length, 0);
+  assert.equal(validate(1.1, s).length, 1);
+});

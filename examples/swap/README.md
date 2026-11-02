@@ -19,7 +19,7 @@ other layers.
 | `swap-execution` | L4 execution | `memory-execution` -> `./adapters/file-execution.ts`: the journal in JSON files under a temp dir; a new instance on the same directory replays stored steps | Same |
 | `swap-attribution` | L5 attribution | `rule-attribution` -> `./adapters/last-failure-attribution.ts`: blames the member of the last hop that did not complete | Same layer and member, one rule and a fixed confidence |
 | `swap-member` | L0 member | `billing` calls `./members/billing-v2.ts` (a rule table) instead of `./members/billing.ts` | Same |
-| `swap-member-agent-layers` | L0 member | `billing` is served by an agent-layers stack (`./agent-layers/billing.json`: `mock-model` scripted with the three answers, `basic-runtime`, a `regex-guard` that blocks "crash") through the `agent-layers` member adapter | Same routes and answers; the crash case still fails, but as `guard_block` of the stack, attributed to the member upstream (`triage`) |
+| `swap-member-agent-layers` | L0 member | `billing` is served by an agent-layers stack (`./agent-layers/billing.json`: `mock-model` scripted with the three answers, `basic-runtime`, a `regex-guard` that blocks "crash") through the `agent-layers` member adapter | Same routes and answers; the crash case still fails, but as `guard_block` of the stack, attributed to `billing`, as `triage` only restated the caller's input |
 | `swap-host` | host | The prototype host -> the `agent-layers` host adapter over `./agent-layers/host.json`: `static-identity`, `rules-authorization` (allows `triage`, `billing`, `manuals`), `regex-guard` on `tool_args`, `mock-model`, `basic-runtime`, `expected-eval` | Same; a member the rules do not allow is stopped by the host (`denied`, attributed to layer `host`) |
 | `swap-all` | all | The six swaps (registry, routing, topology, execution, attribution, member) together | Same |
 | `unsupported-kind` | L3 topology | `linear-topology` with a `loop` topology | `check` fails: the adapter does not run `loop` |
@@ -56,8 +56,8 @@ node --conditions=@agent-plexus/source packages/cli/src/cli.ts check --config ex
 Every `eval` prints `eval: 2 passed, 1 failed` and exits 1, because the third case is the crash case, meant to fail.
 Its `attribution` line names member `billing` in every profile, only the evidence and the confidence differ; except
 `swap-member-agent-layers`, where the billing agent stops on "crash" through a guard of its own stack. The reference
-attribution blames a guard block on the member whose output was blocked, or else on the member upstream of the hop, so
-the line names `triage`. The scores of `swap-host` come from the stack's `expected-eval` (output text only), not from the
+attribution traces a guard block past members that only repeated what they received: `triage` restates the caller's input,
+so the block is traced to the input and the line names `billing`. The scores of `swap-host` come from the stack's `expected-eval` (output text only), not from the
 prototype host.
 
 ## Test
@@ -67,7 +67,6 @@ node --conditions=@agent-plexus/source --test "examples/swap/test/**/*.test.ts"
 ```
 
 For the base and each swap profile: `check` has no FAIL, the billing and product cases complete and route to the same
-members as the base, and the crash case fails with attribution naming `billing` (`triage` for `swap-member-agent-layers`,
-see above). Besides: a member the `swap-host` rules do not allow is stopped by the host with attribution layer `host`; the unsupported kind fails
+members as the base, and the crash case fails with attribution naming `billing`. Besides: a member the `swap-host` rules do not allow is stopped by the host with attribution layer `host`; the unsupported kind fails
 `check`; `file-execution` replays a stored step on a second `begin` with the same run key; and the resolved config of
 each profile differs from the base in exactly one adapter (or one member option), written as one value.

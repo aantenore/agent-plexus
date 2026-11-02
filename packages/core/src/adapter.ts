@@ -39,6 +39,7 @@ export interface JsonSchema {
   enum?: unknown[];
   minLength?: number;
   minimum?: number;
+  exclusiveMinimum?: number;
   maximum?: number;
   oneOf?: JsonSchema[];
 }

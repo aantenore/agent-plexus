@@ -111,6 +111,7 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
   const source: RecordSource = {
     name: 'memory',
     records: async (rootRunId) => history.filter((h) => h.rootRunId === rootRunId).flatMap((h) => h.record),
+    text: async (key) => execution?.read?.(key),
   };
 
   async function candidatesOf(request: RouteRequest): Promise<AgentEntry[]> {

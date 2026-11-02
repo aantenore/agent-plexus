@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AttributionInput, HopRecord, MemberResult, MemberSpan, RecordSource, Score, StopReason } from '@agent-plexus/core';
-import { adapter, CONFIDENCE, createRuleAttribution } from '../src/index.ts';
+import { adapter, CONFIDENCE, createRuleAttribution, DEFAULT_ECHO_SHARE } from '../src/index.ts';
 
 let counter = 0;
 const hop = (member: string, extra: Partial<HopRecord> = {}): HopRecord => {
@@ -179,6 +179,117 @@ test('guard_block with no upstream hop blames the hop: high with a layer, medium
   assert.deepEqual([withLayer?.member, withLayer?.confidence, withLayer?.memberLayer], ['a', CONFIDENCE.high, 'guardrail']);
   const [without] = await run([stopped('a', { code: 'guard_block' })]);
   assert.deepEqual([without?.member, without?.confidence, without?.memberLayer], ['a', CONFIDENCE.medium, undefined]);
+});
+
+/** A hop with its input and output stored in a fake journal, and a source that reads it. */
+function journal() {
+  const texts = new Map<string, string>();
+  let n = 0;
+  const put = (text: string) => {
+    const key = `r:t${++n}`;
+    texts.set(key, text);
+    return key;
+  };
+  const source: RecordSource = { name: 'test', records: async () => [], text: async (key) => texts.get(key) };
+  const done = (member: string, input: string, output: string) => hop(member, { inputRef: put(input), outputRef: put(output) });
+  const blocked = (member: string, reason: StopReason, input: string) => stopped(member, reason, { inputRef: put(input) });
+  return { source, done, blocked };
+}
+
+const CALLER = 'my invoice crashes the app every time I open it';
+const GUARD: StopReason = { code: 'guard_block', layer: 'guardrail' };
+const HOST_GUARD: StopReason = { code: 'guard_block', layer: 'host', stage: 'send' };
+
+test('guard_block after a member that only repeated the caller\'s input: the input is the origin, the hop is blamed', async () => {
+  const j = journal();
+  const triage = j.done('triage', CALLER, `Request received: ${CALLER}`);
+  const billing = j.blocked('billing', GUARD, `Request received: ${CALLER}`);
+  const [att] = await run([triage, billing], [], j.source);
+  assert.deepEqual([att?.layer, att?.member, att?.hopId, att?.memberLayer], ['member', 'billing', billing.hopId, 'guardrail']);
+  assert.ok(att?.evidence.includes(`echo:${triage.hopId}`));
+  assert.ok(att?.evidence.includes('origin:input'));
+  assert.ok(!att?.evidence.some((e) => e.startsWith('upstream:')));
+});
+
+test('guard_block after a member that added text: the upstream member is blamed', async () => {
+  const j = journal();
+  const notEcho = j.done('up', CALLER, 'summary without it');
+  const lots = j.done('up2', 'crash', `crash${' and a long answer'.repeat(10)}`);
+  for (const up of [notEcho, lots]) {
+    const [att] = await run([up, j.blocked('down', GUARD, 'x')], [], j.source);
+    assert.deepEqual([att?.member, att?.hopId, att?.confidence], [up.member, up.hopId, CONFIDENCE.medium], up.member);
+    assert.ok(att?.evidence.includes(`upstream:${up.hopId}`));
+    assert.ok(!att?.evidence.includes('origin:input'));
+  }
+});
+
+test('host guard_block on send after a member that only repeated the input: no member, origin input', async () => {
+  const j = journal();
+  const triage = j.done('triage', CALLER, `Request received: ${CALLER}`);
+  const [att] = await run([triage, stopped('billing', HOST_GUARD)], [], j.source);
+  assert.deepEqual([att?.layer, att?.member, att?.confidence], ['host', undefined, CONFIDENCE.high]);
+  assert.deepEqual(att?.evidence.slice(-3), ['layer:host', `echo:${triage.hopId}`, 'origin:input']);
+  const added = j.done('writer', CALLER, 'something else');
+  const [named] = await run([added, stopped('billing', HOST_GUARD)], [], j.source);
+  assert.deepEqual([named?.layer, named?.member], ['host', 'writer']);
+  assert.ok(named?.evidence.includes(`upstream:${added.hopId}`));
+});
+
+test('a chain of echoing members is walked to the first one that added text', async () => {
+  const j = journal();
+  const writer = j.done('writer', 'crash', 'a draft about the crash');
+  const a = j.done('a', 'a draft about the crash', 'Got: a draft about the crash');
+  const b = j.done('b', 'Got: a draft about the crash', 'Seen: Got: a draft about the crash');
+  const [att] = await run([writer, a, b, j.blocked('last', GUARD, 'Seen: Got: a draft about the crash')], [], j.source);
+  assert.deepEqual([att?.member, att?.hopId], ['writer', writer.hopId]);
+  assert.deepEqual(att?.evidence.slice(-3), [`upstream:${writer.hopId}`, `echo:${b.hopId}`, `echo:${a.hopId}`]);
+});
+
+test('a chain of echoing members reaches the input when the first one echoed it', async () => {
+  const j = journal();
+  const a = j.done('a', 'crash', 'Got: crash');
+  const b = j.done('b', 'Got: crash', 'Seen: Got: crash');
+  const [att] = await run([a, b, j.blocked('last', GUARD, 'Seen: Got: crash')], [], j.source);
+  assert.deepEqual([att?.member, att?.evidence.slice(-3)], ['last', [`echo:${b.hopId}`, `echo:${a.hopId}`, 'origin:input']]);
+});
+
+test('an echo whose input is not the previous output came from the caller', async () => {
+  const j = journal();
+  const writer = j.done('writer', 'start', 'draft');
+  const echo = j.done('echo', 'crash from the caller', 'Got: crash from the caller');
+  const [att] = await run([writer, echo, j.blocked('last', GUARD, 'x')], [], j.source);
+  assert.deepEqual([att?.member, att?.evidence.slice(-2)], ['last', [`echo:${echo.hopId}`, 'origin:input']]);
+});
+
+test('without readable texts the upstream member is blamed as before', async () => {
+  const j = journal();
+  const triage = j.done('triage', CALLER, `Request received: ${CALLER}`);
+  const plain: RecordSource = { name: 't', records: async () => [] };
+  const broken: RecordSource = { name: 't', records: async () => [], text: async () => { throw new Error('store down'); } };
+  const noRefs = hop('triage');
+  for (const [source, up] of [[undefined, triage], [plain, triage], [broken, triage], [j.source, noRefs]] as const) {
+    const [att] = await run([up, stopped('billing', GUARD)], [], source);
+    assert.deepEqual([att?.member, att?.confidence], ['triage', CONFIDENCE.medium]);
+    assert.ok(att?.evidence.every((e) => !e.startsWith('echo:') && e !== 'origin:input'));
+  }
+});
+
+test('echoShare sets how much of the output the repeated input must be', async () => {
+  const j = journal();
+  const triage = j.done('triage', CALLER, `Request received: ${CALLER}`);
+  const blocked = j.blocked('billing', GUARD, 'x');
+  const strict = createRuleAttribution({ echoShare: 0.9 }, { name: 'attribution' });
+  const [att] = await strict.attribute({ record: [triage, blocked], result, scores: [], source: j.source });
+  assert.equal(att?.member, 'triage');
+  const loose = createRuleAttribution({ echoShare: 0.7 }, { name: 'attribution' });
+  assert.equal((await loose.attribute({ record: [triage, blocked], result, scores: [], source: j.source }))[0]?.member, 'billing');
+  assert.equal(DEFAULT_ECHO_SHARE, 0.5);
+});
+
+test('echoShare is a number in (0, 1]', () => {
+  const props = adapter.optionsSchema?.properties;
+  assert.deepEqual(props?.echoShare, { type: 'number', exclusiveMinimum: 0, maximum: 1 });
+  assert.equal(adapter.optionsSchema?.additionalProperties, false);
 });
 
 test('failed and error: the hop; memberLayer from reason.layer; plexus layer ids and host are not member layers', async () => {

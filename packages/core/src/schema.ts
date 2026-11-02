@@ -39,6 +39,7 @@ function check(value: unknown, schema: JsonSchema, path: string, out: Problem[])
   }
   if (typeof value === 'number') {
     if (schema.minimum !== undefined && value < schema.minimum) out.push({ path, message: `must be >= ${schema.minimum}` });
+    if (schema.exclusiveMinimum !== undefined && value <= schema.exclusiveMinimum) out.push({ path, message: `must be > ${schema.exclusiveMinimum}` });
     if (schema.maximum !== undefined && value > schema.maximum) out.push({ path, message: `must be <= ${schema.maximum}` });
   }
   if (typeof value === 'string' && schema.minLength !== undefined && value.length < schema.minLength) {

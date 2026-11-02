@@ -14,7 +14,7 @@ Name the layer and the member behind a failed run, from its hop records and scor
 `AttributionInput` is `{record: [HopRecord], result: MemberResult, scores: [Score], source?: RecordSource}`.
 
 A `RecordSource` is an interface inside this layer, not a port: `records(rootRunId) → [HopRecord]` and, when available,
-`spans(hopId) → [MemberSpan]`, where `MemberSpan` is `{name, layer?, status?, attrs?}`: the member's own spans for a hop.
+`spans(hopId) → [MemberSpan]`, where `MemberSpan` is `{name, layer?, status?, attrs?}`: the member's own spans for a hop. A source may also give `text(key) → string?`, which reads a text stored in the execution journal by key (`inputRef`, `outputRef`). Adapters only compare texts and never copy them into evidence.
 
 ## Data shapes
 

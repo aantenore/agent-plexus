@@ -27,13 +27,11 @@ const SWAPS = {
 const PROFILES: (string | undefined)[] = [undefined, ...Object.keys(SWAPS), 'swap-member', 'swap-member-agent-layers', 'swap-host', 'swap-all'];
 
 /**
- * Who the crash case is attributed to. The agent-layers billing agent stops on "crash" through a guard of its own stack;
- * a blocked guard check is blamed on the member upstream of it (triage), by design of the reference attribution.
+ * The stop code of the billing hop in the crash case. The agent-layers billing agent stops on "crash" through a guard of its own stack;
+ * triage only restated the caller's input, so the block is traced to the input and the billing hop is named, as in every profile.
  */
-const CRASH_BLAME: Record<string, { member: string; billingCode: string }> = {
-  'swap-member-agent-layers': { member: 'triage', billingCode: 'guard_block' },
-};
-const BASE_BLAME = { member: 'billing', billingCode: 'error' };
+const CRASH_CODE: Record<string, string> = { 'swap-member-agent-layers': 'guard_block' };
+const BASE_CODE = 'error';
 const label = (profile: string | undefined): string => profile ?? 'base';
 
 const caseOf = (id: string): EvalCase => {
@@ -88,18 +86,18 @@ for (const profile of PROFILES) {
     });
   });
 
-  test(`${label(profile)}: the crash case fails and attribution names member ${(CRASH_BLAME[profile ?? ''] ?? BASE_BLAME).member}`, async () => {
-    const blame = CRASH_BLAME[profile ?? ''] ?? BASE_BLAME;
+  test(`${label(profile)}: the crash case fails and attribution names member billing`, async () => {
+    const code = CRASH_CODE[profile ?? ''] ?? BASE_CODE;
     await withSystem(profile, async (s) => {
       const crash = await evaluate(s, caseOf('billing-crash'));
       assert.equal(crash.passed, false);
       assert.equal(crash.result.status, 'stopped');
       const billing = crash.result.record.find((h) => h.member === 'billing');
       assert.equal(billing?.status, 'stopped');
-      assert.equal(billing?.reason?.code, blame.billingCode);
+      assert.equal(billing?.reason?.code, code);
       assert.ok(crash.attributions.length > 0, 'a failed run is attributed');
-      assert.equal(crash.attributions[0]?.member, blame.member);
-      if (blame.member === 'billing') assert.equal(crash.attributions[0]?.hopId, billing?.hopId);
+      assert.equal(crash.attributions[0]?.member, 'billing');
+      assert.equal(crash.attributions[0]?.hopId, billing?.hopId);
     });
   });
 }

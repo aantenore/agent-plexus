@@ -7,6 +7,11 @@ import { adapter, createMemoryExecution, limits } from '../src/index.ts';
 
 const make = (maxRuns?: number) => createMemoryExecution(maxRuns === undefined ? {} : { maxRuns }, { name: 'execution' });
 const soon = (ms: number) => new Date(Date.now() + ms).toISOString();
+// wait arms an unref'd timer on purpose; a ref'd interval keeps the event loop (and the test runner) alive while a test awaits one.
+const alive = async <T>(pending: Promise<T>): Promise<T> => {
+  const keep = setInterval(() => {}, 1000);
+  try { return await pending; } finally { clearInterval(keep); }
+};
 
 test('adapter descriptor and limit', () => {
   assert.equal(adapter.fills, 'ExecutionPort');
@@ -91,7 +96,7 @@ test('wait gives undefined at the deadline, and a late signal is ignored', async
   const port = make();
   const run = await port.begin('r');
   const started = Date.now();
-  assert.equal(await run.wait('slow', soon(20)), undefined);
+  assert.equal(await alive(run.wait('slow', soon(20))), undefined);
   assert.ok(Date.now() - started >= 15);
   assert.equal(await port.signal('r', 'slow', 'late'), false);
   assert.equal(await run.wait('slow', soon(5000)), undefined);

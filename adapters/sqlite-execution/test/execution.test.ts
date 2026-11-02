@@ -27,6 +27,11 @@ const open = (options: Partial<SqliteExecutionOptions> = {}) => {
 };
 const make = (maxRuns?: number) => open(maxRuns === undefined ? {} : { maxRuns });
 const soon = (ms: number) => new Date(Date.now() + ms).toISOString();
+// wait arms an unref'd timer on purpose; a ref'd interval keeps the event loop (and the test runner) alive while a test awaits one.
+const alive = async <T>(pending: Promise<T>): Promise<T> => {
+  const keep = setInterval(() => {}, 1000);
+  try { return await pending; } finally { clearInterval(keep); }
+};
 
 test('adapter descriptor and limits', () => {
   assert.equal(adapter.fills, 'ExecutionPort');
@@ -126,7 +131,7 @@ test('wait gives undefined at the deadline, and a late signal is ignored', async
   const port = make();
   const run = await port.begin('r');
   const started = Date.now();
-  assert.equal(await run.wait('slow', soon(20)), undefined);
+  assert.equal(await alive(run.wait('slow', soon(20))), undefined);
   assert.ok(Date.now() - started >= 15);
   assert.equal(await port.signal('r', 'slow', 'late'), false);
   assert.equal(await run.wait('slow', soon(5000)), undefined);
@@ -340,7 +345,7 @@ test('a settled wait, a deadline result included, survives a restart', async () 
   const path = fresh();
   const first = createSqliteExecution({ path }, { name: 'execution', cwd: dir });
   const run = await first.begin('r');
-  assert.equal(await run.wait('slow', soon(10)), undefined);
+  assert.equal(await alive(run.wait('slow', soon(10))), undefined);
   const second = await restart(first, path);
   await second.signal('r', 'slow', 'late');
   assert.equal(await (await second.begin('r')).wait('slow', soon(5000)), undefined);
@@ -354,7 +359,7 @@ test('a signal stored by another instance reaches a waiter at its deadline', asy
   const run = await a.begin('r');
   const waiting = run.wait('n', soon(40));
   await b.signal('r', 'n', 'from-b');
-  assert.equal(await waiting, 'from-b');
+  assert.equal(await alive(waiting), 'from-b');
 });
 
 test('eviction survives a restart: ended runs go oldest first, waiting ones last', async () => {

@@ -30,6 +30,7 @@ or waits. A restart resumes the same task through `resume` instead of sending th
 | `maxResponseBytes` | integer | `4194304` | Largest JSON-RPC answer read (min 1024) |
 | `cardTtlMs` | integer | `300000` | How long a fetched card and its endpoint are trusted |
 | `cancelTimeoutMs` | integer | `5000` | Time limit of each `CancelTask`: after a deadline, a failure or an abort before the checkpoint, and in `cancel` |
+| `boundsUri` | `canonical` or `plexus` | `canonical` | URI of the bounds extension sent: the canonical one, or the alias for a peer that knows only that one |
 
 ```json
 {
@@ -92,9 +93,17 @@ runs out, on a failure, or when the call is cut off before its task was checkpoi
 here: the core holds the reference and calls `cancel`, so the task is cancelled once.
 
 **Bounds.** Every message carries the [bounds extension](../../spec/extensions/bounds-v1.md): the URI is sent in the
-`A2A-Extensions` header (`required: false`; an agent that does not know it ignores it) and
+`A2A-Extensions` header and in `message.extensions` (`required: false`; an agent that does not know it ignores it) and
 `{ remainingMs, hops, maxHops, tokens?, costUsd?, rootRunId, parentRunId }` goes in `message.metadata[<uri>]`.
-`remainingMs` is the smaller of `timeoutMs` and the time left, less the time already spent.
+`remainingMs` is the smaller of `timeoutMs` and the time left, less the time already spent. The URI is the canonical
+one, `https://github.com/aantenore/agent-layers/blob/main/spec/extensions/bounds-v1.md` (exported as `BOUNDS_URI`);
+with `boundsUri: "plexus"` it is the alias `https://github.com/aantenore/agent-plexus/blob/main/spec/extensions/bounds-v1.md`
+(`BOUNDS_ALIAS_URI`), for a peer that knows only that one. Only one URI is sent.
+
+**Bounds report.** The report a receiver writes on the task, `task.metadata[<uri>]` under either URI, is read:
+`usage` and `costUsd` settle what the call reserved (a figure not reported keeps its whole share spent), and `stop`
+(`timeout`, `limit` or `hop_limit`, the receiver's own bounds stopped its run) becomes the result's code, so a call
+the remote side refused over the hop limit is `stopped` with `hop_limit`, not `rejected`.
 
 ### Remote task state → result
 
@@ -103,16 +112,17 @@ here: the core holds the reference and calls `cancel`, so the task is cancelled 
 | Remote task state | Status | `reason.code` | Output |
 |---|---|---|---|
 | `completed` | `completed` | | Text of the artifacts, else of the status message |
-| `canceled` | `stopped` | `aborted` | |
-| `rejected` | `stopped` | `rejected` | |
+| `canceled` | `stopped` | `aborted`, or the report's `stop` | |
+| `rejected` | `stopped` | `rejected`, or the report's `stop` | |
 | `input-required` | `waiting` | `needs_input` | Text of the status message; `taskRef` is set |
 | `auth-required` | `waiting` | `needs_auth` | Text of the status message; `taskRef` is set |
-| `failed` | `failed` | `error` | |
+| `failed` | `failed` | `error`; with a report's `stop`, `stopped` with that code | |
 | any other state | `failed` | `error` | The native state in `ext["a2a-member.state"]` |
 
-The remote wording of a failed or stopped task is not passed on. Usage and cost: when the task carries
-`metadata["agent-layers"]` with `usage` (`inputTokens`, `outputTokens`) or `costUsd`, the result reports them, so a
-system calling an agent-layers stack accounts for the remote run. Malformed values are ignored.
+The remote wording of a failed or stopped task is not passed on. Usage and cost: each is read from the bounds report
+first, else from `metadata["agent-layers"]` (`usage` with `inputTokens` and `outputTokens`, `costUsd`), so a system
+calling an agent-layers stack accounts for the remote run. Malformed values, and a `stop` outside the three codes or
+outside the report, are ignored.
 
 Failures of this member (not of the remote task) are `failed` with code `error`, layer `member` and a fixed
 `reason.detail`: `remote agent call failed` for any transport or protocol error, or a fixed refusal text for a card or
@@ -150,4 +160,3 @@ endpoint rule.
 - The HTTP+JSON and gRPC bindings: JSON-RPC only.
 - Extended agent cards, `ListTasks`, multi-tenant routing.
 - Media parts of the input and non-text parts of the answer (data parts are returned as JSON, files are dropped).
-- Reading the cause of a remote refusal from the bounds extension (a rejected task is `rejected`).

@@ -65,6 +65,15 @@ test('invoke: the bounds extension is accepted by the stack, which ignores what 
   assert.deepEqual([result.status, result.output], ['completed', 'pong']);
 });
 
+test('invoke: over the hop limit the stack refuses the call; its report says hop_limit', async () => {
+  for (const boundsUri of ['canonical', 'plexus'] as const) {
+    const member = createA2AMember({ url: cardUrl, pollMs: 20, boundsUri }, { name: 'billing' });
+    const outbound = { remainingMs: 30_000, hops: 5, maxHops: 4, rootRunId: 'root-1', parentRunId: 'run-1' };
+    const result = await member.invoke('ping', callContext({ credential: TOKEN, outbound }));
+    assert.deepEqual([result.status, result.reason?.code, result.reason?.by], ['stopped', 'hop_limit', 'billing']);
+  }
+});
+
 test('invoke: a task that is not finished at once is checkpointed and polled to the end', async () => {
   const member = createA2AMember({ url: cardUrl, pollMs: 20 }, { name: 'billing' });
   const ctx = callContext({ credential: TOKEN });

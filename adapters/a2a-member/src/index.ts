@@ -16,12 +16,12 @@ import {
   type MemberResult,
   type RunInput,
 } from '@agent-plexus/core';
-import { boundsData, BOUNDS_URI } from './bounds.ts';
+import { boundsData, boundsUriOf, BOUNDS_URI_OPTIONS, type BoundsUriOption } from './bounds.ts';
 import { checkKeys, createTargetSource, entryOf, type PublicJwk, type Target } from './card.ts';
 import { checkTarget, Refused, type TargetRules } from './guard.ts';
 import { decodeRef, encodeRef, isActive, isTask, messageText, settled, taskResult } from './task.ts';
 
-export { BOUNDS_URI } from './bounds.ts';
+export { BOUNDS_ALIAS_URI, BOUNDS_URI, type BoundsUriOption } from './bounds.ts';
 export { STATE_EXT } from './task.ts';
 
 export interface A2AMemberOptions {
@@ -53,6 +53,11 @@ export interface A2AMemberOptions {
   cardTtlMs?: number;
   /** Time limit of the CancelTask that follows an abort or a deadline. */
   cancelTimeoutMs?: number;
+  /**
+   * URI of the bounds extension the member sends: `canonical` (default), or `plexus`, the alias, for a peer that knows
+   * only that one. The report of either is read.
+   */
+  boundsUri?: BoundsUriOption;
 }
 
 export const limits = defineLimits({
@@ -127,6 +132,10 @@ export function createA2AMember(options: A2AMemberOptions, ctx: Pick<AdapterCont
     throw new TypeError('a2a-member: headers must be an object of strings');
   }
   if (options.requireSigned === true && options.keys === undefined) throw new TypeError('a2a-member: requireSigned needs keys');
+  if (options.boundsUri !== undefined && !BOUNDS_URI_OPTIONS.includes(options.boundsUri)) {
+    throw new TypeError(`a2a-member: boundsUri must be one of ${BOUNDS_URI_OPTIONS.join(', ')}`);
+  }
+  const boundsUri = boundsUriOf(options.boundsUri);
   const keys = typeof options.keys === 'string' ? options.keys : options.keys === undefined ? undefined : checkKeys(options.keys);
   const timeoutMs = limitOf('timeoutMs', options.timeoutMs);
   const pollMs = limitOf('pollMs', options.pollMs);
@@ -167,7 +176,7 @@ export function createA2AMember(options: A2AMemberOptions, ctx: Pick<AdapterCont
       if (!(call.credential && k.toLowerCase() === 'authorization')) params[k] = v;
     }
     if (call.credential) params.Authorization = `Bearer ${call.credential}`;
-    if (withBounds) withA2AExtensions(BOUNDS_URI)(params);
+    if (withBounds) withA2AExtensions(boundsUri)(params);
     return params;
   }
 
@@ -179,8 +188,8 @@ export function createA2AMember(options: A2AMemberOptions, ctx: Pick<AdapterCont
       taskId: ref?.taskId ?? '',
       role: Role.ROLE_USER,
       parts: [{ content: { $case: 'text', value: inputText(input) }, metadata: undefined, filename: '', mediaType: '' }],
-      metadata: { [BOUNDS_URI]: boundsData(call.outbound, remainingMs) },
-      extensions: [BOUNDS_URI],
+      metadata: { [boundsUri]: boundsData(call.outbound, remainingMs) },
+      extensions: [boundsUri],
       referenceTaskIds: [],
     };
     return { tenant: '', message, configuration: undefined, metadata: undefined };
@@ -325,6 +334,7 @@ export const adapter = defineAdapter<'MemberPort', A2AMemberOptions>({
       maxResponseBytes: { type: 'integer', minimum: limits.maxResponseBytes.min },
       cardTtlMs: { type: 'integer', minimum: limits.cardTtlMs.min, maximum: limits.cardTtlMs.max as number },
       cancelTimeoutMs: { type: 'integer', minimum: limits.cancelTimeoutMs.min, maximum: limits.cancelTimeoutMs.max as number },
+      boundsUri: { enum: [...BOUNDS_URI_OPTIONS] },
     },
     required: ['url'],
     additionalProperties: false,

@@ -80,7 +80,7 @@ The host's verified caller, carried through. The core reads only `id`, `kind` an
 | `kind` | `user` or `agent`, required | |
 | `roles`, `scopes` | [String], required | As the host verified them. |
 | `name?` | String | |
-| `actors?` | [`{id, kind, name?}`] | Agents that acted for the caller, first delegate first, as the host verified them. |
+| `actors?` | [`{id, kind, name?, issuer?}`] | Agents that acted for the caller, first delegate first, as the host verified them. `issuer` names who vouches for an entry when it differs from the credential's issuer; the core does not read it. |
 | `credential?` | String | In memory only: never serialised, logged or traced. The pipeline strips it before any port sees the caller. |
 
 A `CallerIdentity` is `{id, kind, name?, actors?}`: who a caller is, without roles, scopes, `ext` or credential. A run

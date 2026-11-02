@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { afterEach, mock, test } from 'node:test';
 import { generateAgentCardSignature } from '@a2a-js/sdk';
-import { adapter, BOUNDS_URI, createA2AMember, limits, type A2AMemberOptions } from '../src/index.ts';
+import { adapter, BOUNDS_ALIAS_URI, BOUNDS_URI, createA2AMember, limits, type A2AMemberOptions } from '../src/index.ts';
 import { endpointAllowed, isPrivateHost } from '../src/guard.ts';
 import { decodeRef } from '../src/task.ts';
 import { answer, callContext, card, RpcError, sleep, startFake, statusMessage, task, type Fake } from './fake.ts';
@@ -538,7 +538,32 @@ test('bounds: the extension is activated by header and carried in message metada
   assert.ok(data.remainingMs <= 45_000 && data.remainingMs > 44_000, 'time left, tightened by the time already spent');
   assert.deepEqual({ ...data, remainingMs: 0 }, { remainingMs: 0, hops: 2, maxHops: 4, tokens: 1000, costUsd: 0.5, rootRunId: 'root-9', parentRunId: 'run-7' });
   assert.deepEqual(call.params.message.extensions, [BOUNDS_URI]);
-  assert.equal(BOUNDS_URI, 'https://github.com/aantenore/agent-plexus/blob/main/spec/extensions/bounds-v1.md');
+  assert.equal(BOUNDS_URI, 'https://github.com/aantenore/agent-layers/blob/main/spec/extensions/bounds-v1.md');
+});
+
+test('bounds: boundsUri "plexus" sends the alias URI instead, for older peers', async () => {
+  const f = await fake();
+  await member(f, { boundsUri: 'plexus' }).invoke('hi', callContext());
+  const call = f.calls[0]!;
+  assert.equal(call.headers['a2a-extensions'], BOUNDS_ALIAS_URI);
+  assert.deepEqual(call.params.message.extensions, [BOUNDS_ALIAS_URI]);
+  assert.ok(call.params.message.metadata[BOUNDS_ALIAS_URI]);
+  assert.equal(BOUNDS_URI in call.params.message.metadata, false);
+  assert.throws(() => member(f, { boundsUri: 'other' as never }), /boundsUri must be one of canonical, plexus/);
+});
+
+test('bounds report: figures under either URI settle the call; a reported stop maps to its code', async () => {
+  const f = await fake(() => ({ task: task('COMPLETED', { artifacts: answer('ok'), metadata: { [BOUNDS_URI]: { usage: { inputTokens: 7, outputTokens: 3 }, costUsd: 0.1 }, 'agent-layers': { usage: { inputTokens: 99, outputTokens: 99 } } } }) }));
+  const ok = await member(f).invoke('x', callContext());
+  assert.deepEqual([ok.usage, ok.costUsd], [{ inputTokens: 7, outputTokens: 3 }, 0.1]);
+  for (const [state, stop] of [['REJECTED', 'hop_limit'], ['FAILED', 'timeout'], ['CANCELED', 'limit']] as const) {
+    f.rpc = () => ({ task: task(state, { metadata: { [BOUNDS_ALIAS_URI]: { stop, costUsd: 0.2 }, 'agent-layers': { usage: { inputTokens: 1, outputTokens: 2 } } } }) });
+    const r = await member(f).invoke('x', callContext());
+    assert.deepEqual([r.status, r.reason?.code, r.reason?.by, r.costUsd, r.usage], ['stopped', stop, 'billing', 0.2, { inputTokens: 1, outputTokens: 2 }]);
+  }
+  // A stop the extension does not define, or one outside the report, is not read.
+  f.rpc = () => ({ task: task('REJECTED', { metadata: { [BOUNDS_URI]: { stop: 'boom' }, 'agent-layers': { stop: 'hop_limit' } } }) });
+  assert.equal((await member(f).invoke('x', callContext())).reason?.code, 'rejected');
 });
 
 test('bounds: optional budget fields are left out when absent; the effective time is the smaller of timeoutMs and the time left', async () => {

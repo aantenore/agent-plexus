@@ -1,5 +1,10 @@
 # Proposal for agent-layers: delegation chain, run bounds and hop limit
 
+Status: Accepted in agent-layers as ADR 0002 (`docs/decisions/0002-delegation-bounds.md` there), 2026-11-02. The text
+below is the proposal as it was handed over; the accepted record and the canonical
+[bounds extension](https://github.com/aantenore/agent-layers/blob/main/spec/extensions/bounds-v1.md) are in
+agent-layers.
+
 Target: an architecture decision record in the agent-layers repository (`docs/decisions/NNNN-delegation-bounds.md`,
 next free number; 0002 at the time of writing). This file is the proposed text. It is not applied here: the
 agent-layers repository changes only through its own review.

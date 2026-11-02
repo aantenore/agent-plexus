@@ -120,12 +120,12 @@ each with a prototype default that the readiness gate refuses on a production ti
 | `gate` | `allow`, `token`, `check` | Allow every call, no token, no check | Required; errors are a deny |
 | `telemetry` | `span`, `event`, `metric` | One line per hop on stderr | Required |
 | `score` | `score(case, result, ctx?)`; `ctx.read` reads member outputs back | `expected` checks only | Optional; without it the core applies the `expected` checks |
-| `state` | `get`, `set`, `delete` | None | Optional; for the planned `host-execution` adapter. The `agent-layers` host provides none |
+| `state` | `get`, `set`, `delete` | None | Optional; for the planned `host-execution` adapter. The `agent-layers` host maps it to the stack's StorePort when it has one |
 
 The reference is [spec/hooks.md](../spec/hooks.md). The `agent-layers` adapter builds a host from a stack: `gate` from
 its AuthorizationPort, ApprovalPort, CredentialPort and GuardPorts, `telemetry` from its TelemetryPort, `score` from its
-EvaluatorPorts plus the `expected.member` checks. It provides no `state`: agent-layers' StatePort is an append-only event log per session, not a key/value
-store. Another host is another adapter of the same four hooks.
+EvaluatorPorts plus the `expected.member` checks, `state` from its StorePort (keys `plexus.<key>`) when it has one.
+Another host is another adapter of the same four hooks.
 
 ## Prototype defaults and readiness
 

@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { stableStringify, runGuards } from '@agent-layers/core';
-import type { AccessQuestion, ApprovalPort, ComposeOptions, Risk, Stack } from '@agent-layers/core';
+import type { AccessQuestion, ApprovalPort, ComposeOptions, JsonValue, Risk, Stack } from '@agent-layers/core';
 import { defineAdapter, expectedScores, RESUME_OWNER_ONLY, sameIdentity } from '@agent-plexus/core';
 import type {
-  AgentEntry, GateCheck, GateDecision, GateHook, GateQuestion, GateVerdict, Host, ResumeQuestion, ScoreHook, TelemetryHook,
+  AgentEntry, GateAnswer, GateCheck, GateDecision, GateHook, GateQuestion, GateVerdict, Host, ResumeQuestion, ScoreHook, StateHook,
+  TelemetryHook,
 } from '@agent-plexus/core';
 import { evalRunOf, guardStageOf, layersCaller, layersEvalCase, NAMESPACE, plexusScore, questionCaller } from './map.ts';
 import { openStack, type StackOptions } from './stack.ts';
@@ -16,6 +17,8 @@ const HARNESS = 'harness';
 export const RESUME_ACTION = 'resume';
 /** `ext` key of a resume question that carries the identity of the caller that started the run. */
 export const OWNER_KEY = `${NAMESPACE}.owner`;
+/** Namespace of the StorePort keys the `state` hook writes: `plexus.<key>`. */
+export const STATE_NAMESPACE = 'plexus';
 
 export interface HostOptions extends StackOptions {
   /** Agent name used in guard checks and access questions; the system name when absent. */
@@ -55,6 +58,28 @@ async function approve(port: ApprovalPort, question: AccessQuestion, agent: stri
   if (current.status === 'approved') return allow();
   if (current.status === 'pending') return { effect: 'ask', reason: `approval pending: ${current.id}` };
   return deny(`approval ${current.status}${current.reason ? `: ${current.reason}` : ''}`);
+}
+
+/**
+ * Approval for a call a person answered through `System.resume`. The pending approval of the call (found with `lookup`)
+ * is decided with the answer, `by` the resuming caller; a decision already taken elsewhere stands. A denial denies; an
+ * approval is then consumed like any other. Without `lookup` the approval id is not known: the call goes through
+ * `approve`, and a denial still denies.
+ */
+async function answered(port: ApprovalPort, question: AccessQuestion, agent: string, runId: string, answer: GateAnswer): Promise<GateDecision> {
+  const key = approvalKey(question, runId);
+  const pending = port.lookup ? await port.lookup(key) : undefined;
+  if (pending?.status === 'pending') {
+    const decision = { approved: answer.approved, ...(answer.by !== undefined ? { by: answer.by } : {}), ...(answer.reason ? { reason: answer.reason } : {}) };
+    try {
+      await port.decide(pending.id, decision);
+    } catch (err) {
+      // Decided by someone else in the meantime: that decision stands; anything else is an error.
+      if ((await port.get(pending.id))?.status === 'pending') throw err;
+    }
+  }
+  if (!answer.approved) return deny(`approval denied${answer.by !== undefined ? ` by ${answer.by}` : ''}`);
+  return approve(port, question, agent, runId);
 }
 
 function gateOf(stack: Stack, options: StackHostOptions): GateHook {
@@ -112,7 +137,7 @@ function gateOf(stack: Stack, options: StackHostOptions): GateHook {
       if (!approvals.has(member.id)) return allow();
       if (!approval) return deny('approval required but no approval adapter is configured');
       try {
-        return await approve(approval, asked, agent, runId);
+        return await (q.answer ? answered(approval, asked, agent, runId, q.answer) : approve(approval, asked, agent, runId));
       } catch (err) {
         return deny(`approval unavailable: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -167,18 +192,42 @@ function scoreOf(stack: Stack): ScoreHook | undefined {
 }
 
 /**
+ * `state` over the stack's StorePort, keys under `plexus.`; undefined without a store. A value must be JSON. A write the
+ * store refuses is an error.
+ */
+function stateOf(stack: Stack): StateHook | undefined {
+  const { store } = stack.ports;
+  if (!store) return undefined;
+  const keyOf = (key: string) => `${STATE_NAMESPACE}.${key}`;
+  return {
+    async get(key) {
+      return (await store.get(keyOf(key)))?.value;
+    },
+    async set(key, value) {
+      const written = await store.set(keyOf(key), value as JsonValue);
+      if (!written.ok) throw new Error(`state: the store refused the write of ${keyOf(key)}`);
+    },
+    async delete(key) {
+      await store.delete(keyOf(key));
+    },
+  };
+}
+
+/**
  * A host over a composed stack: `gate` from its authorization, approval, credential and guard ports, `telemetry` from
- * its telemetry fan-out, `score` from its evaluators. No `state`: StatePort is an append-only event log per session,
- * not a key/value store. The tier is the stack's. The stack is not closed with the host.
+ * its telemetry fan-out, `score` from its evaluators, `state` from its StorePort when it has one. The tier is the
+ * stack's. The stack is not closed with the host.
  */
 export function hostFromStack(stack: Stack, options: StackHostOptions = {}): Host {
   const score = scoreOf(stack);
+  const state = stateOf(stack);
   return {
     name: 'agent-layers',
     tier: stack.config.tier,
     gate: gateOf(stack, options),
     telemetry: telemetryOf(stack),
     ...(score ? { score } : {}),
+    ...(state ? { state } : {}),
   };
 }
 
@@ -193,7 +242,7 @@ export const hostAdapter = defineAdapter<'Host', HostOptions>({
   name: 'agent-layers',
   maps: { technology: 'agent-layers stack' },
   tiers: ['prototype', 'production'],
-  description: 'Builds the host hooks from a composed agent-layers stack: authorization, approval, credentials, guards, telemetry and evaluators.',
+  description: 'Builds the host hooks from a composed agent-layers stack: authorization, approval, credentials, guards, telemetry, evaluators and store.',
   optionsSchema: {
     type: 'object',
     properties: {

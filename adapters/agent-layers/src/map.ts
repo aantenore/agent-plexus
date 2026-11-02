@@ -1,16 +1,21 @@
 import { ANONYMOUS, isLayer, publicCaller } from '@agent-layers/core';
 import type {
-  AnonymousCaller, Caller as LayersCaller, EvalCase as LayersEvalCase, EvalRun, EvalScore, GuardStage, Layer, PublicCaller,
-  RunResult, StopReason as LayersStopReason,
+  Actor, AnonymousCaller, Bounds as LayersBounds, Caller as LayersCaller, Delegation, EvalCase as LayersEvalCase, EvalRun, EvalScore,
+  GuardStage, Layer, PublicCaller, RunResult, StopReason as LayersStopReason,
 } from '@agent-layers/core';
 import { inputText, memberLayerOf } from '@agent-plexus/core';
-import type { Caller, EvalCase, MemberResult, Score, StopReason, SystemResult } from '@agent-plexus/core';
+import type { Bounds, Caller, EvalCase, Ext, MemberResult, OutboundBounds, Score, StopCode, StopReason, SystemResult } from '@agent-plexus/core';
 
 /** Namespace of the `ext` keys this package writes. */
 export const NAMESPACE = 'agent-plexus';
-export const ACTORS_KEY = `${NAMESPACE}.actors`;
 export const HOPS_KEY = `${NAMESPACE}.hops`;
 export const EXPECTED_KEY = `${NAMESPACE}.expected`;
+/** `ext` key of a member result waiting for an approval of the stack: `{ id, by?, tool? }` from `ext["sdk.approval"]`. */
+export const APPROVAL_KEY = 'agent-layers.approval';
+/** `ext` key under which agent-layers reports the approval a waiting run waits for. */
+const SDK_APPROVAL = 'sdk.approval';
+/** Latest instant a Date can hold: the deadline of a run that has none. */
+const NO_DEADLINE = new Date(8.64e15).toISOString();
 
 /** Layer reported for a stop that happened in a layer agent-layers does not have (topology, member, host, ...). */
 const FALLBACK_LAYER: Layer = 'harness';
@@ -19,17 +24,25 @@ const STAGE_OF = { send: 'tool_args', receive: 'tool_result' } as const satisfie
 
 export const guardStageOf = (stage: 'send' | 'receive'): GuardStage => STAGE_OF[stage];
 
-/** The agent-layers caller of a plexus caller; the credential is carried only when given. */
+/** One entry of an actor chain: the same fields on both sides, `issuer` included. */
+const actorOf = (a: Actor): Actor => ({
+  id: a.id,
+  kind: a.kind,
+  ...(a.name !== undefined ? { name: a.name } : {}),
+  ...(a.issuer !== undefined ? { issuer: a.issuer } : {}),
+});
+
+/** The agent-layers caller of a plexus caller, actors included; the credential is carried only when given. */
 export function layersCaller(caller: Caller, credential?: string): LayersCaller {
-  const ext = { ...caller.ext, ...(caller.actors?.length ? { [ACTORS_KEY]: caller.actors.map((a) => ({ ...a })) } : {}) };
   return {
     id: caller.id,
     kind: caller.kind,
     roles: [...caller.roles],
     scopes: [...caller.scopes],
     ...(caller.name !== undefined ? { name: caller.name } : {}),
+    ...(caller.actors?.length ? { actors: caller.actors.map(actorOf) } : {}),
     ...(credential !== undefined ? { credential } : {}),
-    ...(Object.keys(ext).length ? { ext } : {}),
+    ...(caller.ext && Object.keys(caller.ext).length ? { ext: { ...caller.ext } } : {}),
   };
 }
 
@@ -47,17 +60,55 @@ export function plexusCaller(caller: LayersCaller): Caller {
     roles: [...caller.roles],
     scopes: [...caller.scopes],
     ...(caller.name !== undefined ? { name: caller.name } : {}),
+    ...(caller.actors?.length ? { actors: caller.actors.map(actorOf) } : {}),
     ...(caller.credential !== undefined ? { credential: caller.credential } : {}),
     ...(caller.ext ? { ext: { ...caller.ext } } : {}),
   };
 }
 
+/** What a member call passes on to the stack's run: the outbound bounds, which can only tighten the stack's limits. */
+export function delegationOf(outbound: OutboundBounds): Delegation {
+  return {
+    remainingMs: outbound.remainingMs,
+    hops: outbound.hops,
+    maxHops: outbound.maxHops,
+    ...(outbound.tokens !== undefined ? { tokens: outbound.tokens } : {}),
+    ...(outbound.costUsd !== undefined ? { costUsd: outbound.costUsd } : {}),
+    rootRunId: outbound.rootRunId,
+    parentRunId: outbound.parentRunId,
+  };
+}
+
+/**
+ * The bounds a system run starts with, from the bounds of the agent-layers run it serves: the same deadline (none: the
+ * latest date) and hops, and as budget what the run reserved for it.
+ */
+export function plexusBounds(bounds: LayersBounds, reserved: { tokens?: number; costUsd?: number } = {}): Bounds {
+  return {
+    deadlineAt: bounds.deadlineAt ?? NO_DEADLINE,
+    hops: bounds.hops,
+    maxHops: bounds.maxHops,
+    ...(reserved.tokens !== undefined ? { tokens: reserved.tokens } : {}),
+    ...(reserved.costUsd !== undefined ? { costUsd: reserved.costUsd } : {}),
+  };
+}
+
+/** `{ id, by?, tool? }` of `ext["sdk.approval"]` on a waiting run; undefined when absent or malformed. */
+function approvalOf(run: RunResult): Ext | undefined {
+  const value = run.status === 'waiting' ? run.ext?.[SDK_APPROVAL] : undefined;
+  if (!value || typeof value !== 'object' || typeof (value as { id?: unknown }).id !== 'string') return undefined;
+  const { id, by, tool } = value as { id: string; by?: unknown; tool?: unknown };
+  return { [APPROVAL_KEY]: { id, ...(typeof by === 'string' ? { by } : {}), ...(typeof tool === 'string' ? { tool } : {}) } };
+}
+
 /**
  * An agent-layers run result as a member result, one to one: the stop is the `member` layer's, and the agent-layers layer
- * that stopped it is `memberLayer`. The guard stage is not carried.
+ * that stopped it is `memberLayer`. The guard stage is not carried. A run waiting for an approval keeps the approval
+ * under `ext["agent-layers.approval"]`.
  */
 export function memberResultOf(run: RunResult): MemberResult {
   const { reason } = run;
+  const approval = approvalOf(run);
   return {
     status: run.status,
     output: run.output,
@@ -73,7 +124,40 @@ export function memberResultOf(run: RunResult): MemberResult {
     runId: run.runId,
     ...(run.usage ? { usage: { inputTokens: run.usage.inputTokens, outputTokens: run.usage.outputTokens } } : {}),
     ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
+    ...(approval ? { ext: approval } : {}),
   };
+}
+
+/**
+ * A refusal of agent-layers run control (`RunRefused.kind`) as a member result: `[status, code, agent-layers layer]`.
+ * A `conflict` leaves the run as it was (its approval still pending, a resume in progress elsewhere, or cancelled until
+ * it expires), so the call keeps waiting on it.
+ */
+const REFUSAL: Readonly<Record<string, readonly [MemberResult['status'], StopCode, Layer]>> = {
+  not_found: ['stopped', 'rejected', 'harness'],
+  invalid: ['stopped', 'rejected', 'harness'],
+  forbidden: ['stopped', 'denied', 'identity'],
+  conflict: ['waiting', 'needs_input', 'harness'],
+};
+
+/** The kind of an agent-layers `RunRefused`, read by its shape (older agent-layers versions have no such class). */
+export function refusalKind(err: unknown): string | undefined {
+  if (!(err instanceof Error) || err.name !== 'RunRefused') return undefined;
+  const { kind } = err as Error & { kind?: unknown };
+  return typeof kind === 'string' ? kind : undefined;
+}
+
+/**
+ * A run-control refusal of the stack run `runId` as a member result, in the `member` layer with the agent-layers layer
+ * as `memberLayer`; the kind leads the internal `detail`. A waiting result keeps `runId` as its `taskRef`. An unknown
+ * kind is a failure.
+ */
+export function refusedResult(kind: string, message: string, runId: string): MemberResult {
+  const mapped = REFUSAL[kind];
+  const detail = `${kind}: ${message}`;
+  if (!mapped) return { status: 'failed', output: '', reason: { code: 'error', layer: 'member', detail }, runId };
+  const [status, code, memberLayer] = mapped;
+  return { status, output: '', reason: { code, layer: 'member', memberLayer, detail }, runId, ...(status === 'waiting' ? { taskRef: runId } : {}) };
 }
 
 /**

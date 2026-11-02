@@ -124,7 +124,9 @@ An agent served over A2A, in any language or framework, is a member through `a2a
 - A call returns once the remote side has a task. The task id is journaled, the task is polled every `pollMs`, and a
   restart of the same run resumes that task instead of sending the request again. On a deadline the member cancels
   the remote task; on an abort the core does, through the member's `cancel`, so the task is cancelled once.
-- The remaining time, hops, budget and lineage go along in the [bounds extension](../spec/extensions/bounds-v1.md).
+- The remaining time, hops, budget and lineage go along in the [bounds extension](../spec/extensions/bounds-v1.md),
+  under the canonical agent-layers URI (`boundsUri: "plexus"` sends the older alias); the remote report settles the
+  budget, and a remote refusal over the hop limit is `stopped` with `hop_limit`.
   A remote task that waits for input ends the call as `waiting` with code `needs_input` (or `needs_auth`); answer it
   with [resume](#resume-a-waiting-run).
 - Limits (`timeoutMs`, `pollMs`, `maxCardBytes`, `cardTtlMs`, `cancelTimeoutMs`) are in [limits](limits.md#a2a-member--memberport).
@@ -413,12 +415,12 @@ point the host at that config:
 
 | Hook | Comes from the stack's |
 |---|---|
-| `gate.allow` | AuthorizationPort: each member call is the question `{ caller, action: "call", target: { kind: "agent", id: <member>, layer: "harness", risk } }`; members in `approve` also go through the ApprovalPort and the run is `waiting` until a person decides |
+| `gate.allow` | AuthorizationPort: each member call is the question `{ caller, action: "call", target: { kind: "agent", id: <member>, layer: "harness", risk } }`; members in `approve` also go through the ApprovalPort and the run is `waiting` until a person decides, through the stack or through `System.resume` (the answer is recorded with `decide`, `by` the resuming owner) |
 | `gate.token` | CredentialPort, for the member's `audience` |
 | `gate.check` | GuardPorts: `send` runs the `tool_args` guards, `receive` the `tool_result` guards |
 | `telemetry` | TelemetryPort; every `plexus.*` record gains `agent.layer: "harness"` |
 | `score` | EvaluatorPorts |
-| `state` | none: agent-layers' StatePort is an append-only event log per session, not a key/value store |
+| `state` | StorePort, when the stack configures one: keys `plexus.<key>`; none otherwise |
 
 An authorization rule that allows the members and denies the rest is then written in the stack, where the rules for its
 tools already live:
@@ -433,10 +435,10 @@ The host is `production`-tier when the stack's profile is, and a production tier
 denies every call.
 
 The same package has two more descriptors. The member `agent-layers` (`"adapter": "agent-layers"` under `members`) is an
-agent of a stack, in process; deadline, hops and budget are not passed on yet, because agent-layers has no bounds. The
-runtime plugin `agent-plexus`, loaded through the `plugins` of the agent-layers config
+agent of a stack, in process; the call's deadline, hops, budget and lineage become the stack run's `delegation`, and the
+caller's `actors` its actors. The runtime plugin `agent-plexus`, loaded through the `plugins` of the agent-layers config
 (`"plugins": ["@agent-plexus/adapter-agent-layers/runtime"]`), runs a system as the runtime of a stack, so the
-agent-layers gateway can serve it. The stack's tools as the tool source of `supervise` are planned. The options,
+agent-layers gateway can serve it; the system runs within the stack run's bounds. The stack's tools as the tool source of `supervise` are planned. The options,
 mappings and limits are in the [adapter README](../adapters/agent-layers/README.md).
 
 ## Stack config reference

@@ -21,7 +21,7 @@ Questions that are not decided yet, with the current recommendation. A decision 
 | 4 | Production ExecutionPort: DBOS or Temporal. | DBOS first |
 | 5 | Budget across `parallel` branches: even reserved shares or a first-come pool. | Decided 2026-11-02: even shares, passed by the topology |
 | 6 | Own topology language; other formats only as import adapters. | Own |
-| 7 | Hand the agent-layers proposal over: it defines the bounds rules and the A2A extension both projects use. | Hand it over |
+| 7 | Hand the agent-layers proposal over: it defines the bounds rules and the A2A extension both projects use. | Done 2026-11-02: accepted in agent-layers as ADR 0002 |
 | 8 | Production registry candidate: AGNTCY directory or Kubernetes CRDs. | When the first production deployment is known |
 | 9 | `a2a-member` on the official A2A JS SDK, or on plain `fetch`. | The SDK |
 
@@ -29,4 +29,7 @@ Slice 1 has landed (core, CLI, six reference adapters, offline example): decisio
 taken: calls that run at the same time MUST pass `share`, with shares that sum to at most 1
 ([TopologyPort](../../spec/ports/TopologyPort.md#semantics)); a share is a fraction of the budget not yet spent,
 capped by what the other calls reserved, so `parallel` branches (`1/branches` each) get even shares whatever order they
-reserve in. The core does not guess a share for a call that passes none: it may reserve all that is left.
+reserve in. The core does not guess a share for a call that passes none: it may reserve all that is left. Decision 7
+is done: agent-layers accepted the proposal as its ADR 0002 and owns the
+[bounds extension](https://github.com/aantenore/agent-layers/blob/main/spec/extensions/bounds-v1.md); the URI published
+here stays as an alias ([spec/extensions/bounds-v1.md](../../spec/extensions/bounds-v1.md)).

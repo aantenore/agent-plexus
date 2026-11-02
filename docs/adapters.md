@@ -41,8 +41,9 @@ Every package has its own README with options, behaviour and limits.
 | `member` | [`agent-layers`](../adapters/agent-layers) | MemberPort | technology: agent-layers stack | prototype, production | implemented | experimental |
 | `member` | [`a2a-member`](../adapters/a2a-member) | MemberPort | standard: Agent2Agent (A2A) 1.0 and 0.3, JSON-RPC binding (official JavaScript SDK) | prototype, production | implemented | experimental |
 
-Declared `capabilities`: `a2a-member` all four (`resume`, `cancel`, `checkpoint`, `waits`); `agent-layers` `waits`
-only, so the readiness gate warns that a run waiting on it cannot continue; `function-member` none.
+Declared `capabilities`: `a2a-member` all four (`resume`, `cancel`, `checkpoint`, `waits`); `agent-layers` `waits`,
+and `resume` and `cancel` when the installed agent-layers has run control (0.4.0 on; before, the readiness gate warns
+that a run waiting on it cannot continue); `function-member` none.
 
 #### Discovery plane
 
@@ -75,11 +76,10 @@ only, so the readiness gate warns that a run waiting on it cannot continue; `fun
 The `agent-layers` package (`@agent-plexus/adapter-agent-layers`) is the only one that depends on agent-layers. It has
 three descriptors:
 
-- the host `agent-layers`: `gate` from the stack's authorization, approval, credentials and guards, `telemetry`, and
-  `score`. It provides no `state`: agent-layers' StatePort is an append-only event log per session, not a key/value
-  store;
-- the member `agent-layers`: an agent of a stack, in process. Deadline, hops and budget are not passed on yet, because
-  agent-layers has no bounds;
+- the host `agent-layers`: `gate` from the stack's authorization, approval, credentials and guards, `telemetry`,
+  `score`, and `state` from the stack's StorePort when it has one (keys `plexus.<key>`);
+- the member `agent-layers`: an agent of a stack, in process. The call's deadline, hops, budget and lineage become the
+  stack run's `delegation`, and the caller's `actors` map both ways;
 - the runtime plugin `agent-plexus`: an agent-layers RuntimePort that runs a system. An agent-layers config loads it
   through `plugins` (`@agent-plexus/adapter-agent-layers/runtime`), not agent-plexus, so it is a separate entry point.
 

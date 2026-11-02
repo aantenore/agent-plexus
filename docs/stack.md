@@ -152,21 +152,20 @@ agent-layers layer, agent-plexus calls a host hook instead of implementing it.
 | Verify the caller | L6 `identity` | Receives the caller already verified, in the run context |
 | Authorize, approve, mint a token per audience | L6 `identity` | Calls the host's `gate.allow` and `gate.token` for every member call |
 | Content checks | L7 `guardrail` | Calls the host's `gate.check` on what is sent to and received from a member |
-| Deadline, budget, hops of one agent | the [proposed bounds primitives](proposals/agent-layers-delegation-bounds.md) | Honours what the host passes in, reserves per member call, passes the rest on |
+| Deadline, budget, hops of one agent | run bounds (`CallContext.bounds`, `delegation`; ADR 0002 there, from this [proposal](proposals/agent-layers-delegation-bounds.md)) | Honours what the host passes in, reserves per member call, passes the rest on |
 | Spans, events, metrics | L9 `telemetry` | Emits `plexus.*` names through the host's telemetry hook |
 | Scoring a run | L10 `eval` | Calls the host's `score` hook; adds attribution across hops |
 | Network exposure | L8 `interface`, gateway | None: the host serves the system |
-| Durable state of one agent | L3 `harness` StatePort | Its own journal across member calls; may store it in the host's `state` hook (planned `host-execution`) |
+| Durable state of one agent | L3 `harness` StatePort; small values in StorePort | Its own journal across member calls; may store it in the host's `state` hook (planned `host-execution`), which the `agent-layers` host maps to StorePort |
 | How an agent is called, discovery, routing between agents, topology, cross-agent attribution | none | The six layers |
 
 The `agent-layers` adapter is the only package that depends on agent-layers; the core never names it. It has three
 descriptors:
 
-- the `agent-layers` host: `gate` from the stack's authorization, approval, credentials and guards, `telemetry`, and
-  `score`. It provides no `state`: agent-layers' StatePort is an append-only event log per session, not a key/value
-  store;
-- the `agent-layers` member: an agent of a stack, in process. Deadline, hops and budget are not passed on yet, because
-  agent-layers has no bounds;
+- the `agent-layers` host: `gate` from the stack's authorization, approval, credentials and guards, `telemetry`,
+  `score`, and `state` from the stack's StorePort when it has one (keys `plexus.<key>`);
+- the `agent-layers` member: an agent of a stack, in process. The call's deadline, hops, budget and lineage become the
+  stack run's `delegation`, and the caller's `actors` map both ways;
 - the runtime plugin `agent-plexus`: an agent-layers RuntimePort that runs a system, loaded through the `plugins` of the
   agent-layers config (`@agent-plexus/adapter-agent-layers/runtime`), so the gateway exposes the system.
 

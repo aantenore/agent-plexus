@@ -97,6 +97,37 @@ test('telemetry of the system goes through the stack with agent.layer', async ()
   assert.ok(records.some((r) => r.name === 'agent.run'));
 });
 
+test('the system runs within the stack run bounds: deadline, hops, the reserved budget and the lineage', async () => {
+  const stack = await compose(await loadConfig(config, { profile: 'token' }));
+  try {
+    seen.length = 0;
+    const agentCaller: Caller = { ...alice, actors: [{ id: 'triage', kind: 'agent', issuer: 'https://idp.example' }] };
+    const delegation = { remainingMs: 60_000, hops: 1, maxHops: 3, tokens: 500, costUsd: 0.5, rootRunId: 'root-1', parentRunId: 'parent-1' };
+    const started = Date.now();
+    const result = await (await stack.agent('desk')).run('hello', { caller: agentCaller, delegation, runId: 'run-b' });
+    assert.equal(result.status, 'completed');
+    const call = seen[0]!;
+    assert.deepEqual(call.actors, agentCaller.actors);
+    assert.deepEqual(call.lineage, { rootRunId: 'root-1', parentRunId: 'run-b' });
+    assert.deepEqual([call.outbound.hops, call.outbound.maxHops, call.outbound.tokens, call.outbound.costUsd, call.outbound.rootRunId], [2, 3, 500, 0.5, 'root-1']);
+    assert.ok(call.outbound.remainingMs <= 60_000 - (Date.now() - started), 'within the time the caller passed');
+  } finally {
+    await stack.close();
+  }
+});
+
+test('the hop limit of the stack run stops the system before its member call', async () => {
+  const stack = await compose(await loadConfig(config));
+  try {
+    const delegation = { remainingMs: 60_000, hops: 4, maxHops: 4, rootRunId: 'root-1', parentRunId: 'parent-1' };
+    const result = await (await stack.agent('desk')).run('hello', { caller: alice, delegation });
+    assert.equal(result.status, 'stopped');
+    assert.deepEqual([result.reason?.code, result.reason?.layer], ['hop_limit', 'harness']);
+  } finally {
+    await stack.close();
+  }
+});
+
 test('a system that cannot be assembled is a failed run with the error name only', async () => {
   const { result } = await run('broken');
   assert.equal(result.status, 'failed');

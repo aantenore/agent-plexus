@@ -26,8 +26,11 @@ export interface Caller {
   roles: string[];
   scopes: string[];
   name?: string;
-  /** Agents that acted for the caller, first delegate first, as the host verified them. */
-  actors?: { id: string; kind: 'user' | 'agent'; name?: string }[];
+  /**
+   * Agents that acted for the caller, first delegate first, as the host verified them. `issuer` names who vouches for an
+   * entry when it differs from the credential's issuer; the core does not read it.
+   */
+  actors?: { id: string; kind: 'user' | 'agent'; name?: string; issuer?: string }[];
   /** In memory only: never serialised, logged or traced. */
   credential?: string;
   ext?: Ext;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { AccessQuestion } from '@agent-layers/core';
+import type { AccessQuestion, JsonValue, StoreEntry, StorePort } from '@agent-layers/core';
 import { assemble, noopTelemetry, type Host } from '@agent-plexus/core';
 import { adapters, hostAdapter, hostFromStack } from '../src/index.ts';
 import { seen } from './fixtures/members.ts';
@@ -346,12 +346,47 @@ test('score: expectations on members are checked on the texts the core reads bac
   await stack.close();
 });
 
-test('score: absent without evaluators; state is not provided', async () => {
+test('score: absent without evaluators; state absent without a store', async () => {
   const { stack } = await fixture();
   stack.ports.eval.length = 0;
   const host = hostFromStack(stack);
   assert.equal(host.score, undefined);
   assert.equal(host.state, undefined);
+  await stack.close();
+});
+
+/** A StorePort kept in a map, enough for the state hook: versions grow with every write. */
+function mapStore(): StorePort & { entries: Map<string, StoreEntry> } {
+  const entries = new Map<string, StoreEntry>();
+  return {
+    entries,
+    async get(key) { return entries.get(key); },
+    async set(key, value: JsonValue, opts = {}) {
+      const current = entries.get(key)?.version;
+      if (opts.ifVersion !== undefined && opts.ifVersion !== (current ?? 0)) return { ok: false, ...(current ? { version: current } : {}) };
+      const version = (current ?? 0) + 1;
+      entries.set(key, { value, version });
+      return { ok: true, version };
+    },
+    async delete(key) { return { ok: true, existed: entries.delete(key) }; },
+  };
+}
+
+test('state: get, set and delete on the stack store, keys under plexus.', async () => {
+  const { stack } = await fixture();
+  const store = mapStore();
+  stack.ports.store = store;
+  const { state } = hostFromStack(stack);
+  assert.ok(state);
+  assert.equal(await state.get('cursor'), undefined);
+  await state.set('cursor', { page: 2, seen: ['a'] });
+  assert.deepEqual([...store.entries.keys()], ['plexus.cursor']);
+  assert.deepEqual(await state.get('cursor'), { page: 2, seen: ['a'] });
+  await state.delete('cursor');
+  assert.equal(await state.get('cursor'), undefined);
+  // A write the store refuses is an error.
+  store.set = async () => ({ ok: false, version: 3 });
+  await assert.rejects(state.set('cursor', 1), /refused the write of plexus\.cursor/);
   await stack.close();
 });
 
@@ -413,6 +448,53 @@ test('resume: only the run owner may resume; the owner is asked as action resume
   authorization.evaluate = async (q) => ({ allowed: q.action !== 'resume', reason: 'no resumes' });
   assert.deepEqual(await host.gate.allow({ action: 'resume', runId: 'r1', caller: publicAlice, owner, member }), { effect: 'deny', reason: 'no resumes' });
   assert.equal((await host.gate.allow({ action: 'invoke', runId: 'r1', caller: publicAlice, member })).effect, 'allow');
+  await stack.close();
+});
+
+test('resume with an answer: the approval is decided by the resuming owner, then the call goes on once', async () => {
+  const { system, stack } = await fixture({ approve: ['audited'] });
+  const approval = stack.ports.approval!;
+  const sys = await system(['audited']);
+  const first = await sys.run('hello', { runId: 'answered', caller });
+  const id = /approval pending: (.+)$/.exec(first.reason?.detail ?? '')?.[1]!;
+  assert.equal(first.wait?.kind, 'approval');
+
+  const resumed = await sys.resume('answered', { approved: true, reason: 'fine', wait: first.wait!.token }, { caller });
+  assert.deepEqual([resumed.status, resumed.output], ['completed', 'echo:hello']);
+  const decided = await approval.get(id);
+  assert.deepEqual([decided?.status, decided?.decidedBy, decided?.reason], ['approved', 'alice', 'fine']);
+  // Consumed: the approval let one call through, so a new run of the same id asks again.
+  assert.equal((await sys.run('hello', { runId: 'answered', caller })).status, 'waiting');
+  await stack.close();
+});
+
+test('resume with an answer: a denial is recorded with the resuming owner and denies the call', async () => {
+  const { system, stack } = await fixture({ approve: ['audited'] });
+  const sys = await system(['audited']);
+  const first = await sys.run('hello', { runId: 'refused', caller });
+  const id = /approval pending: (.+)$/.exec(first.reason?.detail ?? '')?.[1]!;
+  const resumed = await sys.resume('refused', { approved: false, reason: 'no' }, { caller });
+  assert.deepEqual([resumed.status, resumed.reason?.code, resumed.reason?.layer], ['stopped', 'denied', 'host']);
+  const decided = await stack.ports.approval!.get(id);
+  assert.deepEqual([decided?.status, decided?.decidedBy], ['denied', 'alice']);
+  await stack.close();
+});
+
+test('resume with an answer: a decision taken elsewhere first stands; without lookup the id is unknown', async () => {
+  const { host, stack } = await fixture({ approve: ['audited'] });
+  const approval = stack.ports.approval!;
+  const audited = { id: 'audited', name: 'audited', description: '', skills: [], endpoint: { protocol: 'function' }, trust: { signed: false, pinned: true } };
+  const invoke = (runId: string, answer?: { approved: boolean; by?: string }) => host.gate.allow({ action: 'invoke', runId, caller: publicAlice, member: audited, ...(answer ? { answer } : {}) });
+
+  const asked = await invoke('elsewhere');
+  const id = /approval pending: (.+)$/.exec(asked.reason ?? '')?.[1]!;
+  await approval.decide(id, { approved: false, by: 'bob' });
+  assert.deepEqual(await invoke('elsewhere', { approved: true, by: 'alice' }), { effect: 'deny', reason: 'approval denied' });
+  assert.equal((await approval.get(id))?.decidedBy, 'bob');
+
+  delete approval.lookup;
+  assert.equal((await invoke('no-lookup', { approved: true, by: 'alice' })).effect, 'ask');
+  assert.deepEqual(await invoke('no-lookup', { approved: false, by: 'alice' }), { effect: 'deny', reason: 'approval denied by alice' });
   await stack.close();
 });
 

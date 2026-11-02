@@ -43,12 +43,12 @@
     "@agent-plexus/core": "^0.2.0"
   },
   "devDependencies": {
-    "@agent-layers/adapter-a2a": "0.2.0",
-    "@agent-layers/adapter-basic-runtime": "0.2.0",
-    "@agent-layers/adapter-mock-model": "0.2.0",
-    "@agent-layers/adapter-static-identity": "0.2.0",
-    "@agent-layers/core": "0.2.0",
-    "@agent-layers/gateway": "0.2.0",
+    "@agent-layers/adapter-a2a": "0.3.0",
+    "@agent-layers/adapter-basic-runtime": "0.3.0",
+    "@agent-layers/adapter-mock-model": "0.3.0",
+    "@agent-layers/adapter-static-identity": "0.3.0",
+    "@agent-layers/core": "0.3.0",
+    "@agent-layers/gateway": "0.3.0",
     "@agent-plexus/adapter-basic-topology": "0.2.0",
     "@agent-plexus/adapter-function-member": "0.2.0",
     "@agent-plexus/adapter-memory-execution": "0.2.0",

@@ -4,7 +4,6 @@
   "agents": {
     "helper": { "model": "mock", "instructions": "Answer briefly." }
   },
-  "vocabularies": { "action": { "add": { "resume": { "like": "call" } } } },
   "profiles": {
     "prototype": {
       "tier": "prototype",
@@ -24,7 +23,8 @@
           "options": {
             "rules": [
               { "effect": "deny", "tools": ["admin"] },
-              { "effect": "allow", "tools": ["billing", "audited", "tokened", "mailer", "leaky", "assistant"] }
+              { "effect": "allow", "tools": ["billing", "audited", "tokened", "mailer", "leaky", "assistant"] },
+              { "effect": "allow", "actions": ["resume"], "tools": ["billing", "audited", "tokened", "mailer", "leaky", "assistant"] }
             ],
             "default": "deny"
           }

@@ -1,7 +1,8 @@
-import type { ComposeOptions, Stack } from '@agent-layers/core';
+import * as layers from '@agent-layers/core';
+import type { CallContext, Caller as LayersCaller, ComposeOptions, RunInput as LayersInput, RunResult, Stack } from '@agent-layers/core';
 import { defineAdapter, inputText, PORT_VERSIONS } from '@agent-plexus/core';
-import type { AdapterContext, AgentEntry, Attrs, MemberPort, Skill } from '@agent-plexus/core';
-import { layersCaller, memberResultOf } from './map.ts';
+import type { AdapterContext, AgentEntry, Attrs, MemberCallContext, MemberPort, MemberResult, RunInput, Skill } from '@agent-plexus/core';
+import { delegationOf, layersCaller, memberResultOf, refusalKind, refusedResult } from './map.ts';
 import { openStack } from './stack.ts';
 
 export interface SkillOption {
@@ -38,14 +39,54 @@ function buildSkills(name: string, description: string, options: MemberOptions):
 }
 
 /**
- * An agent of a composed stack as a member. In process there is no outbound hop: `ctx.outbound` is not passed on, and
- * the call is bounded only by the abort signal the pipeline gives it.
+ * Run control of a stack (agent-layers 0.4.0 on), as far as a member uses it: continue a waiting run with the input it
+ * waits for, cancel a run. Both are detected on the stack; an older stack has neither.
+ */
+interface RunControl {
+  resume?(runId: string, answer: { input: LayersInput }, ctx?: Partial<CallContext>): Promise<RunResult>;
+  cancel?(runId: string, opts?: { by?: LayersCaller; reason?: string; signal?: AbortSignal }): Promise<unknown>;
+}
+
+function runControlOf(stack: Stack): RunControl {
+  const s = stack as Stack & RunControl;
+  return {
+    ...(typeof s.resume === 'function' ? { resume: s.resume.bind(stack) } : {}),
+    ...(typeof s.cancel === 'function' ? { cancel: s.cancel.bind(stack) } : {}),
+  };
+}
+
+/** True when the installed agent-layers composes stacks with run control: what the descriptor declares. */
+const RUN_CONTROL = typeof (layers as unknown as Record<string, unknown>).RunRefused === 'function';
+
+/** The run context of a member call: the caller (with the credential the pipeline gave), session, signal, trace, bounds. */
+function runContext(call: MemberCallContext): Partial<CallContext> {
+  const caller = call.caller ? layersCaller(call.caller, call.credential) : undefined;
+  return {
+    ...(caller ? { caller } : {}),
+    ...(call.sessionId ? { sessionId: call.sessionId } : {}),
+    ...(call.signal ? { signal: call.signal } : {}),
+    ...(call.trace ? { trace: call.trace } : {}),
+    delegation: delegationOf(call.outbound),
+  };
+}
+
+/**
+ * An agent of a composed stack as a member. The call's outbound bounds become the run's `delegation`: the stack runs
+ * within what is left of the system run's time, hops and budget (tightening its own limits), and reports its usage and
+ * cost back. The abort signal of the pipeline is passed too. On a stack with run control, a waiting run's id is the
+ * result's `taskRef`: `resume` continues that run with the input the plexus run was given, `cancel` cancels it.
  */
 export function memberFromStack(stack: Stack, options: MemberOptions, id: string): MemberPort {
   if (!stack.agents().includes(options.agent)) {
     throw new TypeError(`agent-layers: agent "${options.agent}" is not configured (known: ${stack.agents().join(', ') || 'none'})`);
   }
   const description = options.description ?? '';
+  const { resume, cancel } = runControlOf(stack);
+  /** A waiting run names its run id as the handle `resume` and `cancel` take, when the stack has either. */
+  const resultOf = (run: RunResult): MemberResult => {
+    const result = memberResultOf(run);
+    return result.status === 'waiting' && (resume || cancel) ? { ...result, taskRef: run.runId } : result;
+  };
   return {
     name: id,
     native: () => stack,
@@ -63,16 +104,32 @@ export function memberFromStack(stack: Stack, options: MemberOptions, id: string
       return entry;
     },
     async invoke(input, call) {
-      const caller = call.caller ? layersCaller(call.caller, call.credential) : undefined;
       const agent = await stack.agent(options.agent);
-      const result = await agent.run(inputText(input), {
-        ...(caller ? { caller } : {}),
-        ...(call.sessionId ? { sessionId: call.sessionId } : {}),
-        ...(call.signal ? { signal: call.signal } : {}),
-        ...(call.trace ? { trace: call.trace } : {}),
-      });
-      return memberResultOf(result);
+      return resultOf(await agent.run(inputText(input), runContext(call)));
     },
+    ...(resume ? {
+      async resume(taskRef: string, input: RunInput | undefined, call: MemberCallContext): Promise<MemberResult> {
+        // In process there is no remote work to wait for: a waiting stack run goes on only with an answer.
+        if (input === undefined) return refusedResult('invalid', 'a waiting stack run continues only with an answer', taskRef);
+        try {
+          return resultOf(await resume(taskRef, { input: inputText(input) }, runContext(call)));
+        } catch (err) {
+          const kind = refusalKind(err);
+          if (kind === undefined) throw err;
+          return refusedResult(kind, (err as Error).message, taskRef);
+        }
+      },
+    } : {}),
+    ...(cancel ? {
+      async cancel(taskRef: string, call: MemberCallContext): Promise<void> {
+        try {
+          await cancel(taskRef, { ...(call.caller ? { by: layersCaller(call.caller, call.credential) } : {}), ...(call.signal ? { signal: call.signal } : {}) });
+        } catch (err) {
+          // A run that ended or expired has nothing left to cancel.
+          if (refusalKind(err) !== 'not_found') throw err;
+        }
+      },
+    } : {}),
   };
 }
 
@@ -94,7 +151,7 @@ export const memberAdapter = defineAdapter<'MemberPort', MemberOptions>({
   portVersion: PORT_VERSIONS.MemberPort,
   tiers: ['prototype', 'production'],
   description: 'Runs an agent of a composed agent-layers stack as a member.',
-  capabilities: { resume: false, cancel: false, checkpoint: false, waits: true },
+  capabilities: { resume: RUN_CONTROL, cancel: RUN_CONTROL, checkpoint: false, waits: true },
   optionsSchema: {
     type: 'object',
     properties: {

@@ -114,8 +114,10 @@ sequenceDiagram
   layer `member` only. The core moves a plexus layer or `host` a member names to `memberLayer` and sets `member`.
 - A call that ends `waiting` spends from the budget only what it reported; its continuation settles the rest. `usage`
   and `costUsd` that are not finite non-negative numbers are dropped (event `plexus.member.figure_dropped`).
-- Bounds travel to a remote agent in the [bounds extension](../../spec/extensions/bounds-v1.md) of A2A: time left, hops,
-  budget and lineage.
+- Bounds travel to a remote agent in the [bounds extension](../../spec/extensions/bounds-v1.md) of A2A (canonical in
+  agent-layers): time left, hops, budget and lineage; the report on the task settles the budget and names a stop of the
+  remote bounds (`hop_limit`, `timeout`, `limit`). To an agent-layers stack in process they go as the run's
+  `delegation`.
 
 ## Configuration
 
@@ -160,7 +162,7 @@ A2A needs no adapter of its own.
 |---|---|---|
 | [`function-member`](../../adapters/function-member) | An in-process function (prototype, production) | implemented |
 | [`a2a-member`](../../adapters/a2a-member) | An agent served over A2A 1.0 and 0.3, on the official JavaScript SDK (prototype, production); card fetched without credential and verified against configured keys, endpoint pinning, https and private-address rules, polling, resume, cancel, bounds extension | implemented |
-| [`agent-layers`](../../adapters/agent-layers) | An agent of an agent-layers stack, in process (prototype, production); deadline, hops and budget are not passed on yet, because agent-layers has no bounds; a waiting stack run is reported, but not resumed (`waits` without `resume`) | implemented |
+| [`agent-layers`](../../adapters/agent-layers) | An agent of an agent-layers stack, in process (prototype, production); the outbound bounds become the run's `delegation` (deadline, hops, budget, lineage) and the caller's `actors` map both ways; a waiting stack run is reported with its approval under `ext["agent-layers.approval"]`, but not resumed (`waits` without `resume`) | implemented |
 | `agent-layers`: tool source of `supervise` | The stack's tools as what a supervisor can call | planned |
 
 Another agent-plexus system as a member works in process through the `fn` option of `function-member` (code only, not

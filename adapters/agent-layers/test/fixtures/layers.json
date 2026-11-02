@@ -4,6 +4,7 @@
   "agents": {
     "helper": { "model": "mock", "instructions": "Answer briefly." }
   },
+  "vocabularies": { "action": { "add": { "resume": { "like": "call" } } } },
   "profiles": {
     "prototype": {
       "tier": "prototype",

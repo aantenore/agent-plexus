@@ -1,9 +1,11 @@
 # Manual pipeline: nothing runs on push or pull request. Trigger it from the Actions tab or with
 #   gh workflow run ci.yml
+# or call it from another workflow (`uses: ./.github/workflows/ci.yml`). Actions are pinned to commit SHAs.
 name: ci
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -12,11 +14,16 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
+    name: check (node ${{ matrix.node-version }})
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
       - name: Syntax check (node --check)
         run: |
           set -e
@@ -27,5 +34,7 @@ jobs:
         run: node scripts/build-packages.mjs --clean
       - name: Typecheck
         run: npm run typecheck
+      - name: Script tests
+        run: npm run test:scripts
       - name: Package tests
         run: npm run test:packages

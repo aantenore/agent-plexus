@@ -9,10 +9,11 @@
   "engines": { "node": ">=22.18" },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\""
+    "test": "node --test \"test/**/*.test.ts\""
   },
   "devDependencies": {
     "@agent-plexus/adapters": "0.2.0",
+    "@agent-plexus/cli": "0.2.0",
     "@agent-plexus/core": "0.2.0",
     "@types/node": "^24.19.0",
     "typescript": "^7.0.2"

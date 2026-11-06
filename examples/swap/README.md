@@ -93,9 +93,14 @@ prototype host.
 
 ## Test
 
+From the repository root, against the sources:
+
 ```sh
 node --conditions=@agent-plexus/source --test "examples/swap/test/**/*.test.ts"
 ```
+
+A copy of this folder outside the repository is a package of its own: `npm install`, then `npm test`,
+`npm run typecheck` and `npx agent-plexus eval cases.json --profile swap-all` (the CLI is a dev dependency).
 
 For each cell of `cells.json`: with `cases`, `check` has no FAIL, the billing and product cases complete and route to
 the same members as the base, and the crash case fails with attribution naming `billing`; with `wait`, the waiting run

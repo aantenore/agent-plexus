@@ -39,6 +39,11 @@ drops them, `--json` prints the whole result). `dev` takes the same config and r
 
 ## Test
 
+From the repository root, against the sources:
+
 ```sh
 node --conditions=@agent-plexus/source --test "examples/offline/test/**/*.test.ts"
 ```
+
+A copy of this folder outside the repository is a package of its own: `npm install`, then `npm test`,
+`npm run typecheck` and `npx agent-plexus check` (the CLI is a dev dependency).

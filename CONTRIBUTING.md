@@ -56,8 +56,13 @@ Documentation follows the same rule: a changed layer, port, hook, limit or CLI o
 
 `npm run build` builds every package in dependency order (`scripts/build-packages.mjs`; `--clean` removes `dist/`
 first). Packages ship `dist/` (JavaScript and type declarations), `README.md` and `LICENSE`; the `@agent-plexus/source`
-export condition points at `src/` for development inside the repository only.
+export condition points at `src/` for development inside the repository only, and `prepack` strips it from the
+manifest that goes into the tarball (`scripts/pack-manifest.mjs`; `postpack` restores `package.json`).
 
+- `npm run test:packages`: the tests of every workspace against the sources (`scripts/test-packages.mjs` sets
+  `NODE_OPTIONS=--conditions=@agent-plexus/source`). The test scripts of the examples do not pass the condition
+  themselves, so a copy of an example works outside the repository; `npm test` inside one example therefore runs
+  against `dist/` and needs `npm run build` first.
 - `npm run release:dry`: clean build, then `npm pack --dry-run` of every package, to review the tarball contents.
 - `npm run release`: clean build, typecheck, package tests, then `node scripts/publish-unpublished.mjs`.
 

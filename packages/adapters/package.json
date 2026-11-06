@@ -2,7 +2,7 @@
   "name": "@agent-plexus/adapters",
   "version": "0.2.0",
   "description": "Reference adapters for agent-plexus, one subpath export each: @agent-plexus/adapters/<name>",
-  "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-plexus-adapter", "agent-layers", "sqlite"],
+  "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-orchestration", "agent-plexus-adapter", "agent-layers", "sqlite"],
   "homepage": "https://github.com/aantenore/agent-plexus/tree/main/packages/adapters#readme",
   "bugs": {
     "url": "https://github.com/aantenore/agent-plexus/issues"
@@ -80,7 +80,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\"",
-    "prepack": "npm run build && node ../../scripts/copy-license.mjs"
+    "prepack": "npm run build && node ../../scripts/copy-license.mjs && node ../../scripts/pack-manifest.mjs strip",
+    "postpack": "node ../../scripts/pack-manifest.mjs restore"
   },
   "peerDependencies": {
     "@a2a-js/sdk": "^1.3.0",

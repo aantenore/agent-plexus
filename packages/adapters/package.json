@@ -1,6 +1,6 @@
 {
   "name": "@agent-plexus/adapters",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Reference adapters for agent-plexus, one subpath export each: @agent-plexus/adapters/<name>",
   "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-orchestration", "agent-plexus-adapter", "agent-layers", "sqlite"],
   "homepage": "https://github.com/aantenore/agent-plexus/tree/main/packages/adapters#readme",
@@ -86,7 +86,7 @@
   "peerDependencies": {
     "@a2a-js/sdk": "^1.3.0",
     "@agent-layers/core": "^0.4.0",
-    "@agent-plexus/core": "^0.2.0"
+    "@agent-plexus/core": "^0.2.1"
   },
   "peerDependenciesMeta": {
     "@a2a-js/sdk": { "optional": true },
@@ -94,12 +94,12 @@
   },
   "devDependencies": {
     "@a2a-js/sdk": "^1.3.0",
-    "@agent-layers/adapters": "^0.4.0",
-    "@agent-layers/conformance": "^0.4.0",
-    "@agent-layers/core": "^0.4.0",
-    "@agent-layers/gateway": "^0.4.0",
-    "@agent-plexus/conformance": "0.2.0",
-    "@agent-plexus/core": "0.2.0",
+    "@agent-layers/adapters": "^0.4.2",
+    "@agent-layers/conformance": "^0.4.2",
+    "@agent-layers/core": "^0.4.2",
+    "@agent-layers/gateway": "^0.4.2",
+    "@agent-plexus/conformance": "0.2.1",
+    "@agent-plexus/core": "0.2.1",
     "@types/node": "^24.19.0",
     "typescript": "^7.0.2"
   }

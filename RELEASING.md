@@ -14,7 +14,7 @@ are private and are not part of the release.
    public packages) and make sure your account is an owner of it.
 3. From a clean checkout of `main`: `npm ci`.
 4. `npm run release:dry`: clean build in dependency order, then the file list of every tarball. Check that each one
-   holds `dist/`, `README.md`, `LICENSE` and `package.json` only.
+   holds `dist/`, `README.md`, `LICENSE` and `package.json` only, plus `templates/` (cli) and `cli.js` (the unscoped `agent-plexus` stub).
 5. `npm run release`: clean build, typecheck, package tests, then `node scripts/publish-unpublished.mjs`, which
    publishes each package whose version is not on npm yet. npm asks for the one-time password if the account uses
    2FA. If it stops (rate limit, expired login), run `node scripts/publish-unpublished.mjs` again: it resumes with

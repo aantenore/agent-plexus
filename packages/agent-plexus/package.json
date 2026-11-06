@@ -1,6 +1,6 @@
 {
   "name": "agent-plexus",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "The agent-plexus command line under its short name: forwards to @agent-plexus/cli",
   "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-orchestration", "cli"],
   "homepage": "https://github.com/aantenore/agent-plexus/tree/main/packages/agent-plexus#readme",
@@ -30,6 +30,6 @@
     "prepack": "node ../../scripts/copy-license.mjs"
   },
   "dependencies": {
-    "@agent-plexus/cli": "^0.2.0"
+    "@agent-plexus/cli": "^0.2.1"
   }
 }

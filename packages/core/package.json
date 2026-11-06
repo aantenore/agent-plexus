@@ -1,6 +1,6 @@
 {
   "name": "@agent-plexus/core",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Ports, host hooks, the memberCall pipeline and system config for agent-plexus",
   "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-orchestration", "core"],
   "homepage": "https://github.com/aantenore/agent-plexus/tree/main/packages/core#readme",

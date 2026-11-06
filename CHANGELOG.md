@@ -4,6 +4,8 @@ Every package under `packages/*` is released with the same version. See [RELEASI
 
 ## Unreleased
 
+## 0.2.1 - 2026-11-06
+
 ### Fixed
 
 - An adapter named in the config (`"adapter": "<name>"`) is loaded from the `@agent-plexus/adapters` installed next to
@@ -44,6 +46,9 @@ Every package under `packages/*` is released with the same version. See [RELEASI
 
 - `scripts/publish-unpublished.mjs` refuses to publish a version whose tag `v<version>` is not at `HEAD`
   (`--allow-untagged` skips the check), so what npm records as `gitHead` is the tagged commit.
+- The development and test dependencies on agent-layers move to 0.4.2 (`@agent-layers/core`, `adapters`, `gateway`,
+  `conformance`), and `package-lock.json` is generated again: one copy of `@agent-layers/core`, no stale
+  `adapters/<name>` workspace entries. The optional peer range on `@agent-layers/core` stays `^0.4.0`.
 
 ## 0.2.0 - 2026-11-03
 

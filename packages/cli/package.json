@@ -1,6 +1,6 @@
 {
   "name": "@agent-plexus/cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "agent-plexus command line: init, check, run, resume, cancel, dev, eval",
   "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-orchestration", "cli"],
   "homepage": "https://github.com/aantenore/agent-plexus/tree/main/packages/cli#readme",
@@ -42,7 +42,7 @@
     "postpack": "node ../../scripts/pack-manifest.mjs restore"
   },
   "dependencies": {
-    "@agent-plexus/core": "^0.2.0"
+    "@agent-plexus/core": "^0.2.1"
   },
   "devDependencies": {
     "@types/node": "^24.19.0",

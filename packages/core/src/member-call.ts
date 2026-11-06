@@ -508,10 +508,12 @@ async function invoke(inv: Invocation): Promise<Invoked> {
   }
 }
 
-async function safePut(execution: Execution, text: string): Promise<string | undefined> {
+/** Stores a text for the hop record; a store that fails is reported as a failed write of `put` and the record keeps no key. */
+async function safePut(env: MemberCallEnv, execution: Execution, text: string): Promise<string | undefined> {
   try {
     return await execution.put(text);
-  } catch {
+  } catch (err) {
+    writeFailed(env, 'put', err);
     return undefined;
   }
 }
@@ -626,7 +628,7 @@ async function pipeline(
   }
 
   // 5. Call, as a journal step, with outbound bounds and lineage. Each attempt is a step of its own.
-  const inputRef = await safePut(run.execution, sent.text);
+  const inputRef = await safePut(env, run.execution, sent.text);
   const { result, replayed, task, cut } = stored
     ? { result: stored, replayed: true, cut: false }
     : await callAsStep(env, run, hopId, port!, sentInput, credential, reservation, options, stepKey, clock, span, handle);
@@ -662,7 +664,7 @@ async function pipeline(
     ledger.settle(reservation, spent, final.status === 'waiting');
     await keepSpent(env, run);
   }
-  const outputRef = blocked ? undefined : await safePut(run.execution, final.output);
+  const outputRef = blocked ? undefined : await safePut(env, run.execution, final.output);
   return {
     result: final, key, attempt: attempt.n, ...(final.status === 'waiting' ? { wait: 'member' as const } : {}),
     ...(replayed ? { replayed } : {}), ...(inputRef ? { inputRef } : {}), ...(outputRef ? { outputRef } : {}),

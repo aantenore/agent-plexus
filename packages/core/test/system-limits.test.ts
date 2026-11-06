@@ -52,6 +52,14 @@ test('findings: defaults are clean; unbounded fails; outside the safe range warn
   });
 });
 
+test('limits.system.describeTtlMs: one minute by default, 0 allowed, at most a day, never unbounded', () => {
+  assert.equal(resolveLimits(undefined).describeTtlMs, 60_000);
+  assert.equal(resolveLimits({ system: { describeTtlMs: 0 } }).describeTtlMs, 0);
+  assert.throws(() => resolveLimits({ system: { describeTtlMs: 'unbounded' } }), /limits.system.describeTtlMs: must be an integer \("unbounded" is not allowed here\)/);
+  assert.throws(() => resolveLimits({ system: { describeTtlMs: 86_400_001 } }), /limits.system.describeTtlMs: must be <= 86400000/);
+  assert.throws(() => resolveLimits({ system: { describeTtlMs: -1 } }), /limits.system.describeTtlMs: must be >= 0/);
+});
+
 test('a deprecated limit group is ignored and noted, not rejected', () => {
   const problems: string[] = [];
   const deprecated: { path: string; message: string }[] = [];

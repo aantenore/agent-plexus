@@ -152,6 +152,38 @@ test('entries come from the members, with the config id', async () => {
   assert.deepEqual((await system.entries()).map((e) => [e.id, e.audience]), [['triage', undefined], ['billing', 'billing']]);
 });
 
+test('a member is asked to describe itself again after limits.system.describeTtlMs and not before; 0 asks every time', async () => {
+  const asked = { n: 0 };
+  const counting = defineAdapter({
+    fills: 'MemberPort', name: 'counting-member', maps, tiers: both, portVersion: '0.1.0',
+    create: (_o, ctx): MemberPort => {
+      const port = fakeMemberPort(ctx.name, async () => ({ status: 'completed', output: 'ok' }));
+      return { ...port, describe: async () => { asked.n++; return port.describe(); } };
+    },
+  });
+  const members = { triage: { adapter: 'counting-member' }, billing: { adapter: 'fake-member', options: { reply: 'B' } } };
+  const sleep = (ms: number) => new Promise((wake) => setTimeout(wake, ms));
+
+  const kept = (await build({ members }, { extra: [counting] })).system;
+  await kept.entries();
+  await kept.entries();
+  await kept.check();
+  assert.equal(asked.n, 1, 'within the default minute the first answer stands');
+
+  asked.n = 0;
+  const expiring = (await build({ members, limits: { system: { describeTtlMs: 20 } } }, { extra: [counting] })).system;
+  await expiring.entries();
+  await sleep(50);
+  await expiring.entries();
+  assert.equal(asked.n, 2, 'asked again once the answer is older than describeTtlMs');
+
+  asked.n = 0;
+  const always = (await build({ members, limits: { system: { describeTtlMs: 0 } } }, { extra: [counting] })).system;
+  await always.entries();
+  await always.entries();
+  assert.equal(asked.n, 2, 'describeTtlMs 0 asks on every use');
+});
+
 test('a router that picks outside the candidates is a routing failure: a failed routing hop, then the fallback runs', async () => {
   const { system } = await build({ ports: { ...rawConfig().ports, router: { adapter: 'fake-router', options: { pick: 'triage' } } } });
   const res = await system.run('hi');

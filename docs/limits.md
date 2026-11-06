@@ -54,6 +54,7 @@ setting is absent. **Accepted** is the validated range. **Safe range** is what p
 | `limits.system.cancelTimeoutMs` | `5000` ms | 1–60000 | — | — | Time a member's `cancel` may take when the core cancels the remote task of an abandoned or cut-off call (aborted, or timed out by the core); after it the core stops waiting and reports `plexus.member.cancel_failed`. |
 | `limits.system.minRemainingMs` | `1000` ms | 0–60000 | — | — | A member call does not start with less time left in the run than this; the call stops with `timeout`. |
 | `limits.system.marginMs` | `1000` ms | 0–60000 | — | — | Time kept back from the deadline on each outbound call: the member is told the time left minus the margin (never below 0), so it can end before the caller does. |
+| `limits.system.describeTtlMs` | `60000` ms | 0–86400000 | — | — | How long the core keeps a member's `describe()` answer (its entry for routing, the registry and the gate) before asking again; `0` asks on every use. A member that could not describe itself is asked again at once. |
 
 ### `limits.router`
 

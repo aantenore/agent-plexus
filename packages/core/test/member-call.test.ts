@@ -33,6 +33,20 @@ test('the record holds keys, not texts, and the hop span ends with status and co
   assert.equal(span.attrs['plexus.node.path'], 'root');
 });
 
+test('a put that fails is reported as plexus.execution.write_failed with the key put, never the text; the record keeps no key', async () => {
+  const journal = memoryExecution();
+  const begin = journal.begin.bind(journal);
+  journal.begin = async (key) => ({ ...(await begin(key)), put: async () => { throw new Error('disk full'); } });
+  const s = await setup({ members: { m: () => completed('the answer') }, execution: journal });
+  const out = await memberCall(s.env, s.run, 'm', 'the question', { node: 'root' });
+  assert.equal(out.result.status, 'completed');
+  const record = s.run.records.at(-1)!;
+  assert.deepEqual([record.inputRef, record.outputRef], [undefined, undefined]);
+  const failed = s.events.filter((e) => e.name === 'plexus.execution.write_failed');
+  assert.deepEqual(failed.map((e) => [e.attrs['plexus.execution.key'], e.attrs['plexus.error.message'], e.attrs['plexus.layer']]), [['put', 'disk full', 'execution'], ['put', 'disk full', 'execution']]);
+  assert.ok(!JSON.stringify(failed).includes('the question') && !JSON.stringify(failed).includes('the answer'));
+});
+
 test('the caller credential is never forwarded or traced; the member gets the audience token', async () => {
   let seen: MemberCallContext | undefined;
   const { s } = await call({
@@ -503,7 +517,9 @@ test('calls beyond maxParallel wait for a slot, first come first served, and all
   assert.deepEqual(s.run.slots, { busy: 0, queue: [] });
 });
 
-test('a call waiting for a slot stops with aborted on its signal, or timeout at the deadline, without reaching the member', async () => {
+test('a call waiting for a slot stops with aborted on its signal, or timeout at the deadline, without reaching the member', async (t) => {
+  // The clock and the timers are the test's: the deadline comes when the test says so, however busy the machine is.
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.parse('2026-01-01T00:00:00Z') });
   const seen: string[] = [];
   const s = await setup({
     limits: { maxParallel: 1, minRemainingMs: 0 },
@@ -516,6 +532,9 @@ test('a call waiting for a slot stops with aborted on its signal, or timeout at 
   const late = memberCall(s.env, s.run, 'm', 'third', { node: 'root.branches[2]' });
   branch.abort();
   assert.deepEqual([(await aborted).result.status, (await aborted).result.reason?.code], ['stopped', 'aborted']);
+  // The first call holds the slot inside the member and the third waits for it: the deadline then comes for both.
+  while (!seen.length) await new Promise((wake) => setImmediate(wake));
+  t.mock.timers.tick(150);
   const timedOut = await late;
   assert.deepEqual([timedOut.result.reason?.code, timedOut.result.reason?.layer], ['timeout', 'topology']);
   assert.equal((await holder).result.reason?.code, 'timeout');

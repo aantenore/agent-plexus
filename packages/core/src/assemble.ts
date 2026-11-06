@@ -175,16 +175,17 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
   const host: Host = opts.host
     ?? (config.host ? await create('Host', config.host, { system: config.name, name: 'host', cwd, env, telemetry: noopTelemetry }, '$.host') : prototypeHost({ ...(opts.quiet ? { quiet: true } : {}), read: async (key) => execution?.read?.(key) }));
 
-  const entryCache = new Map<string, Promise<AgentEntry>>();
+  // A member's description, kept for `limits.system.describeTtlMs` from when it was asked (0: asked every time), so a
+  // long-running system sees a member change what it offers; one that could not describe itself is asked again at once.
+  const entryCache = new Map<string, { entry: Promise<AgentEntry>; askedAt: number }>();
   const members = new Map<string, MemberPort>();
   const entry = (id: string): Promise<AgentEntry> => {
-    let cached = entryCache.get(id);
-    if (!cached) {
-      cached = members.get(id)!.describe().then((e) => ({ ...e, id }));
-      cached.catch(() => entryCache.delete(id));
-      entryCache.set(id, cached);
-    }
-    return cached;
+    const cached = entryCache.get(id);
+    if (cached && Date.now() - cached.askedAt < limitNumber(limits.describeTtlMs)) return cached.entry;
+    const asked = members.get(id)!.describe().then((e) => ({ ...e, id }));
+    asked.catch(() => { if (entryCache.get(id)?.entry === asked) entryCache.delete(id); });
+    entryCache.set(id, { entry: asked, askedAt: Date.now() });
+    return asked;
   };
   const entries = () => Promise.all([...members.keys()].map(entry));
   const context = (name: string): AdapterContext => ({ system: config.name, name, cwd, env, telemetry: host.telemetry, members: entries });

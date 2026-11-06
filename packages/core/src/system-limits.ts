@@ -3,6 +3,7 @@ import { defineLimits, UNBOUNDED, type LimitFinding, type LimitSpec, type LimitV
 import { isPlainObject } from './util.ts';
 
 const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
 
 /** Every limit of the core, declared once: validation, the readiness gate and the docs read this list. */
 export const SYSTEM_LIMITS = defineLimits({
@@ -17,6 +18,7 @@ export const SYSTEM_LIMITS = defineLimits({
   cancelTimeoutMs: { path: 'limits.system.cancelTimeoutMs', default: 5000, unit: 'ms', min: 1, max: 60_000, why: 'Time a cancel of an abandoned or cut-off call may take.' },
   minRemainingMs: { path: 'limits.system.minRemainingMs', default: 1000, unit: 'ms', min: 0, max: 60_000, why: 'A member call does not start with less time left than this.' },
   marginMs: { path: 'limits.system.marginMs', default: 1000, unit: 'ms', min: 0, max: 60_000, why: 'Time kept back from the deadline on each outbound call.' },
+  describeTtlMs: { path: 'limits.system.describeTtlMs', default: 60_000, unit: 'ms', min: 0, max: DAY_MS, why: 'How long a member description is kept before describe is asked again.' },
   maxCandidates: { path: 'limits.router.maxCandidates', default: 20, unit: 'count', min: 1, max: 200, safe: { min: 1, max: 50 }, why: 'Candidates sent to a model or knowledge router.' },
   historyRuns: { path: 'limits.attribution.historyRuns', default: 100, unit: 'count', min: 1, max: 10_000, why: 'Past runs kept in memory for attribution.' },
   maxRecords: { path: 'limits.attribution.maxRecords', default: 500, unit: 'count', min: 1, max: 100_000, why: 'Hop records read by one attribution.' },

@@ -158,7 +158,11 @@ export function createSqliteExecution(
       db.exec('COMMIT');
       return out;
     } catch (err) {
-      db.exec('ROLLBACK');
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // No transaction left to roll back (the connection failed or closed): the error of the work is the one to report.
+      }
       throw err;
     }
   };
@@ -173,9 +177,15 @@ export function createSqliteExecution(
     });
   };
 
-  db.exec('PRAGMA foreign_keys = ON');
-  db.exec('PRAGMA journal_mode = WAL');
-  migrate();
+  // A file this adapter cannot use (a newer schema, a locked or corrupt database) is closed before the error leaves.
+  try {
+    db.exec('PRAGMA foreign_keys = ON');
+    db.exec('PRAGMA journal_mode = WAL');
+    migrate();
+  } catch (err) {
+    db.close();
+    throw err;
+  }
 
   const sql = {
     run: db.prepare('SELECT status, ended_seq, lease, lease_until FROM runs WHERE key = ?'),

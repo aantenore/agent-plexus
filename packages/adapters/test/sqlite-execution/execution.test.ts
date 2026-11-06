@@ -420,6 +420,19 @@ test('the database uses WAL and carries a schema version; a newer one is refused
   assert.throws(() => createSqliteExecution({ path }, { name: 'execution', cwd: dir }), /schema version 99/);
 });
 
+test('a file the adapter refuses is closed again: a newer schema leaves no connection, so its write-ahead log goes too', async () => {
+  const path = fresh();
+  const port = createSqliteExecution({ path }, { name: 'execution', cwd: dir });
+  await (await port.begin('r')).put('x');
+  await port.close();
+  const db = new DatabaseSync(path);
+  db.exec('PRAGMA user_version = 99');
+  db.close();
+  assert.ok(!existsSync(`${path}-wal`), 'the write-ahead log goes with the last connection');
+  assert.throws(() => createSqliteExecution({ path }, { name: 'execution', cwd: dir }), /schema version 99/);
+  assert.ok(!existsSync(`${path}-wal`), 'the refused open left a connection behind');
+});
+
 test('close fails the waits still pending and closes the database', async () => {
   const port = createSqliteExecution({ path: fresh() }, { name: 'execution', cwd: dir });
   const run = await port.begin('r');

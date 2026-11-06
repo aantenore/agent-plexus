@@ -1,0 +1,35 @@
+{
+  "name": "agent-plexus",
+  "version": "0.2.0",
+  "description": "The agent-plexus command line under its short name: forwards to @agent-plexus/cli",
+  "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-orchestration", "cli"],
+  "homepage": "https://github.com/aantenore/agent-plexus/tree/main/packages/agent-plexus#readme",
+  "bugs": {
+    "url": "https://github.com/aantenore/agent-plexus/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aantenore/agent-plexus.git",
+    "directory": "packages/agent-plexus"
+  },
+  "license": "MIT",
+  "author": "Antonio Antenore",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "bin": {
+    "agent-plexus": "cli.js"
+  },
+  "files": ["cli.js"],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepack": "node ../../scripts/copy-license.mjs"
+  },
+  "dependencies": {
+    "@agent-plexus/cli": "^0.2.0"
+  }
+}

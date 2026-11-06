@@ -1,6 +1,6 @@
 import type { Io } from '../io.ts';
 import { publicResult, resultText } from '../format.ts';
-import { openProject, type ProjectArgs } from '../project.ts';
+import { interrupt, openProject, type ProjectArgs } from '../project.ts';
 
 export interface CancelArgs extends ProjectArgs {
   runId: string;
@@ -15,7 +15,7 @@ export interface CancelArgs extends ProjectArgs {
 export async function cancel(io: Io, args: CancelArgs): Promise<number> {
   const { system } = await openProject(io, args);
   try {
-    const result = await system.cancel(args.runId, args.reason !== undefined ? { reason: args.reason } : {});
+    const result = await system.cancel(args.runId, { ...interrupt(io), ...(args.reason !== undefined ? { reason: args.reason } : {}) });
     const done = result.status === 'stopped' && result.reason?.code === 'cancelled';
     io.out(args.json ? JSON.stringify(publicResult(result), null, 2) : done ? `cancelled ${result.runId}` : resultText(result));
     return done ? 0 : 1;

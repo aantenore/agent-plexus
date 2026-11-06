@@ -1,6 +1,6 @@
 import type { ResumeReply } from '@agent-plexus/core';
 import type { Io } from '../io.ts';
-import { openProject, type ProjectArgs } from '../project.ts';
+import { interrupt, openProject, type ProjectArgs } from '../project.ts';
 import { printResult } from './run.ts';
 
 export interface ResumeArgs extends ProjectArgs {
@@ -14,7 +14,7 @@ export interface ResumeArgs extends ProjectArgs {
 export async function resume(io: Io, args: ResumeArgs): Promise<number> {
   const { system } = await openProject(io, args);
   try {
-    return printResult(io, await system.resume(args.runId, args.reply), args);
+    return printResult(io, await system.resume(args.runId, args.reply, interrupt(io)), args);
   } finally {
     await system.close();
   }

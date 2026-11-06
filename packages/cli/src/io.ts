@@ -7,6 +7,8 @@ export interface Io {
   stdin: Readable;
   out(text: string): void;
   err(text: string): void;
+  /** Aborts when the process is told to stop (SIGINT, SIGTERM): a run in progress stops `aborted`, a loop ends. */
+  signal?: AbortSignal;
 }
 
 export const processIo = (): Io => ({

@@ -1,7 +1,7 @@
 import type { SystemResult } from '@agent-plexus/core';
 import type { Io } from '../io.ts';
 import { hopLine, publicResult, resultText, resumeHint } from '../format.ts';
-import { openProject, type ProjectArgs } from '../project.ts';
+import { interrupt, openProject, type ProjectArgs } from '../project.ts';
 
 /** Exit code of a run that ended waiting for a reply: neither a success nor a failure. */
 export const EXIT_WAITING = 3;
@@ -18,7 +18,7 @@ export interface RunArgs extends ProjectArgs {
 export async function run(io: Io, args: RunArgs): Promise<number> {
   const { system } = await openProject(io, args);
   try {
-    return printResult(io, await system.run(args.text, args.runId !== undefined ? { runId: args.runId } : {}), args);
+    return printResult(io, await system.run(args.text, { ...interrupt(io), ...(args.runId !== undefined ? { runId: args.runId } : {}) }), args);
   } finally {
     await system.close();
   }

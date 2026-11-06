@@ -4,6 +4,9 @@ import type { Io } from './io.ts';
 
 export const DEFAULT_CONFIG = 'plexus.json';
 
+/** The process's interrupt as the context of a run, a resume or a cancel: nothing without one. */
+export const interrupt = (io: Io): { signal?: AbortSignal } => (io.signal ? { signal: io.signal } : {});
+
 export interface ProjectArgs {
   config?: string;
   profile?: string;

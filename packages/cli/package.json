@@ -1,8 +1,8 @@
 {
   "name": "@agent-plexus/cli",
   "version": "0.2.0",
-  "description": "agent-plexus command line: check, run, resume, dev, eval",
-  "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "cli"],
+  "description": "agent-plexus command line: init, check, run, resume, cancel, dev, eval",
+  "keywords": ["agent-plexus", "agents", "multi-agent", "orchestration", "a2a", "ports-and-adapters", "agent-orchestration", "cli"],
   "homepage": "https://github.com/aantenore/agent-plexus/tree/main/packages/cli#readme",
   "bugs": {
     "url": "https://github.com/aantenore/agent-plexus/issues"
@@ -28,16 +28,18 @@
       "default": "./dist/main.js"
     }
   },
-  "files": ["dist"],
+  "files": ["dist", "templates"],
   "sideEffects": false,
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "build": "tsc -p tsconfig.build.json && node ../../scripts/bin-mode.mjs && node ../../scripts/copy-starter.mjs",
     "typecheck": "tsc -p tsconfig.json",
+    "pretest": "node ../../scripts/copy-starter.mjs",
     "test": "node --conditions=@agent-plexus/source --test \"test/**/*.test.ts\"",
-    "prepack": "npm run build && node ../../scripts/copy-license.mjs"
+    "prepack": "npm run build && node ../../scripts/copy-license.mjs && node ../../scripts/pack-manifest.mjs strip",
+    "postpack": "node ../../scripts/pack-manifest.mjs restore"
   },
   "dependencies": {
     "@agent-plexus/core": "^0.2.0"

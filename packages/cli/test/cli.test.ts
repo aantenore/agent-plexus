@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -126,6 +126,48 @@ test('check reports an invalid topology as FAIL', async () => {
   }
 });
 
+test('check and run use the @agent-plexus/adapters installed next to the config, ahead of the copy next to the core', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-cli-'));
+  try {
+    // A project's own install of the adapters package: one adapter, which this checkout's copy does not have.
+    const pkg = join(dir, 'node_modules', '@agent-plexus', 'adapters');
+    await mkdir(pkg, { recursive: true });
+    await writeFile(join(pkg, 'package.json'), JSON.stringify({ name: '@agent-plexus/adapters', version: '0.0.0', type: 'module', exports: { './local-member': './local-member.mjs' } }));
+    await writeFile(join(pkg, 'local-member.mjs'), `export const adapters = [{
+      fills: 'MemberPort', name: 'local-member', maps: { technology: 'local' }, portVersion: '0.1.0', tiers: ['prototype'],
+      create: (options, ctx) => ({
+        name: ctx.name,
+        describe: async () => ({ id: ctx.name, name: ctx.name, description: 'local', skills: [], endpoint: { protocol: 'function' }, trust: { signed: false, pinned: false } }),
+        invoke: async () => ({ status: 'completed', output: 'from the local package' }),
+      }),
+    }];`);
+    const adapters = join(EXAMPLE, '../../packages/adapters/src');
+    const config = (member: string) => ({
+      system: { name: 'local' },
+      members: { m: { adapter: member } },
+      ports: {
+        topology: { adapter: join(adapters, 'basic-topology/index.ts') },
+        execution: { adapter: join(adapters, 'memory-execution/index.ts') },
+        attribution: { adapter: join(adapters, 'rule-attribution/index.ts') },
+      },
+      topology: { kind: 'sequence', steps: ['m'] },
+    });
+    await writeFile(join(dir, 'plexus.json'), JSON.stringify(config('local-member')));
+    const checked = captureIo(dir);
+    assert.equal(await main(['check'], checked.io), 0, checked.out());
+    const ran = captureIo(dir);
+    assert.equal(await main(['run', '--quiet', 'hi'], ran.io), 0, ran.err());
+    assert.equal(ran.out(), 'from the local package');
+    // A name the local package does not export is not looked up next to the core.
+    await writeFile(join(dir, 'other.json'), JSON.stringify(config('function-member')));
+    const other = captureIo(dir);
+    assert.equal(await main(['check', '--config', 'other.json'], other.io), 1);
+    assert.match(other.out(), /FAIL \$\.members\.m: adapter "function-member" is not one of @agent-plexus\/adapters/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('eval passes two cases, fails and attributes the crash, and exits 1', async () => {
   const c = captureIo();
   assert.equal(await main(['eval', CASES], c.io), 1, c.err());
@@ -194,7 +236,7 @@ test('dev runs each line and stops at /exit', async () => {
 });
 
 test('--help per command exits 0; wrong usage and unknown commands exit 2', async () => {
-  for (const name of ['check', 'run', 'resume', 'cancel', 'dev', 'eval']) {
+  for (const name of ['init', 'check', 'run', 'resume', 'cancel', 'dev', 'eval']) {
     const c = captureIo();
     assert.equal(await main([name, '--help'], c.io), 0);
     assert.match(c.out(), new RegExp(`^agent-plexus ${name}`));
@@ -317,6 +359,21 @@ test('run --run-id runs under the given id; a waiting run exits 3 and its resume
   }
 });
 
+test('--version, -v and version print the version of the package and exit 0', async () => {
+  const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+  assert.match(version, /^\d+\.\d+\.\d+/);
+  for (const arg of ['--version', '-v', 'version']) {
+    const c = captureIo();
+    assert.equal(await main([arg], c.io), 0);
+    assert.equal(c.out(), version);
+    assert.equal(c.err(), '');
+  }
+  const top = captureIo();
+  await main(['--help'], top.io);
+  assert.match(top.out(), /--version/);
+  assert.match(top.out(), /130 interrupted/);
+});
+
 test('help documents exit code 3 for a waiting run and names no adapter', async () => {
   const top = captureIo();
   await main(['--help'], top.io);
@@ -326,5 +383,86 @@ test('help documents exit code 3 for a waiting run and names no adapter', async 
     await main([name, '--help'], c.io);
     assert.match(c.out(), /3 when it waits|3 waiting/);
     assert.doesNotMatch(c.out(), /memory-execution|sqlite-execution/);
+  }
+});
+
+/** An empty project folder whose `node_modules` is the repository's, so the starter's members find the packages. */
+async function emptyProject(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-init-'));
+  await symlink(fileURLToPath(new URL('../../../node_modules', import.meta.url)), join(dir, 'node_modules'), 'dir');
+  return dir;
+}
+
+test('init writes the starter into an empty folder; check passes and eval attributes the crash case to billing', async () => {
+  const dir = await emptyProject();
+  try {
+    const c = captureIo(dir);
+    assert.equal(await main(['init'], c.io), 0, c.err());
+    assert.deepEqual((await readdir(dir)).sort(), ['README.md', 'cases.json', 'members', 'node_modules', 'package.json', 'plexus.json']);
+    assert.equal(await readFile(join(dir, 'plexus.json'), 'utf8'), await readFile(CONFIG, 'utf8'));
+    assert.equal(await readFile(join(dir, 'members', 'billing.ts'), 'utf8'), await readFile(join(EXAMPLE, 'members', 'billing.ts'), 'utf8'));
+    const pkg = JSON.parse(await readFile(join(dir, 'package.json'), 'utf8'));
+    assert.equal(pkg.type, 'module');
+    assert.deepEqual(Object.keys(pkg.devDependencies), ['@agent-plexus/adapters', '@agent-plexus/cli', '@agent-plexus/core']);
+    assert.match(c.out(), /next:\n  npm install\n  npx agent-plexus check\n/);
+
+    const check = captureIo(dir);
+    assert.equal(await main(['check'], check.io), 0, check.out());
+    assert.match(check.out(), /check passed$/);
+    const ev = captureIo(dir);
+    assert.equal(await main(['eval', 'cases.json'], ev.io), 1, ev.err());
+    assert.match(ev.out(), /FAIL billing-crash[\s\S]*attribution member billing [\s\S]*eval: 2 passed, 1 failed$/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('init sets "type": "module" in an existing package.json and creates a missing folder', async () => {
+  const dir = await emptyProject();
+  try {
+    await writeFile(join(dir, 'package.json'), JSON.stringify({ type: 'commonjs', devDependencies: { '@agent-plexus/cli': '^0.2.0' } }));
+    const c = captureIo(dir);
+    assert.equal(await main(['init', 'sub/system'], c.io), 0, c.err());
+    assert.match(c.out(), /next:\n  cd sub\/system\n  npm install\n/);
+    const top = captureIo(dir);
+    assert.equal(await main(['init', '--force'], top.io), 0, top.err());
+    const pkg = JSON.parse(await readFile(join(dir, 'package.json'), 'utf8'));
+    assert.equal(pkg.type, 'module');
+    assert.match(top.out(), /"type": "module", was "commonjs"/);
+    assert.match(top.out(), /npm install --save-dev @agent-plexus\/adapters @agent-plexus\/core\n/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('init refuses a folder with other files (exit 1) unless --force, and takes at most one folder', async () => {
+  const dir = await emptyProject();
+  try {
+    await writeFile(join(dir, 'notes.txt'), 'mine');
+    const c = captureIo(dir);
+    assert.equal(await main(['init'], c.io), 1);
+    assert.match(c.err(), /is not empty \(notes\.txt\); use --force/);
+    assert.deepEqual((await readdir(dir)).sort(), ['node_modules', 'notes.txt']);
+    const forced = captureIo(dir);
+    assert.equal(await main(['init', '--force'], forced.io), 0, forced.err());
+    assert.equal(await readFile(join(dir, 'notes.txt'), 'utf8'), 'mine');
+    const two = captureIo(dir);
+    assert.equal(await main(['init', 'a', 'b'], two.io), 2);
+    assert.match(two.err(), /expected at most one \[dir\]/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('every command of the help is in the package README and the package description', async () => {
+  const top = captureIo();
+  await main(['--help'], top.io);
+  const names = [...top.out().matchAll(/^  ([a-z]+) /gm)].map((m) => m[1]);
+  assert.ok(names.length >= 7, names.join(','));
+  const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const { description } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { description: string };
+  for (const name of names) {
+    assert.match(readme, new RegExp(`^\\| \`${name}[\` ]`, 'm'), `README.md has no row for ${name}`);
+    assert.match(description, new RegExp(`\\b${name}\\b`), `the description does not name ${name}`);
   }
 });

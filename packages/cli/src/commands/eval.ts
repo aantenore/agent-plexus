@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { CliError, type Io } from '../io.ts';
 import { attributionLine, publicResult, scoreLine } from '../format.ts';
-import { openProject, type ProjectArgs } from '../project.ts';
+import { interrupt, openProject, type ProjectArgs } from '../project.ts';
 
 export interface EvalArgs extends ProjectArgs {
   cases: string;
@@ -36,14 +36,15 @@ async function readCases(file: string): Promise<EvalCase[]> {
   return raw as EvalCase[];
 }
 
-/** Runs every case, scores it, and attributes the failures. Exit 1 when any case fails. */
+/** Runs every case, scores it, and attributes the failures. Exit 1 when any case fails. An interrupt ends the cases. */
 export async function evaluate(io: Io, args: EvalArgs): Promise<number> {
   const cases = await readCases(resolve(io.cwd, args.cases));
   const { system } = await openProject(io, args);
   const reports: CaseReport[] = [];
   try {
     for (const evalCase of cases) {
-      const result = await system.run(evalCase.input);
+      if (io.signal?.aborted) break;
+      const result = await system.run(evalCase.input, interrupt(io));
       const scores = await system.score(evalCase, result);
       const passed = result.status === 'completed' && scores.every((s) => s.value >= 1);
       const attributions = passed ? [] : await system.attribute(result, scores);

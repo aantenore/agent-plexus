@@ -1,9 +1,11 @@
 import { AdapterError, ConfigError, type ResumeReply } from '@agent-plexus/core';
+import { readFileSync } from 'node:fs';
 import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
 import { cancel } from './commands/cancel.ts';
 import { check } from './commands/check.ts';
 import { dev } from './commands/dev.ts';
 import { evaluate } from './commands/eval.ts';
+import { init } from './commands/init.ts';
 import { resume } from './commands/resume.ts';
 import { run } from './commands/run.ts';
 import { CliError, processIo, UsageError, type Io } from './io.ts';
@@ -13,6 +15,7 @@ export { processIo, type Io } from './io.ts';
 
 const HELP = `agent-plexus <command> [options]
 
+  init [dir]                 write a starter system (plexus.json, members, cases.json) into an empty folder (--force)
   check                      load and assemble the system, print findings (FAIL, WARN), exit 1 on any FAIL
   run <text>                 one run of the system: the output, then one line per hop (--run-id <id>, --json, --quiet)
   resume <runId>             answer a waiting run and run it again (--input <text> | --approve | --deny [--reason <text>]) [--wait <token>]
@@ -20,8 +23,17 @@ const HELP = `agent-plexus <command> [options]
   dev                        terminal loop: each line is a run, /exit quits (--quiet)
   eval <cases.json>          run, score and attribute a file of cases, exit 1 when a case fails (--json)
 
-Common options: --config <file> (default ${DEFAULT_CONFIG}), --profile <name>, --help (also per command)
-Exit codes: 0 ok, 1 findings, failed runs or a bad system, 2 wrong command line, 3 a run waiting for a reply (run, resume)`;
+Common options: --config <file> (default ${DEFAULT_CONFIG}), --profile <name>, --help (also per command), --version
+Exit codes: 0 ok, 1 findings, failed runs or a bad system, 2 wrong command line, 3 a run waiting for a reply (run, resume),
+130 interrupted (Ctrl-C or SIGTERM: a run in progress stops aborted and the system is closed; a second signal exits at once)`;
+
+/** Exit code of a command the process was told to stop (SIGINT, SIGTERM), as shells report a Ctrl-C. */
+export const EXIT_INTERRUPTED = 130;
+
+const VERSION_FLAGS = new Set(['--version', '-v', 'version']);
+
+/** The version of this package, from its manifest (one level above `src/` and `dist/`). */
+const version = (): string => (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 
 const COMMON = {
   config: { type: 'string' }, profile: { type: 'string' }, help: { type: 'boolean', short: 'h' },
@@ -38,6 +50,7 @@ interface Flags {
   deny?: boolean;
   reason?: string;
   wait?: string;
+  force?: boolean;
   'run-id'?: string;
 }
 
@@ -94,7 +107,23 @@ function fileOf(positionals: string[]): string {
   return positionals[0] as string;
 }
 
+function dirOf(positionals: string[]): string {
+  if (positionals.length > 1) throw new UsageError('expected at most one [dir]');
+  return positionals[0] ?? '.';
+}
+
 const COMMANDS: Record<string, Command> = {
+  init: {
+    usage: 'agent-plexus init [dir] [--force]',
+    help: `Writes a starter system into dir (default: the working directory, created when missing): plexus.json, three
+function members in members/, cases.json and a README, the offline example of the repository. Creates package.json
+with "type": "module" and the agent-plexus packages as dev dependencies, or sets "type": "module" in an existing one
+(the members are ES modules). Prints the commands to run next. Exit 1 when dir holds files other than package.json,
+package-lock.json, node_modules and dot files.
+  --force   write into a folder that holds other files, replacing files of the same name`,
+    options: { help: COMMON.help, force: { type: 'boolean' } },
+    exec: (io, f, pos) => init(io, { dir: dirOf(pos), version: version(), ...(f.force ? { force: true } : {}) }),
+  },
   check: {
     usage: 'agent-plexus check [--config <file>] [--profile <name>]',
     help: `Loads the config, assembles the system with its adapters and applies the readiness gate of the profile's tier.
@@ -165,6 +194,7 @@ Exit 1 when any case fails.
 export async function main(argv: string[], io: Io = processIo()): Promise<number> {
   const [name, ...rest] = argv;
   if (!name || name === 'help' || name === '--help' || name === '-h') { io.out(HELP); return 0; }
+  if (VERSION_FLAGS.has(name)) { io.out(version()); return 0; }
   const command = Object.hasOwn(COMMANDS, name) ? COMMANDS[name] : undefined;
   if (!command) { io.err(`agent-plexus: unknown command "${name}"\n\n${HELP}`); return 2; }
   try {
@@ -182,5 +212,27 @@ export async function main(argv: string[], io: Io = processIo()): Promise<number
       return 1;
     }
     throw err;
+  }
+}
+
+/**
+ * The command line of a process: `main` over the process's streams, stopped by SIGINT or SIGTERM. The first signal
+ * interrupts the command (a run in progress stops `aborted` and the journal lets go of it, a loop ends, the system is
+ * closed) and the exit code is 130 whatever the command came to; a second signal ends the process at once with it.
+ */
+export async function cli(argv: string[]): Promise<number> {
+  const interrupt = new AbortController();
+  const onSignal = (signal: NodeJS.Signals): void => {
+    if (interrupt.signal.aborted) process.exit(EXIT_INTERRUPTED);
+    interrupt.abort(new Error(`interrupted by ${signal}`));
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+  try {
+    const code = await main(argv, { ...processIo(), signal: interrupt.signal });
+    return interrupt.signal.aborted ? EXIT_INTERRUPTED : code;
+  } finally {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
   }
 }

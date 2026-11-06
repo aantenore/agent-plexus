@@ -1,14 +1,19 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   assemble, defineAdapter, inputText, loadDescriptor, PORT_VERSIONS, prototypeHost, resolveConfig, type AdapterDescriptor, type Host,
   type MemberPort, type System, type TopologySpec,
 } from '@agent-plexus/core';
 import { resumeHint } from '../src/format.ts';
+import { main } from '../src/main.ts';
+import { captureIo } from './helpers.ts';
 
 /**
  * Members that count their calls: `ask` waits for input on the first call and answers with the reply once resumed.
@@ -77,14 +82,15 @@ async function open(dir: string, path: string, members: Record<string, { ask?: b
   });
 }
 
-const statusOf = (file: string, runId: string): unknown => {
+const rowOf = (file: string, runId: string): { status: unknown; lease: unknown } | undefined => {
   const db = new DatabaseSync(file, { readOnly: true });
   try {
-    return (db.prepare('SELECT status FROM runs WHERE key = ?').get(runId) as { status: unknown } | undefined)?.status;
+    return db.prepare('SELECT status, lease FROM runs WHERE key = ?').get(runId) as { status: unknown; lease: unknown } | undefined;
   } finally {
     db.close();
   }
 };
+const statusOf = (file: string, runId: string): unknown => rowOf(file, runId)?.status;
 
 async function inTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'plexus-durable-'));
@@ -197,4 +203,38 @@ test('a member wait and a gate ask in parallel: the hint asks for what the kept 
     } finally {
       await second.close();
     }
+  }));
+
+test('SIGINT stops a run in another agent-plexus process: exit 130, the run stopped aborted, the sqlite journal no longer holding it', { skip: process.platform === 'win32' }, () =>
+  inTempDir(async (dir) => {
+    const file = join(dir, 'runs.db');
+    const marker = join(dir, 'in-flight');
+    const config = join(dir, 'plexus.json');
+    await writeFile(config, JSON.stringify({
+      system: { name: 'slow' },
+      members: { slow: { adapter: fileURLToPath(new URL('fixtures/slow-member.ts', import.meta.url)), options: { marker } } },
+      ports: { topology: { adapter: 'basic-topology' }, execution: { adapter: 'sqlite-execution', options: { path: file } }, attribution: { adapter: 'rule-attribution' } },
+      topology: { kind: 'sequence', steps: ['slow'] },
+    }));
+    const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
+    const child = spawn(process.execPath, ['--conditions=@agent-plexus/source', '--disable-warning=ExperimentalWarning', cli, 'run', '--config', config, '--run-id', 'r-int', '--json', 'go'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk; });
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk; });
+    const closed = new Promise<number | null>((done) => child.on('close', (code) => done(code)));
+    // The member is in flight once it wrote the marker; the signal comes then, as a Ctrl-C would.
+    const until = Date.now() + 20_000;
+    while (!existsSync(marker) && child.exitCode === null && Date.now() < until) await new Promise((wake) => setTimeout(wake, 20));
+    assert.ok(existsSync(marker), `the member was not called:\n${stderr}`);
+    child.kill('SIGINT');
+    assert.equal(await closed, 130, stderr);
+    const result = JSON.parse(stdout) as { status: string; reason?: { code: string }; runId: string };
+    assert.deepEqual([result.status, result.reason?.code, result.runId], ['stopped', 'aborted', 'r-int']);
+    const row = rowOf(file, 'r-int');
+    assert.deepEqual([row?.status, row?.lease], ['stopped', null]);
+    // Nothing holds the run: a cancel is refused because the run is over, not because another invocation has it.
+    const cancelled = captureIo(dir);
+    assert.equal(await main(['cancel', 'r-int', '--config', config, '--json'], cancelled.io), 1);
+    assert.equal(JSON.parse(cancelled.out()).reason.code, 'conflict');
   }));

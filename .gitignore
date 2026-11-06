@@ -4,7 +4,11 @@ dist/
 .env
 *.tsbuildinfo
 
-# package build output (LICENSE is copied in by prepack)
+# package build output (LICENSE is copied in by prepack; package.json.orig is the manifest prepack keeps until postpack)
 packages/*/LICENSE
+packages/*/package.json.orig
 examples/*/LICENSE
 *.tgz
+
+# starter of `agent-plexus init`, copied from examples/offline by scripts/copy-starter.mjs at build time
+packages/cli/templates/

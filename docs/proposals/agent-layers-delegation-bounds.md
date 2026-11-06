@@ -13,7 +13,7 @@ agent-layers repository changes only through its own review.
 
 # NNNN. Every agent bounds its own run and knows who delegated it
 
-Status: Proposed · Date: 2026-11-01 · Decided by: project owner · Supersedes: none · Extends: [0001](0001-sdk-language.md)
+Status: Proposed · Date: 2026-11-01 · Decided by: project owner · Supersedes: none · Extends: [agent-layers 0001](https://github.com/aantenore/agent-layers/blob/main/docs/decisions/0001-sdk-language.md)
 
 Each agent enforces three things at its own boundary, also when it runs alone: a deadline, a budget and a hop limit.
 When an agent calls another agent, it passes on what is left of them, and the agent it calls can only make them

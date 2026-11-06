@@ -2,7 +2,50 @@
 
 Every package under `packages/*` is released with the same version. See [RELEASING.md](RELEASING.md).
 
-## 0.2.0 - unreleased
+## Unreleased
+
+### Fixed
+
+- An adapter named in the config (`"adapter": "<name>"`) is loaded from the `@agent-plexus/adapters` installed next to
+  the config, as `plugins` packages are, and only otherwise from the one next to the core: with `npx @agent-plexus/cli`
+  or a global CLI the project's own install is found instead of `is not installed`. A copy next to the config that does
+  not export the name is an error, not a fallback. The message of a missing package names both places.
+- The examples run outside the repository: their `npm test` no longer passes `--conditions=@agent-plexus/source`
+  (which maps to `src/`, not in the tarballs), their `tsconfig.json` no longer extends the repository's, and the CLI is
+  a dev dependency of `offline` and `swap`. `npm run test:packages` keeps running every workspace against the sources.
+- Published manifests no longer carry the `@agent-plexus/source` export condition: `prepack` strips it and `postpack`
+  restores `package.json`.
+- A text the execution adapter could not store (`put`) is reported as `plexus.execution.write_failed` with the key
+  `put` instead of being dropped silently; the hop record then has no `inputRef` or `outputRef`.
+- `sqlite-execution` closes the database it refuses (a newer schema version, a failed setup) and a `ROLLBACK` that
+  fails no longer hides the error of the write.
+- The CLI builds on Windows (`chmod` replaced by `scripts/bin-mode.mjs`).
+- The README and the description of `@agent-plexus/cli` list `cancel`; the README of `@agent-plexus/adapters` links the
+  adapter READMEs on GitHub, since the tarball has no `src/`.
+
+### Added
+
+- `agent-plexus --version` (`-v`, `version`) prints the version of `@agent-plexus/cli`.
+- Ctrl-C (SIGINT) and SIGTERM stop a command cleanly: a run in progress ends `stopped`/`aborted` through its signal,
+  the journal lets go of it (no `sqlite-execution` lease to wait out before a `resume`, `cancel` or `run --run-id`),
+  `dev` and `eval` end after the current run, the system is closed and the exit code is 130; a second signal exits at
+  once.
+- `limits.system.describeTtlMs` (default 60000, 0 asks every time): how long the core keeps a member's `describe()`
+  answer before asking again, so a long-running system sees a member change its card.
+- The unscoped package `agent-plexus`, a stub that forwards to `@agent-plexus/cli`, so `npx agent-plexus` runs this
+  project's command line.
+- `agent-plexus init [dir]` writes a starter system into an empty folder: `plexus.json`, three members, `cases.json`
+  and a README, copied from `examples/offline` when the CLI is built, and `"type": "module"` in `package.json` (created
+  with the packages as dev dependencies when missing). `--force` writes into a folder that holds other files.
+- The README and the guide start from npm (`npm install`, `npx agent-plexus init`); the guide gains a Troubleshooting
+  section (missing adapters, `Cannot use import statement outside a module`, exit codes).
+
+### Changed
+
+- `scripts/publish-unpublished.mjs` refuses to publish a version whose tag `v<version>` is not at `HEAD`
+  (`--allow-untagged` skips the check), so what npm records as `gitHead` is the tagged commit.
+
+## 0.2.0 - 2026-11-03
 
 ### Changed (breaking)
 
@@ -32,6 +75,16 @@ Every package under `packages/*` is released with the same version. See [RELEASI
 The agent-layers adapters the tests and examples use follow the same layout in agent-layers 0.4.0:
 `@agent-layers/adapter-<name>` is `@agent-layers/adapters/<name>`.
 
+The nine 0.1.0 `@agent-plexus/adapter-<name>` packages are deprecated on npm, each with a message that names its
+subpath in `@agent-plexus/adapters`.
+
+### Changed
+
+- The core owns what composition relies on: totals from hop records, the `maxParallel` slots, the cancel of a remote
+  task when the core cuts a call off, the run budget, scores of `expected` without a host scorer.
+- `plugins` are resolved from the directory of the config, as an `import` written there would.
+- The CLI exits with 3 when a run (`run`, `resume`) ends waiting for a reply, and `run` takes `--run-id`.
+
 ### Added
 
 - `agent-layers` maps delegation, actors, approvals and state between agent-plexus and an agent-layers stack: the
@@ -52,12 +105,11 @@ The agent-layers adapters the tests and examples use follow the same layout in a
   that told `invoke` from `resume` by `action === 'resume'` should test `action === 'invoke'` instead (an unhandled
   question is a deny).
 
-### Earlier in 0.2.0
+- Conformance kit `@agent-plexus/conformance`: the contract tests a port adapter runs in its own tests.
+- `supervise` in `basic-topology`.
 
-- Conformance kit `@agent-plexus/conformance`, core-owned composition rules, plugins resolved from the config
-  directory, `supervise` in `basic-topology`, CLI exit 3 for a waiting run, `sqlite-execution`, waiting runs that
-  resume, signed-card policy, `handoff` and `graph`.
+## 0.1.0 - 2026-11-02
 
-## 0.1.0
-
-First release of `@agent-plexus/core`, `@agent-plexus/cli` and the `@agent-plexus/adapter-*` packages.
+First release of `@agent-plexus/core`, `@agent-plexus/cli` and the `@agent-plexus/adapter-*` packages, including
+`sqlite-execution`, runs that end waiting and resume with a reply (`System.resume`, `agent-plexus resume`), the
+signed-card policy of `static-registry` with `registry.requireListed`, and the `handoff` and `graph` nodes.

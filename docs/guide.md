@@ -4,6 +4,25 @@ How to start a system, write a member, write an adapter, add a host, configure a
 production. Concepts are in [architecture.md](architecture.md). Packages are at version 0.2.0; the examples below work
 inside this repository.
 
+## Use it from npm
+
+In a new folder, with Node >= 22.18:
+
+```bash
+npm install --save-dev @agent-plexus/cli @agent-plexus/core @agent-plexus/adapters
+npx agent-plexus init                                          # the offline example below, as a starter
+npx agent-plexus check
+npx agent-plexus run "I need a refund for my last invoice"
+npx agent-plexus eval cases.json
+```
+
+`init [dir]` writes `plexus.json`, the three members in `members/`, `cases.json` and a README into an empty folder
+(one that holds only `package.json`, `package-lock.json`, `node_modules` and dot files; `--force` writes into any
+folder, replacing files of the same name). The members are `.ts` files that Node runs as they are, through type
+stripping, and they are ES modules: `init` sets `"type": "module"` in `package.json`, or creates it with that field and
+the three packages as dev dependencies. A project set up by hand needs the same field; see
+[Troubleshooting](#troubleshooting). The commands give the results of the table in the next section.
+
 ## Quickstart: start a system from the offline example
 
 `examples/offline` is a support system of three function members. It uses only the reference adapters and the
@@ -16,14 +35,17 @@ node --conditions=@agent-plexus/source packages/cli/src/cli.ts run --config exam
 node --conditions=@agent-plexus/source packages/cli/src/cli.ts eval --config examples/offline/plexus.json examples/offline/cases.json
 ```
 
-To start your own system, copy `examples/offline` to a new folder in the repository, edit `plexus.json` and the
-modules in `members/`, and point `--config` at it. Rename the package in the copy's `package.json`: the example is the
-workspace `@agent-plexus/example-offline`, and two workspaces with one name make `npm install` fail. Or copy it outside
-`examples/` (still inside the repository, so Node finds `node_modules`) and leave `package.json` and `tsconfig.json`
-behind. Adapters named in the config are found in the `plugins` modules first, then as
-`@agent-plexus/adapters/<name>` from the repository's `node_modules`; module paths in options are relative to the
-config file. The `--conditions=@agent-plexus/source` flag makes Node load the TypeScript sources of the workspace
-packages; the sections below write the command as `agent-plexus`.
+To start your own system, run `agent-plexus init` (above) or copy `examples/offline` to a folder of its own, anywhere:
+its `package.json` pins the published packages and the CLI as dev dependencies, so `npm install`, `npm test`,
+`npm run typecheck` and `npx agent-plexus check` work outside the repository (`"type": "module"` in that
+`package.json` is what lets the members be `.ts` modules; the package `agent-plexus` only forwards to
+`@agent-plexus/cli`). Then edit `plexus.json` and the modules in `members/`. A copy kept inside the repository needs
+another package name: the example is the workspace `@agent-plexus/example-offline`, and two workspaces with one name
+make `npm install` fail. Adapters named in the config are found in the `plugins` modules first, then as
+`@agent-plexus/adapters/<name>` installed next to the config (or, in a checkout, next to the core); module paths in
+options are relative to the config file. Inside the repository, the `--conditions=@agent-plexus/source` flag makes Node
+load the TypeScript sources of the workspace packages instead of their `dist/`; the sections below write the command as
+`agent-plexus`.
 
 | Piece of `plexus.json` | In the example |
 |---|---|
@@ -129,7 +151,7 @@ An agent served over A2A, in any language or framework, is a member through `a2a
   budget, and a remote refusal over the hop limit is `stopped` with `hop_limit`.
   A remote task that waits for input ends the call as `waiting` with code `needs_input` (or `needs_auth`); answer it
   with [resume](#resume-a-waiting-run).
-- Limits (`timeoutMs`, `pollMs`, `maxCardBytes`, `cardTtlMs`, `cancelTimeoutMs`) are in [limits](limits.md#a2a-member--memberport).
+- Limits (`timeoutMs`, `pollMs`, `maxCardBytes`, `maxResponseBytes`, `cardTtlMs`, `cancelTimeoutMs`) are in [limits](limits.md#a2a-member--memberport).
 
 All options, the state mapping and what is not done are in the
 [adapter README](../packages/adapters/src/a2a-member/README.md).
@@ -324,7 +346,7 @@ An `adapter` value is resolved in this order:
 |---|---|
 | Starts with `.` or `/` | The module at that path, relative to the config file; `#<name>` picks one descriptor |
 | A name exported by a `plugins` module | That module; the first plugin listed wins |
-| Any other name | The subpath `@agent-plexus/adapters/<name>` (a name it does not export is an error) |
+| Any other name | The subpath `@agent-plexus/adapters/<name>` of the package installed next to the config (as a `plugins` package is found), or, when none is installed there, of the package next to `@agent-plexus/core`; a name the package does not export is an error |
 
 `plugins` lists modules, packages or paths, resolved as an `import` written in the config's directory would be: a path
 relative to it, or a package installed in a `node_modules` above it, through its `exports` with the import conditions
@@ -558,6 +580,7 @@ The attribution rules are in [layers/attribution.md](layers/attribution.md).
 
 | Command | What it does |
 |---|---|
+| `init [dir]` | Write a starter system (the offline example) into an empty folder and set `"type": "module"` in its `package.json`; `--force` writes into a folder that holds other files. See [Use it from npm](#use-it-from-npm) |
 | `check` | Load the config, assemble the system, apply the readiness gate of the profile's tier; print `FAIL` and `WARN` lines and a summary |
 | `run <text>` | One run: the output on stdout, one line per hop on stderr (`<member> <status> <code?> <ms>ms`); `--json` prints the result with the hop record, `--quiet` drops the hop lines, `--run-id <id>` runs under a chosen id (1 to 128 characters) instead of a generated one; a waiting run ends with the `resume` command that answers it |
 | `resume <runId>` | Answer a waiting run and run it again: `--input <text>`, or `--approve` / `--deny` with `--reason <text>`, and `--wait <token>` to answer only that wait; output as `run`. Needs a durable execution adapter across processes; see [Resume a waiting run](#resume-a-waiting-run) |
@@ -565,7 +588,8 @@ The attribution rules are in [layers/attribution.md](layers/attribution.md).
 | `dev` | Terminal loop: each line of input is one run; `/exit` or end of input quits; `--quiet` |
 | `eval <cases.json>` | Run, score and attribute a file of cases; `--json` prints counts and, per case, status, output, scores and attributions |
 
-Common options: `--config <file>` (default `plexus.json`), `--profile <name>`, `--help` (also per command).
+Common options: `--config <file>` (default `plexus.json`), `--profile <name>`, `--help` (also per command),
+`--version` (also `-v`, `version`: prints the version of `@agent-plexus/cli`).
 
 | Exit code | Meaning |
 |---|---|
@@ -573,8 +597,33 @@ Common options: `--config <file>` (default `plexus.json`), `--profile <name>`, `
 | `1` | findings, a failed or stopped run, a failed case, or an invalid system |
 | `2` | wrong command line |
 | `3` | `run` or `resume` ended `waiting` for a reply; answer it with the printed `resume` command |
+| `130` | interrupted: Ctrl-C (SIGINT) or SIGTERM ended the command |
+
+An interrupt (Ctrl-C, SIGTERM) stops the command cleanly: a run in progress ends `stopped` with code `aborted` (the
+member is told through its signal and a checkpointed task is cancelled, as for any aborted call), the journal lets go
+of the run, so a `resume`, `cancel` or `run --run-id` of it is not refused as in progress, `dev` and `eval` end after
+the current run, the system is closed and the exit code is 130. A durable run interrupted this way is `stopped`, not
+cancelled: `run --run-id <id>` with the same input continues it (completed steps replay). A second signal ends the
+process at once, without that cleanup: like a kill the process cannot handle (SIGKILL), it leaves a `sqlite-execution`
+run held until its `leaseMs` passes.
 
 `diff` and `draw` are planned.
+
+## Troubleshooting
+
+| Message | Cause and fix |
+|---|---|
+| `adapter "<name>" is not installed next to the config (<dir>) or next to @agent-plexus/core (npm install @agent-plexus/adapters)` | `@agent-plexus/adapters` is not installed in the project of `plexus.json`. Install it there: `npm install --save-dev @agent-plexus/adapters` |
+| `adapter "<name>" is not one of @agent-plexus/adapters (name another adapter by module path or through plugins)` | A misspelt adapter name, or an adapter that is not a reference one: list its package in `plugins` or name it by module path; see [Adapter lookup](#adapter-lookup) |
+| `adapter "<name>" needs the package <package> (npm install <package>)` | The adapter's library is an optional peer dependency (`@a2a-js/sdk` for `a2a-member`, `@agent-layers/core` for `agent-layers`): install it next to the adapters |
+| `package "<name>" is not installed where the config is (<dir>)` | A `plugins` entry names a package the project does not have: install it next to `plexus.json` |
+| `Cannot use import statement outside a module`, after `Failed to load the ES module ... set "type": "module"` | The project's `package.json` has no `"type": "module"`, or has `"type": "commonjs"` (what `npm init -y` writes), so Node loads the `.ts` members as CommonJS. Set `"type": "module"`, or name the members `.mts` |
+| `cannot read as JSON: ENOENT` on `plexus.json` | No config in the working directory: run `agent-plexus init`, or pass `--config <file>` |
+
+The exit code says which kind of problem a command met: `1` the system or the run (findings of `check`, a failed or
+stopped run, a failed case, a config or adapter error), `2` the command line itself (unknown command or option, a
+missing argument; the usage follows the message), `3` a run that waits for a reply, which is not an error: answer it
+with the printed `resume` command. The full table is in [CLI](#cli).
 
 ## Extension rules
 

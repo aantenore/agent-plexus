@@ -1,6 +1,43 @@
 # agent-plexus
 
-![The agent-plexus system: six layers in four planes, one question per layer, and the host hooks](docs/assets/system-overview.svg)
+**Compose agents from any framework into one bounded, debuggable multi-agent system.**
+
+[![npm](https://img.shields.io/npm/v/@agent-plexus/core?label=npm)](https://www.npmjs.com/package/@agent-plexus/core)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.18-brightgreen)](package.json)
+
+- **Any agent is a member, and the limits travel with every call.** A function, an agent-layers stack or any agent
+  reachable over A2A joins one system through `plexus.json`; the deadline, the budget and the hop limit go along with
+  each member call, across frameworks and over the wire.
+- **`eval` names the culprit.** A failed case is attributed to a member and a layer from the hop record of the run,
+  not left to a reading of logs.
+- **The host keeps control.** Identity, policy, telemetry and scoring come from the host through four hooks; the core
+  has zero dependencies and runs offline with prototype defaults.
+
+## Use from npm
+
+Requirements: Node >= 22.18. No network, no model and no agent runtime are needed.
+
+```bash
+npm install --save-dev @agent-plexus/cli @agent-plexus/core @agent-plexus/adapters
+npx agent-plexus init                                          # starter: plexus.json, members/, cases.json
+npx agent-plexus check
+npx agent-plexus run "I need a refund for my last invoice"
+npx agent-plexus eval cases.json
+```
+
+`init` writes the offline example into the folder and sets `"type": "module"` in `package.json`: the members are `.ts`
+ES modules that Node runs as they are. `check` passes; `run` prints the billing answer, with one line per hop on
+stderr; `eval` passes two cases and attributes the crash case to member `billing` (exit 1). Error messages and their
+fixes: [docs/guide.md#troubleshooting](docs/guide.md#troubleshooting).
+
+**Why not LangGraph, Mastra or Microsoft Agent Framework?** They orchestrate agents of their own kind and own the
+loop; across frameworks they meet over A2A without a shared deadline, budget or hop limit. agent-plexus sits between
+agents: an agent built with any of them is a member, every call is bounded the same way, and a failure is attributed
+to a member and a layer. Pick one of them when every agent is written in it; the named comparison is in
+[docs/product.md](docs/product.md#how-it-compares).
+
+## What it is
 
 agent-plexus composes agents into a multi-agent system. It owns the six layers that lie between agents: how an agent
 is called, which agents exist, which one handles a request, how work flows, how a long run survives, and which agent
@@ -12,9 +49,10 @@ reference host, through one adapter. The core defines a port for each layer; ada
 protocol or a technology onto a port; a system config picks one adapter per port, per profile. The core depends on
 nothing and runs offline with prototype defaults for the hooks.
 
-Status: implemented are the core, the CLI, eight reference adapters (including `a2a-member` and `sqlite-execution`), the `agent-layers` adapter and two examples
-(`offline`, `swap`). Planned work is listed in [docs/adapters.md](docs/adapters.md#planned); technologies without
-scheduled work are marked candidate.
+Status: implemented are the core, the CLI, the reference adapters in one package (`@agent-plexus/adapters`: eight
+adapters such as `a2a-member` and `sqlite-execution`, one subpath each, and the `agent-layers` host and member under one
+more) and two examples (`offline`, `swap`). Planned work is listed in [docs/adapters.md](docs/adapters.md#planned);
+technologies without scheduled work are marked candidate.
 
 - **Why it exists and how it compares:** [docs/product.md](docs/product.md)
 - **How it works:** [docs/architecture.md](docs/architecture.md)
@@ -28,6 +66,8 @@ scheduled work are marked candidate.
 - **The language-neutral spec:** [spec/](spec/README.md)
 - **The language (shapes, vocabularies, `ext`, stop codes, topology):** [spec/language.md](spec/language.md)
 - **The host hooks:** [spec/hooks.md](spec/hooks.md)
+
+![The agent-plexus system: six layers in four planes, one question per layer, and the host hooks](docs/assets/system-overview.svg)
 
 ## Principle
 
@@ -90,9 +130,9 @@ flowchart TB
   classDef external fill:#ffffff,stroke:#57606a,color:#1f2328,stroke-dasharray:4 3
 ```
 
-## Quickstart
+## Quickstart from a clone
 
-Requirements: Node >= 22.18. No network, no model and no agent runtime are needed.
+The same example, run against the sources of the repository:
 
 ```bash
 git clone https://github.com/aantenore/agent-plexus && cd agent-plexus
@@ -129,7 +169,7 @@ node --conditions=@agent-plexus/source packages/cli/src/cli.ts eval --config exa
 ```
 spec/            language-neutral contracts: language.md, hooks.md, ports/ (JSON schemas are planned)
 packages/core    @agent-plexus/core: ports, host hooks, memberCall, assemble, system config, limits (zero dependencies)
-packages/cli     @agent-plexus/cli: check, run, resume, dev, eval
+packages/cli     @agent-plexus/cli: init, check, run, resume, cancel, dev, eval
 packages/conformance  @agent-plexus/conformance: contract tests a port adapter runs in its own tests
 packages/adapters  @agent-plexus/adapters: the reference adapters, one subpath export each (@agent-plexus/adapters/<name>)
 examples/        sample systems: offline (reference adapters), swap (each layer replaced by one config value)
@@ -143,11 +183,21 @@ npm install                                          # workspaces, dev dependenc
 npm run typecheck -w @agent-plexus/core              # typecheck one package
 npm test -w @agent-plexus/core                       # tests of one package
 npm test -w @agent-plexus/adapters                   # tests of every adapter
+npm run test:packages                                # tests of every workspace against the sources
 node --conditions=@agent-plexus/source --test "packages/adapters/test/skill-router/*.test.ts"   # one adapter
 ```
 
 Contributions: [CONTRIBUTING.md](CONTRIBUTING.md). Core paths need a spec change first. Releases:
 [RELEASING.md](RELEASING.md). Vulnerabilities: report them privately, see [SECURITY.md](SECURITY.md).
+
+## Ecosystem
+
+The family: [reinloop](https://github.com/aantenore/reinloop) is the runtime of one agent (agents as files, budgets,
+approvals, durable resume, OpenTelemetry, zero dependencies); [agent-layers](https://github.com/aantenore/agent-layers)
+is the eleven-layer SDK around an agent, where reinloop is one runtime adapter; agent-plexus composes agents into a
+multi-agent system, with an agent-layers stack as the host; [Lorebase](https://github.com/aantenore/lorebase) is the
+governed, versioned knowledge graph agents read over MCP. Each one is used on its own; together they cover one agent,
+its controls, the system around it and what it knows.
 
 ## Licenses of the reference technologies
 

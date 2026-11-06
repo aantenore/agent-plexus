@@ -101,3 +101,21 @@ flowchart TB
 
 agent-plexus can use all of these: a framework as a member over A2A, an engine behind ExecutionPort, a stack as the
 host. What it adds is the composition between agents. The landscape is in [research/landscape.md](research/landscape.md).
+
+### Named alternatives
+
+As of November 2026. Each covers part of what agent-plexus does; none carries the deadline, budget and hop limit of a
+run across members of different frameworks and attributes a failure to a member and a layer.
+
+| Project | What it is | What agent-plexus adds | Pick it when |
+|---|---|---|---|
+| Oracle Agent Spec | A declarative, framework-neutral format for agents and flows, run by the runtime of a framework | Limits enforced on every member call, attribution of a failed run, members that are not described in the format (any A2A agent) | You want one portable definition of agents and flows and a framework runtime to execute it |
+| agentgateway | A proxy for agent traffic (A2A, MCP): connectivity, security, observability of the calls | The topology, routing, durable runs and attribution between the agents; agentgateway can sit in front as the host's exposure | You need a data plane in front of agents and tools, not the composition of a system |
+| a2a-mesh | Plumbing for agents that speak A2A: servers, clients, discovery | A topology over the agents, bounds that travel with each call, members that are not A2A agents (functions, agent-layers stacks) | Every agent already speaks A2A and you need the transport and discovery pieces |
+| LangGraph supervisor and swarm | Multi-agent patterns of LangGraph: a supervisor that hands work to agents, or agents that hand off to each other | Members from other frameworks under the same limits; one place where a failure is attributed | Every agent is a LangGraph graph and you want LangGraph's checkpoints and tooling |
+| Mastra supervisor | A Mastra agent that delegates to other Mastra agents | The same, for agents outside Mastra | Every agent is a Mastra agent in one TypeScript application |
+| Microsoft Agent Framework workflows | Graph workflows of agents and functions, with checkpoints and human approval, in .NET and Python | Members of any framework under shared limits; attribution | Your agents are built with Microsoft Agent Framework |
+
+**When not to use agent-plexus:** one framework and one team. If every agent is written in the same framework and
+deployed together, its own multi-agent pattern is simpler; agent-plexus earns its place when the agents come from
+different frameworks, teams or processes.

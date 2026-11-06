@@ -33,7 +33,7 @@ adapters in the Planned table below, the JSON Schemas and the CLI commands `diff
 
 ### Available
 
-Every package has its own README with options, behaviour and limits.
+Each adapter has its own README under `packages/adapters/src/<name>/`, with options, behaviour and limits.
 
 #### Member plane
 
@@ -86,7 +86,8 @@ this adapter). It has three descriptors:
 - the runtime plugin `agent-plexus`: an agent-layers RuntimePort that runs a system. An agent-layers config loads it
   through `plugins` (`@agent-plexus/adapters/agent-layers/runtime`), not agent-plexus, so it is a separate entry point.
 
-10 adapters in one package (`@agent-plexus/adapters`, 9 subpaths), plus the runtime plugin.
+Ten adapters in one package, `@agent-plexus/adapters`, under nine subpaths (`agent-layers` holds both the host and
+the member), plus the runtime plugin under a tenth subpath, `agent-layers/runtime`.
 
 ### Planned
 

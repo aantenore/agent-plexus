@@ -4,6 +4,12 @@ Every package under `packages/*` is released with the same version. See [RELEASI
 
 ## Unreleased
 
+### Fixed
+
+- A command that needs a config (`check`, `run`, `resume`, `cancel`, `eval`, `dev`) in a folder without `plexus.json`, or
+  with a `--config` that does not exist, prints `no config at <path>` with the hint to run `agent-plexus init` or pass
+  `--config <file>`, and exits `2`, instead of a raw `ENOENT` and exit `1`.
+
 ## 0.2.1 - 2026-11-06
 
 ### Fixed

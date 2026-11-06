@@ -618,7 +618,7 @@ run held until its `leaseMs` passes.
 | `adapter "<name>" needs the package <package> (npm install <package>)` | The adapter's library is an optional peer dependency (`@a2a-js/sdk` for `a2a-member`, `@agent-layers/core` for `agent-layers`): install it next to the adapters |
 | `package "<name>" is not installed where the config is (<dir>)` | A `plugins` entry names a package the project does not have: install it next to `plexus.json` |
 | `Cannot use import statement outside a module`, after `Failed to load the ES module ... set "type": "module"` | The project's `package.json` has no `"type": "module"`, or has `"type": "commonjs"` (what `npm init -y` writes), so Node loads the `.ts` members as CommonJS. Set `"type": "module"`, or name the members `.mts` |
-| `cannot read as JSON: ENOENT` on `plexus.json` | No config in the working directory: run `agent-plexus init`, or pass `--config <file>` |
+| ``no config at <path>: run `agent-plexus init` to create a starter, or pass --config <file>`` | No `plexus.json` in the working directory (or no file at `--config`): run `agent-plexus init`, or pass `--config <file>`. Exit code `2` |
 
 The exit code says which kind of problem a command met: `1` the system or the run (findings of `check`, a failed or
 stopped run, a failed case, a config or adapter error), `2` the command line itself (unknown command or option, a

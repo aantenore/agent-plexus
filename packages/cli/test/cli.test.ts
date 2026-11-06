@@ -96,9 +96,10 @@ test('check --profile production fails on the prototype host and adapter, withou
 test('check reports an unreadable config, an unknown profile and an unloadable adapter as FAIL', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'plexus-cli-'));
   try {
-    const missing = captureIo(dir);
-    assert.equal(await main(['check'], missing.io), 1);
-    assert.match(missing.out(), /FAIL .*plexus\.json: cannot read as JSON/);
+    await writeFile(join(dir, 'plexus.json'), '{ not json');
+    const unreadable = captureIo(dir);
+    assert.equal(await main(['check'], unreadable.io), 1);
+    assert.match(unreadable.out(), /FAIL .*plexus\.json: cannot read as JSON/);
 
     const unknown = captureIo();
     assert.equal(await main(['check', '--profile', 'nope'], unknown.io), 1);
@@ -252,6 +253,22 @@ test('--help per command exits 0; wrong usage and unknown commands exit 2', asyn
   const none = captureIo();
   assert.equal(await main([], none.io), 0);
   assert.match(none.out(), /^agent-plexus <command>/);
+});
+
+test('a folder without plexus.json is a usage error that names the path and points to init and --config', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-noconfig-'));
+  try {
+    for (const command of [['check'], ['run', 'hello']]) {
+      const c = captureIo(dir);
+      assert.equal(await main(command, c.io), 2);
+      const message = `no config at ${join(dir, 'plexus.json')}: run \`agent-plexus init\` to create a starter, or pass --config <file>`;
+      assert.ok(c.err().startsWith(`agent-plexus ${command[0]}: ${message}\nusage: `), c.err());
+      assert.doesNotMatch(c.err(), /ENOENT/);
+      assert.equal(c.out(), '');
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 /** A system whose one member waits for input, over the example file journal in `dir`, so runs outlive the process. */

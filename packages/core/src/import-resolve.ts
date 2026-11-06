@@ -10,14 +10,27 @@ import { isPlainObject } from './util.ts';
  * another directory. Throws when the module cannot be resolved.
  */
 export function resolveImport(specifier: string, dir: string): string {
+  const found = resolveInstalled(specifier, dir);
+  if (found === undefined) throw new Error(`package "${splitSpecifier(specifier)!.name}" is not installed where the config is (${dir})`);
+  return found;
+}
+
+/**
+ * `resolveImport` for a package that may not be installed where `dir` is: undefined then, so the caller can look
+ * elsewhere. Any other problem throws: not a package name, a subpath the package does not export (the error carries
+ * Node's own code for it, `ERR_PACKAGE_PATH_NOT_EXPORTED`), a target file that does not exist.
+ */
+export function resolveInstalled(specifier: string, dir: string): string | undefined {
   if (specifier.startsWith('.') || isAbsolute(specifier)) return pathToFileURL(resolve(dir, specifier)).href;
   if (/^[a-z][a-z\d+.-]*:/i.test(specifier)) return specifier;
   const parsed = splitSpecifier(specifier);
   if (!parsed) throw new Error(`"${specifier}" is not a package name`);
   const found = findPackage(parsed.name, dir);
-  if (!found) throw new Error(`package "${parsed.name}" is not installed where the config is (${dir})`);
+  if (!found) return undefined;
   const file = packageFile(found.dir, found.manifest, parsed.subpath, importConditions());
-  if (file === undefined) throw new Error(`package "${parsed.name}" exports no "${parsed.subpath}" for import`);
+  if (file === undefined) {
+    throw Object.assign(new Error(`package "${parsed.name}" exports no "${parsed.subpath}" for import`), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+  }
   if (!isFile(file)) throw new Error(`package "${parsed.name}" points "${parsed.subpath}" to a missing file (${file})`);
   return pathToFileURL(file).href;
 }

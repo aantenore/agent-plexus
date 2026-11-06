@@ -4,7 +4,7 @@ import { checkDescriptor, type AdapterContext, type AdapterDescriptor, type Fill
 import { adapterLimitProblems, coerceLimitOptions, interpolate } from './adapter-config.ts';
 import type { AdapterRef } from './config.ts';
 import { AdapterError, ConfigError } from './errors.ts';
-import { resolveImport } from './import-resolve.ts';
+import { resolveImport, resolveInstalled } from './import-resolve.ts';
 import { formatProblem, validate } from './schema.ts';
 import { errorMessage, isPlainObject } from './util.ts';
 
@@ -23,6 +23,9 @@ const isPath = (name: string) => name.startsWith('.') || name.startsWith('/');
 /** The package whose subpath exports are the adapters found by name alone: `"adapter": "<name>"`. */
 export const ADAPTERS_PACKAGE = '@agent-plexus/adapters';
 
+/** The package this code ships in: where `@agent-plexus/adapters` is looked for when the config's directory has none. */
+const CORE_PACKAGE = '@agent-plexus/core';
+
 const missingPackage = (err: unknown): string | undefined =>
   (err as { code?: string }).code === 'ERR_MODULE_NOT_FOUND' ? /Cannot find package '([^']+)'/.exec(errorMessage(err))?.[1] : undefined;
 
@@ -32,9 +35,9 @@ function moduleProblem(err: unknown, file: string, target: string): string {
 }
 
 /** Why `@agent-plexus/adapters/<name>` did not load: the package is missing, has no such adapter, or misses a peer. */
-function packageProblem(err: unknown, name: string): string {
+function packageProblem(err: unknown, name: string, cwd: string): string {
   const missing = missingPackage(err);
-  if (missing === ADAPTERS_PACKAGE) return `is not installed (npm install ${ADAPTERS_PACKAGE})`;
+  if (missing === ADAPTERS_PACKAGE) return `is not installed next to the config (${cwd}) or next to ${CORE_PACKAGE} (npm install ${ADAPTERS_PACKAGE})`;
   if ((err as { code?: string }).code === 'ERR_PACKAGE_PATH_NOT_EXPORTED' && errorMessage(err).includes(`./${name}`)) {
     return `is not one of ${ADAPTERS_PACKAGE} (name another adapter by module path or through plugins)`;
   }
@@ -45,19 +48,29 @@ function packageProblem(err: unknown, name: string): string {
 const describeAll = (list: AdapterDescriptor[]) => list.map((d) => `${d.name} (${d.fills})`).join(', ') || 'none';
 
 /**
- * Imports `@agent-plexus/adapters/<name>`, or, for a name starting with `.` or `/`, the module at that path relative to
- * `cwd` (`./mine.js#name` picks one descriptor when the module has several for the port), and picks from its
- * `adapters` export the descriptor with that name that fills the port.
+ * Imports `@agent-plexus/adapters/<name>` as an `import` written in the config's directory would, so the package
+ * installed next to the config is the one used whichever copy of the core runs (an `npx` or global CLI has its own,
+ * elsewhere); only when no copy is installed there, from the core's own location, which keeps a checkout and its
+ * `--conditions` working. A package next to the config that does not export the name is an error, not a fallback.
+ */
+async function importAdapter(name: string, cwd: string): Promise<Record<string, unknown>> {
+  const specifier = `${ADAPTERS_PACKAGE}/${name}`;
+  return (await import(resolveInstalled(specifier, cwd) ?? specifier)) as Record<string, unknown>;
+}
+
+/**
+ * Imports `@agent-plexus/adapters/<name>` (`importAdapter`), or, for a name starting with `.` or `/`, the module at that
+ * path relative to `cwd` (`./mine.js#name` picks one descriptor when the module has several for the port), and picks
+ * from its `adapters` export the descriptor with that name that fills the port.
  */
 export const loadDescriptor: DescriptorLoader = async (fills, name, cwd) => {
   const [target = name, wanted] = isPath(name) ? name.split('#') : [name];
   const file = resolve(cwd, target);
-  const specifier = isPath(name) ? pathToFileURL(file).href : `${ADAPTERS_PACKAGE}/${name}`;
   let mod: Record<string, unknown>;
   try {
-    mod = (await import(specifier)) as Record<string, unknown>;
+    mod = isPath(name) ? ((await import(pathToFileURL(file).href)) as Record<string, unknown>) : await importAdapter(name, cwd);
   } catch (err) {
-    throw new Error(isPath(name) ? moduleProblem(err, file, target) : packageProblem(err, name));
+    throw new Error(isPath(name) ? moduleProblem(err, file, target) : packageProblem(err, name, cwd));
   }
   if (!Array.isArray(mod.adapters)) throw new Error('module has no "adapters" export (an array of descriptors)');
   const all = (mod.adapters as AdapterDescriptor[]).filter((d) => isPlainObject(d));

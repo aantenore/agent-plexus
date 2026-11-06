@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { checkDescriptor, compatiblePortVersion, defineAdapter, type AdapterDescriptor } from '../src/adapter.ts';
 import { AdapterError } from '../src/errors.ts';
 import { PORT_VERSIONS } from '../src/ports.ts';
 import { prototypeHost } from '../src/prototype-host.ts';
-import { createAdapter, descriptorsOf, pluginLoader, type DescriptorLoader } from '../src/resolve.ts';
+import { createAdapter, descriptorsOf, loadDescriptor, pluginLoader, type DescriptorLoader } from '../src/resolve.ts';
 
 const member = (extra: Record<string, unknown> = {}) => ({
   fills: 'MemberPort', name: 'm', maps: { technology: 'test' }, portVersion: PORT_VERSIONS.MemberPort, tiers: ['prototype'],
@@ -137,4 +139,56 @@ test('portVersion is required by the type for a port and optional for a host; lo
   assert.deepEqual(checkDescriptor(unversioned), ['portVersion is required (the core implements RegistryPort 0.1.0)']);
   const host = defineAdapter({ fills: 'Host', name: 'h', maps: { technology: 't' }, tiers: ['prototype'], create });
   assert.deepEqual(checkDescriptor(host), []);
+});
+
+/** The module text of an adapters package subpath: one plain MemberPort descriptor named `name`. */
+const subpathModule = (name: string, technology: string) =>
+  `export const adapters = [{ fills: 'MemberPort', name: '${name}', maps: { technology: '${technology}' }, portVersion: '0.1.0', tiers: ['prototype'], create: (o, ctx) => ({ name: ctx.name }) }];`;
+
+test('loadDescriptor finds @agent-plexus/adapters next to the config first, and falls back on the core\'s own copy', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-adapters-'));
+  try {
+    // Nothing installed next to the config: the package the core sees (this checkout's) is used.
+    assert.equal((await loadDescriptor('MemberPort', 'function-member', dir)).name, 'function-member');
+    await assert.rejects(loadDescriptor('MemberPort', 'does-not-exist', dir), /is not one of @agent-plexus\/adapters/);
+
+    await installed(dir, '@agent-plexus/adapters', { type: 'module', exports: { './fake-member': './fake-member.mjs', './function-member': './function-member.mjs' } }, {
+      'fake-member.mjs': subpathModule('fake-member', 'local'),
+      'function-member.mjs': subpathModule('function-member', 'local copy'),
+    });
+    assert.equal((await loadDescriptor('MemberPort', 'fake-member', dir)).maps.technology, 'local');
+    // The copy next to the config wins over the one next to the core.
+    assert.equal((await loadDescriptor('MemberPort', 'function-member', dir)).maps.technology, 'local copy');
+    // A name the local package does not export is not looked up next to the core.
+    await assert.rejects(loadDescriptor('MemberPort', 'static-registry', dir), /is not one of @agent-plexus\/adapters \(name another adapter/);
+    await assert.rejects(loadDescriptor('RegistryPort', 'fake-member', dir), /fills MemberPort, expected RegistryPort/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadDescriptor names both places when @agent-plexus/adapters is installed in neither', async () => {
+  // A copy of the core's sources outside this checkout, so Node finds no node_modules from it either.
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-no-adapters-'));
+  try {
+    const src = join(dir, 'core', 'src');
+    await cp(fileURLToPath(new URL('../src/', import.meta.url)), src, { recursive: true });
+    const project = join(dir, 'project');
+    await mkdir(project);
+    const script = join(dir, 'load.mjs');
+    await writeFile(script, `
+import { loadDescriptor } from ${JSON.stringify(join(src, 'resolve.ts'))};
+try {
+  await loadDescriptor('MemberPort', 'function-member', ${JSON.stringify(project)});
+  console.log('loaded');
+} catch (err) {
+  console.log(err.message);
+}
+`);
+    const res = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', script], { encoding: 'utf8' });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout.trim(), `is not installed next to the config (${project}) or next to @agent-plexus/core (npm install @agent-plexus/adapters)`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

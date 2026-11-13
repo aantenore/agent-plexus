@@ -32,12 +32,15 @@ The adapter `a2a-member` applies these rules before and during every call to a r
   in `allowedEndpoints`; otherwise the call is refused unless `endpoint` is set. A card cannot send the credential to
   another host.
 - **https.** Required, except loopback or with `allowHttp`. A URL with embedded credentials is refused.
-- **Private addresses.** Private, loopback, link-local and unique-local hosts are refused unless that origin is configured.
+- **Private addresses.** Only public unicast addresses are let through: every special-purpose IPv4 range and every IPv6
+  address outside global unicast is refused unless that origin is configured, and an IPv6 wrapper of an IPv4 address
+  (mapped, compatible, NAT64 `64:ff9b::/96`, 6to4) is judged by the address inside. The ranges are listed in the
+  [adapter's README](../../packages/adapters/src/a2a-member/README.md#security).
 - **Host names.** Resolved when the connection opens; the call is refused when any resolved address is private, and the
   socket connects to the addresses that were checked, so a second resolution cannot change the answer. A configured name
   other than `localhost` may resolve to a private address only with `allowPrivateDns`. With that option the name is
-  trusted wherever it resolves, and addresses behind an outbound proxy or a NAT64 gateway are not seen: restrict egress
-  at the network level too.
+  trusted wherever it resolves. Behind an outbound proxy the check sees the proxy's address and the proxy resolves the
+  name again; a NAT64 gateway with a prefix of its own is not recognised. Restrict egress at the network level too.
 - **No redirects** on the card, the key set or any call.
 - **Card fetch.** No credential and no static headers; size bounded by its option `maxCardBytes`; cached for its
   option `cardTtlMs`.

@@ -15,7 +15,10 @@ Every package under `packages/*` is released with the same version. See [RELEASI
 
 - `a2a-member` resolves host names when it connects and refuses a name that resolves to a private, loopback,
   link-local or unique-local address (IPv4-mapped IPv6 included); until now only addresses written literally in a URL
-  were checked. The connection uses the addresses that were checked. An agent on an internal network that is reached by
+  were checked. Only public unicast addresses pass: all special-purpose IPv4 and IPv6 ranges are refused, and an IPv6
+  wrapper of an IPv4 address (mapped, compatible, NAT64, 6to4) is judged by the address inside, for literal addresses
+  too. The connection uses the addresses that were checked; behind an outbound proxy that is the proxy's address, so
+  egress still has to be restricted at the network level. An agent on an internal network that is reached by
   name now needs the new option `allowPrivateDns: true`; literal private addresses and `localhost` in configured URLs
   work as before.
 

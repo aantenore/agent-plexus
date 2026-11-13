@@ -136,15 +136,22 @@ endpoint rule.
   `allowedEndpoints`; otherwise the call is refused unless `endpoint` is set. A card cannot send the credential to
   another host.
 - **https.** Required, except loopback, or with `allowHttp`. A URL with embedded credentials is refused.
-- **Private addresses.** Private, loopback, link-local (the cloud metadata address `169.254.169.254` among them) and
-  unique-local hosts, IPv4-mapped IPv6 included, are refused unless that origin is configured (`url`, `endpoint`,
-  `allowedEndpoints`, or the JWKS URL).
+- **Private addresses.** Only public unicast addresses are let through. Every special-purpose IPv4 range (this
+  network, private, shared, loopback, link-local with the cloud metadata address `169.254.169.254`, protocol
+  assignments, documentation, benchmarking, multicast, reserved, broadcast) is refused, and so is every IPv6 address
+  outside global unicast `2000::/3` (unspecified, loopback, unique-local, link-local, multicast, discard, NAT64
+  local-use) or inside `2001::/23` (Teredo among them), `2001:db8::/32` and `3fff::/20`. An IPv6 address that wraps an
+  IPv4 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`) is judged by the address inside.
+  A refused address is accepted only when that origin is configured (`url`, `endpoint`, `allowedEndpoints`, or the JWKS
+  URL).
 - **Host names.** A host name is resolved when the connection opens, and the call is refused when any address it
   resolves to is private, so a public name cannot point the member inside. The socket connects to the addresses that
   were checked: there is no second resolution to change the answer in between. `localhost` names follow the rule
   above; any other configured name may resolve to a private address only with `allowPrivateDns`.
-  Limits: with `allowPrivateDns` a configured name is trusted wherever it resolves; an address reached through an
-  outbound proxy or a NAT64 gateway is not seen. Restrict egress at the network level too.
+  Limits: with `allowPrivateDns` a configured name is trusted wherever it resolves. The check sees the address the
+  socket connects to: behind an outbound proxy (a transparent one, or one the runtime is told to use) that is the
+  proxy, and the proxy resolves the name again on its own. A NAT64 gateway with a prefix of its own, not `64:ff9b::/96`,
+  is not recognised as a wrapper. Restrict egress at the network level too.
 - **No redirects** on the card, the key set or any call.
 - **Answer size.** The body of a JSON-RPC answer is read up to `maxResponseBytes`; a larger one fails the call with a
   fixed detail.

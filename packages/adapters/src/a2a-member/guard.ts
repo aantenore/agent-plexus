@@ -2,7 +2,7 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { Agent as HttpAgent, request as httpRequest, type IncomingMessage } from 'node:http';
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https';
-import type { LookupFunction } from 'node:net';
+import { BlockList, isIP, type LookupFunction } from 'node:net';
 import { Readable } from 'node:stream';
 
 /** Raised for a target or a card the rules refuse. The message is fixed text: it never carries remote content. */
@@ -10,20 +10,73 @@ export class Refused extends Error {
   override name = 'Refused';
 }
 
-function privateV4(a: number, b: number): boolean {
-  return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+/** IPv4 ranges that are not public unicast (the IANA special-purpose registry, multicast and the reserved top). */
+const SPECIAL_V4 = [
+  '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.0.0.0/24', '192.0.2.0/24',
+  '192.88.99.0/24', '192.168.0.0/16', '198.18.0.0/15', '198.51.100.0/24', '203.0.113.0/24', '224.0.0.0/4', '240.0.0.0/4',
+];
+/** IPv6 global unicast: an address outside it (loopback, unique-local, link-local, multicast, NAT64 local-use, discard) is refused. */
+const GLOBAL_V6 = ['2000::/3'];
+/** Ranges inside global unicast that are not: IETF protocol assignments (Teredo, ORCHID, benchmarking) and documentation. */
+const SPECIAL_V6 = ['2001::/23', '2001:db8::/32', '3fff::/20'];
+
+function blockList(subnets: readonly string[], family: 'ipv4' | 'ipv6'): BlockList {
+  const list = new BlockList();
+  for (const subnet of subnets) {
+    const [network, prefix] = subnet.split('/');
+    list.addSubnet(network!, Number(prefix), family);
+  }
+  return list;
+}
+const specialV4 = blockList(SPECIAL_V4, 'ipv4');
+const globalV6 = blockList(GLOBAL_V6, 'ipv6');
+const specialV6 = blockList(SPECIAL_V6, 'ipv6');
+
+/** The eight 16-bit words of an IPv6 address that `isIP` accepted, without its zone. */
+function wordsV6(address: string): number[] {
+  const dotted = /^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(address);
+  const hex = (high: string, low: string): string => ((Number(high) << 8) | Number(low)).toString(16);
+  const text = dotted ? `${dotted[1]}${hex(dotted[2]!, dotted[3]!)}:${hex(dotted[4]!, dotted[5]!)}` : address;
+  const [head = '', tail] = text.split('::');
+  const before = head ? head.split(':') : [];
+  const after = tail ? tail.split(':') : [];
+  const gap = tail === undefined ? 0 : 8 - before.length - after.length;
+  return [...before, ...new Array<string>(gap).fill('0'), ...after].map((word) => parseInt(word, 16));
 }
 
-/** Loopback, private, link-local and unspecified addresses, and `localhost` names, as a URL writes them or as DNS gives them. */
+/**
+ * The IPv4 address an IPv6 address carries, when it is a wrapper of one: IPv4-mapped (`::ffff:0:0/96`), IPv4-compatible
+ * (`::/96`, so `::` and `::1` too), NAT64 (`64:ff9b::/96`) or 6to4 (`2002::/16`). A connection to the wrapper ends at
+ * the address inside.
+ */
+function embeddedV4(words: readonly number[]): string | undefined {
+  const dotted = (high: number, low: number): string => `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+  const zero = (from: number, to: number): boolean => words.slice(from, to).every((word) => word === 0);
+  if (zero(0, 5) && (words[5] === 0xffff || words[5] === 0)) return dotted(words[6]!, words[7]!);
+  if (words[0] === 0x64 && words[1] === 0xff9b && zero(2, 6)) return dotted(words[6]!, words[7]!);
+  if (words[0] === 0x2002) return dotted(words[1]!, words[2]!);
+  return undefined;
+}
+
+/**
+ * Whether an IP address is anything but public unicast: only those are let through, so a range this does not know is
+ * refused. An IPv6 wrapper of an IPv4 address is judged by the address inside. Text that is not an address is special.
+ */
+export function isSpecialAddress(address: string): boolean {
+  const text = address.split('%')[0]!;
+  const family = isIP(text);
+  if (family === 4) return specialV4.check(text, 'ipv4');
+  if (family !== 6) return true;
+  const inner = embeddedV4(wordsV6(text));
+  if (inner !== undefined) return specialV4.check(inner, 'ipv4');
+  return !globalV6.check(text, 'ipv6') || specialV6.check(text, 'ipv6');
+}
+
+/** `localhost` names, and addresses that are not public unicast (`isSpecialAddress`), as a URL writes them or as DNS gives them. */
 export function isPrivateHost(hostname: string): boolean {
   const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (h === 'localhost' || h.endsWith('.localhost')) return true;
-  const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(h.replace(/^::ffff:/, ''));
-  if (v4) return privateV4(Number(v4[1]), Number(v4[2]));
-  // IPv4-mapped IPv6 in the hex form the URL parser writes, e.g. `::ffff:7f00:1`
-  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
-  if (mapped) return privateV4(parseInt(mapped[1]!, 16) >> 8, parseInt(mapped[1]!, 16) & 0xff);
-  return h === '::1' || h === '::' || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe[89ab][0-9a-f]:/.test(h);
+  return isIP(h.split('%')[0]!) !== 0 && isSpecialAddress(h);
 }
 
 export function isLoopback(hostname: string): boolean {
@@ -75,7 +128,7 @@ export async function resolveTarget(url: URL, rules: TargetRules, family?: numbe
   const addresses = await (rules.resolve ?? systemResolver)(url.hostname.replace(/^\[|\]$/g, ''), family);
   if (addresses.length === 0) throw new Refused('the host name has no address');
   const mayBePrivate = rules.configured.has(url.origin) && (rules.allowPrivateDns === true || isPrivateHost(url.hostname));
-  if (!mayBePrivate && addresses.some((a) => isPrivateHost(a.address))) {
+  if (!mayBePrivate && addresses.some((a) => isSpecialAddress(a.address))) {
     throw new Refused('the host name resolves to a private address; set allowPrivateDns to allow it for configured origins');
   }
   return addresses;

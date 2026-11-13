@@ -1,7 +1,7 @@
 # Guide
 
 How to start a system, write a member, write an adapter, add a host, configure a system, and move it from prototype to
-production. Concepts are in [architecture.md](architecture.md). Packages are at version 0.2.0; the examples below work
+production. Concepts are in [architecture.md](architecture.md). Packages are at version 0.3.0; the examples below work
 inside this repository.
 
 ## Use it from npm

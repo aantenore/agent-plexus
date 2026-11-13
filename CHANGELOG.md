@@ -2,31 +2,47 @@
 
 Every package under `packages/*` is released with the same version. See [RELEASING.md](RELEASING.md).
 
-## Unreleased
+## 0.3.0 - 2026-11-13
 
 ### Added
 
 - `HopRecord.inputFrom` and `CallOptions.inputFrom`: the ids of the hops whose output was a call's input (empty for the
   caller's input, absent when the topology does not say). `basic-topology` fills it for every kind, and
-  `rule-attribution` follows it to find the upstream member of a `guard_block`, so a `parallel` or `graph` run no longer
-  blames whichever hop happened to come before in the record. Records without the field are read as before.
+  `rule-attribution` follows these data-flow edges to find the upstream member of a `guard_block`, so a `parallel` or
+  `graph` run no longer blames whichever hop happened to come before in the record. Records without the field fall back
+  to record order, as before.
+- Option `allowPrivateDns` of `a2a-member` (default `false`): lets configured names that resolve to private addresses
+  be reached. See "Changed".
+- A fourth case in the offline example eval, `billing-wrong-answer`: an answer that misses what the case expects of
+  member `billing` is attributed to layer `member`, member `billing`. The offline `eval` now reports `2 passed, 2 failed`
+  (exit 1).
 
 ### Changed
 
-- `a2a-member` resolves host names when it connects and refuses a name that resolves to a private, loopback,
-  link-local or unique-local address (IPv4-mapped IPv6 included); until now only addresses written literally in a URL
-  were checked. Only public unicast addresses pass: all special-purpose IPv4 and IPv6 ranges are refused, and an IPv6
-  wrapper of an IPv4 address (mapped, compatible, NAT64, 6to4) is judged by the address inside, for literal addresses
-  too. The connection uses the addresses that were checked; behind an outbound proxy that is the proxy's address, so
-  egress still has to be restricted at the network level. An agent on an internal network that is reached by
-  name now needs the new option `allowPrivateDns: true`; literal private addresses and `localhost` in configured URLs
-  work as before.
+- BEHAVIOUR CHANGE: `a2a-member` sends member requests through a guarded fetch that resolves host names when it connects
+  and refuses a name that resolves to a non-public address; until now only addresses written literally in a URL were
+  checked. Only public unicast addresses pass: all special-purpose IPv4 and IPv6 ranges are refused, and an IPv6 wrapper
+  of an IPv4 address (mapped, compatible, NAT64, 6to4) is judged by the address inside, for literal addresses too, so a
+  wrapper of a public IPv4 address passes. The connection uses the addresses that were checked; behind an outbound proxy
+  that is the proxy's address, so egress still has to be restricted at the network level. A configured name other than
+  `localhost` that resolves to a private address (an agent on an internal network reached by name) is now refused unless
+  `allowPrivateDns: true` is set; literal private addresses and `localhost` in configured URLs work as before.
+- BEHAVIOUR CHANGE: a `plugins` entry (or any import specifier of the config) written as a URL with a scheme other than
+  `file:` (`data:`, `http:`, `https:`, `node:` and so on) is refused with `a "<scheme>:" URL is not accepted as a
+  module: name a file path or a package` instead of being imported: a config names code only as a file path or an
+  installed package.
+- README and docs describe failure attribution as deterministic rules and state its limits: hard failures (crash,
+  timeout, deny, hop limit, no route) are exact, a wrong answer from a run that completed is a low-confidence guess at
+  the last hop. They also state that bounds travel over A2A as the `bounds-v1` extension: a peer that implements it
+  enforces them, any other A2A peer gets a timeout on the caller's side only.
+- `docs/product.md` lists alternatives for failure attribution on agent traces (ag2tracer, AgentDebugX, the Who&When
+  benchmark), marked as not evaluated, and words the comparison without claiming that nothing else covers it.
+- The optional peer range of `@agent-plexus/adapters` on `@agent-layers/core` is `^0.4.0 || ^0.5.0`.
 
 ### Fixed
 
-- A `plugins` entry written as a URL (`data:`, `http:`, `https:`, `node:` or any scheme other than `file:`) is refused
-  with `a "<scheme>:" URL is not accepted as a module: name a file path or a package` instead of being imported: a
-  config names code only as a file path or an installed package.
+- When the record handed to attribution is over `limits.attribution.maxRecords`, it is cut to its head and its tail (the
+  first and the last half) instead of its first hops only, so the failing last hop is no longer dropped.
 - A command that needs a config (`check`, `run`, `resume`, `cancel`, `eval`, `dev`) in a folder without `plexus.json`, or
   with a `--config` that does not exist, prints `no config at <path>` with the hint to run `agent-plexus init` or pass
   `--config <file>`, and exits `2`, instead of a raw `ENOENT` and exit `1`.

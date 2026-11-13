@@ -73,7 +73,7 @@ package can hit it: wait and run the release again, it publishes only what is mi
   provides. `agent-plexus` has no build: its `cli.js` is published as is.
 - `@agent-plexus/adapters` declares the libraries of single adapters (`@a2a-js/sdk`, `@agent-layers/core`) as optional
   peer dependencies, and as dev dependencies for its tests. The agent-layers packages are published separately from the
-  agent-layers repository; their range (`^0.4.0`) moves when agent-layers changes its minor.
+  agent-layers repository; their range (`^0.4.0 || ^0.5.0`) moves when agent-layers changes its minor.
 - 0.2.0 replaces the nine `@agent-plexus/adapter-<name>` packages (0.1.0) with `@agent-plexus/adapters`; see
   [CHANGELOG.md](CHANGELOG.md). The old packages are deprecated on npm, for example
   `npm deprecate @agent-plexus/adapter-skill-router "moved to @agent-plexus/adapters/skill-router"`.

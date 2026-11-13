@@ -1,6 +1,6 @@
 {
   "name": "@agent-plexus/example-adapter-template",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Copyable skeleton of an agent-plexus adapter package",
   "keywords": ["agent-plexus", "agent-plexus-adapter"],
   "homepage": "https://github.com/aantenore/agent-plexus/tree/main/examples/adapter-template#readme",
@@ -35,11 +35,11 @@
     "prepack": "npm run build && node ../../scripts/copy-license.mjs"
   },
   "peerDependencies": {
-    "@agent-plexus/core": "^0.2.1"
+    "@agent-plexus/core": "^0.3.0"
   },
   "devDependencies": {
-    "@agent-plexus/conformance": "0.2.1",
-    "@agent-plexus/core": "0.2.1",
+    "@agent-plexus/conformance": "0.3.0",
+    "@agent-plexus/core": "0.3.0",
     "@types/node": "^24.19.0",
     "typescript": "^7.0.2"
   }

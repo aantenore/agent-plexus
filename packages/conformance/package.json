@@ -1,6 +1,6 @@
 {
   "name": "@agent-plexus/conformance",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Conformance suites for agent-plexus ports and host hooks: prove an adapter behaves",
   "keywords": ["agent-plexus", "agents", "multi-agent", "conformance", "testing", "ports-and-adapters", "agent-orchestration"],
   "homepage": "https://github.com/aantenore/agent-plexus/tree/main/packages/conformance#readme",
@@ -38,7 +38,7 @@
     "postpack": "node ../../scripts/pack-manifest.mjs restore"
   },
   "dependencies": {
-    "@agent-plexus/core": "^0.2.1"
+    "@agent-plexus/core": "^0.3.0"
   },
   "devDependencies": {
     "@types/node": "^24.19.0",

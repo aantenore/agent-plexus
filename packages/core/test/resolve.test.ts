@@ -4,7 +4,7 @@ import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { checkDescriptor, compatiblePortVersion, defineAdapter, type AdapterDescriptor } from '../src/adapter.ts';
 import { AdapterError } from '../src/errors.ts';
 import { PORT_VERSIONS } from '../src/ports.ts';
@@ -85,6 +85,35 @@ test('pluginLoader: plugin descriptors first, by port and name; other names fall
     assert.equal((await load('MemberPort', 'elsewhere', dir)).name, 'elsewhere');
     assert.deepEqual(fallbackCalls, ['MemberPort/elsewhere']);
     await assert.rejects(pluginLoader(['./missing.mjs'], fallback)('MemberPort', 'x', dir), /plugin "\.\/missing\.mjs" failed to load/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('pluginLoader refuses a plugin named by a URL that is not a file: data, http, https, node and any other scheme', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'plexus-plugins-'));
+  try {
+    const descriptor = `{ fills: 'MemberPort', name: 'm', maps: { technology: 't' }, portVersion: '0.1.0', tiers: ['prototype'], create: () => ({ name: 'm' }) }`;
+    const urls = [
+      `data:text/javascript,export const adapters = [${encodeURIComponent(descriptor)}];`,
+      'DATA:text/javascript,export default 1',
+      'http://example.com/adapters.mjs',
+      'https://example.com/adapters.mjs',
+      'node:fs',
+      'blob:nodedata:1',
+    ];
+    for (const url of urls) {
+      const scheme = url.slice(0, url.indexOf(':')).toLowerCase();
+      await assert.rejects(
+        pluginLoader([url], async () => member() as AdapterDescriptor)('MemberPort', 'm', dir),
+        (err: Error) => err.message.includes(`a "${scheme}:" URL is not accepted as a module: name a file path or a package`),
+        url,
+      );
+    }
+    // a file path, also written as a file: URL, still loads
+    await writeFile(join(dir, 'local.mjs'), `export const adapters = [${descriptor}];`);
+    assert.equal((await pluginLoader(['./local.mjs'])('MemberPort', 'm', dir)).name, 'm');
+    assert.equal((await pluginLoader([pathToFileURL(join(dir, 'local.mjs')).href])('MemberPort', 'm', dir)).name, 'm');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

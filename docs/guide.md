@@ -352,7 +352,8 @@ An `adapter` value is resolved in this order:
 `plugins` lists modules, packages or paths, resolved as an `import` written in the config's directory would be: a path
 relative to it, or a package installed in a `node_modules` above it, through its `exports` with the import conditions
 (`node`, `import`, the `--conditions` of the process, `default`), so an ESM-only package works and a dual package loads
-its ESM entry. A package that is not installed there is an error; it is never looked up elsewhere. A plugin exports
+its ESM entry. A package that is not installed there is an error; it is never looked up elsewhere. A URL is refused
+(`data:`, `http:`, `https:`, `node:` and any scheme other than `file:`). A plugin exports
 descriptors in `adapters`, `default` (a CommonJS `module.exports` object is searched too) or any named export, alone or
 in an array:
 

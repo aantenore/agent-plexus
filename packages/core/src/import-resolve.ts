@@ -7,7 +7,8 @@ import { isPlainObject } from './util.ts';
  * Resolves a module specifier as an `import` written in `dir` would: a path relative to `dir`, or a package installed
  * in a `node_modules` above it (or `dir`'s own package, by its name), through its `exports` with the conditions of an
  * import (`node`, `import`, `module-sync`, those given with `--conditions`, `default`) or its `main`. Never falls back to
- * another directory. Throws when the module cannot be resolved.
+ * another directory. Throws when the module cannot be resolved, and for a URL other than `file:` (`data:`, `http:`,
+ * `https:`, `node:` and any other scheme): a config never names code that is not a file of the project or of a package.
  */
 export function resolveImport(specifier: string, dir: string): string {
   const found = resolveInstalled(specifier, dir);
@@ -17,12 +18,14 @@ export function resolveImport(specifier: string, dir: string): string {
 
 /**
  * `resolveImport` for a package that may not be installed where `dir` is: undefined then, so the caller can look
- * elsewhere. Any other problem throws: not a package name, a subpath the package does not export (the error carries
+ * elsewhere. Any other problem throws: a URL that is not `file:`, not a package name, a subpath the package does not export (the error carries
  * Node's own code for it, `ERR_PACKAGE_PATH_NOT_EXPORTED`), a target file that does not exist.
  */
 export function resolveInstalled(specifier: string, dir: string): string | undefined {
   if (specifier.startsWith('.') || isAbsolute(specifier)) return pathToFileURL(resolve(dir, specifier)).href;
-  if (/^[a-z][a-z\d+.-]*:/i.test(specifier)) return specifier;
+  const scheme = /^([a-z][a-z\d+.-]*):/i.exec(specifier)?.[1]?.toLowerCase();
+  if (scheme === 'file') return specifier;
+  if (scheme !== undefined) throw new Error(`a "${scheme}:" URL is not accepted as a module: name a file path or a package`);
   const parsed = splitSpecifier(specifier);
   if (!parsed) throw new Error(`"${specifier}" is not a package name`);
   const found = findPackage(parsed.name, dir);

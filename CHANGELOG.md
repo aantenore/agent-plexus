@@ -21,6 +21,9 @@ Every package under `packages/*` is released with the same version. See [RELEASI
 
 ### Fixed
 
+- A `plugins` entry written as a URL (`data:`, `http:`, `https:`, `node:` or any scheme other than `file:`) is refused
+  with `a "<scheme>:" URL is not accepted as a module: name a file path or a package` instead of being imported: a
+  config names code only as a file path or an installed package.
 - A command that needs a config (`check`, `run`, `resume`, `cancel`, `eval`, `dev`) in a folder without `plexus.json`, or
   with a `--config` that does not exist, prints `no config at <path>` with the hint to run `agent-plexus init` or pass
   `--config <file>`, and exits `2`, instead of a raw `ENOENT` and exit `1`.

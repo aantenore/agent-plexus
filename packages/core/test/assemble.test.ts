@@ -249,6 +249,15 @@ test('only the last 100 runs are kept for attribution', async () => {
   assert.equal(attributions[0]?.evidence[0], 'source:0');
 });
 
+test('over limits.attribution.maxRecords the failing last hop is still attributed', async () => {
+  const { system } = await build({ topology: { kind: 'sequence', steps: ['triage'] }, limits: { attribution: { maxRecords: 3 } } });
+  const run = await system.run('x');
+  const hop = run.record[0]!;
+  const record = Array.from({ length: 6 }, (_, i) => ({ ...hop, hopId: `h${i}`, status: i === 5 ? ('stopped' as const) : ('completed' as const) }));
+  const attributions = await system.attribute({ ...run, status: 'stopped', record });
+  assert.equal(attributions[0]?.hopId, 'h5');
+});
+
 test('a topology that throws becomes a failed result in the topology layer', async () => {
   const { system } = await build({ topology: { kind: 'sequence', steps: ['triage', { kind: 'route', candidates: ['billing'], router: 'nope' }] } });
   const res = await system.run('hi');

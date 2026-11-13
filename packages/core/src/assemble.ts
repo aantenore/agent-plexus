@@ -642,7 +642,11 @@ export async function assemble(config: ResolvedConfig, opts: AssembleOptions = {
     },
     entries,
     async attribute(result, scores = []) {
-      const found = await attribution.attribute({ record: result.record.slice(0, limitNumber(limits.maxRecords)), result, scores, source });
+      // Over the cap, keep the first hops and the last ones: a run stops at its failing hop, so the tail decides.
+      const max = limitNumber(limits.maxRecords);
+      const { record } = result;
+      const kept = record.length <= max ? record : [...record.slice(0, max - Math.ceil(max / 2)), ...record.slice(record.length - Math.ceil(max / 2))];
+      const found = await attribution.attribute({ record: kept, result, scores, source });
       for (const a of found) host.telemetry.metric(METRIC.attributions, 1, { [ATTR.layer]: a.layer, [ATTR.member]: a.member });
       return found;
     },

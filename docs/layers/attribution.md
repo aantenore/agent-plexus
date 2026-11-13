@@ -58,7 +58,7 @@ records beat log text. See [research/protocols.md](../research/protocols.md).
   hop before it, as long as that hop's output is the echoing hop's input, and stops at the first hop that added text or
   at the caller's input. The adapter compares texts and never copies them into evidence. Without `text`, or when a
   read fails, the previous completed hop is blamed.
-- `system.attribute` reads at most `limits.attribution.maxRecords` records and gives the adapter an in-memory record
+- `system.attribute` reads at most `limits.attribution.maxRecords` records (over the cap, the first half and the last half of the record) and gives the adapter an in-memory record
   source, `memory`, of the last `limits.attribution.historyRuns` runs (default 100). It has records only; member spans need a trace-backed source (planned).
 
 ## Rules of `rule-attribution`

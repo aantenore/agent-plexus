@@ -33,7 +33,7 @@ A `RecordSource` is an interface inside this layer, not a port: `records(rootRun
   used before `memberLayer`; core `memberLayerOf` reads both).
 - `evidence` holds short identifiers (codes, hop ids, node paths), never texts.
 - Waiting is not a failure: `needs_input`, a member's `needs_auth` and `aborted` give no attribution.
-- The core passes at most `limits.attribution.maxRecords` records, and an in-memory source of recent runs.
+- The core passes at most `limits.attribution.maxRecords` records (over the cap, the first half and the last half of the record), and an in-memory source of recent runs.
 
 ## Errors
 

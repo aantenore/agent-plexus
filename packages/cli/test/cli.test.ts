@@ -176,7 +176,9 @@ test('eval passes two cases, fails and attributes the crash, and exits 1', async
   assert.match(c.out(), /^PASS product-setup$/m);
   assert.match(c.out(), /^FAIL billing-crash$/m);
   assert.match(c.out(), /^ {2}attribution member billing 0\.60 code:error/m);
-  assert.match(c.out(), /eval: 2 passed, 1 failed$/);
+  assert.match(c.out(), /^FAIL billing-wrong-answer$/m);
+  assert.match(c.out(), /^ {2}attribution member billing 0\.60 expectation:member/m);
+  assert.match(c.out(), /eval: 2 passed, 2 failed$/);
 });
 
 test('eval --json is machine output', async () => {
@@ -184,7 +186,7 @@ test('eval --json is machine output', async () => {
   assert.equal(await main(['eval', '--json', CASES], c.io), 1);
   const report = JSON.parse(c.out());
   assert.equal(report.passed, 2);
-  assert.equal(report.failed, 1);
+  assert.equal(report.failed, 2);
   const crash = report.cases.find((x: { id: string }) => x.id === 'billing-crash');
   assert.equal(crash.passed, false);
   assert.equal(crash.status, 'stopped');
@@ -428,7 +430,7 @@ test('init writes the starter into an empty folder; check passes and eval attrib
     assert.match(check.out(), /check passed$/);
     const ev = captureIo(dir);
     assert.equal(await main(['eval', 'cases.json'], ev.io), 1, ev.err());
-    assert.match(ev.out(), /FAIL billing-crash[\s\S]*attribution member billing [\s\S]*eval: 2 passed, 1 failed$/);
+    assert.match(ev.out(), /FAIL billing-crash[\s\S]*attribution member billing [\s\S]*eval: 2 passed, 2 failed$/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

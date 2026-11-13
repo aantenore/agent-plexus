@@ -22,5 +22,12 @@
       "output": { "contains": "Billing:" },
       "members": { "billing": { "status": "completed" } }
     }
+  },
+  {
+    "id": "billing-wrong-answer",
+    "input": "Why is there a charge on my invoice?",
+    "expected": {
+      "members": { "billing": { "contains": "refunds are issued" } }
+    }
   }
 ]

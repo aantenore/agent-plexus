@@ -28,7 +28,7 @@ npx agent-plexus eval cases.json
 
 `init` writes the offline example into the folder and sets `"type": "module"` in `package.json`: the members are `.ts`
 ES modules that Node runs as they are. `check` passes; `run` prints the billing answer, with one line per hop on
-stderr; `eval` passes two cases and attributes the crash case to member `billing` (exit 1). Error messages and their
+stderr; `eval` passes two cases and attributes the crash and wrong-answer cases to member `billing` (exit 1). Error messages and their
 fixes: [docs/guide.md#troubleshooting](docs/guide.md#troubleshooting).
 
 **Why not LangGraph, Mastra or Microsoft Agent Framework?** They orchestrate agents of their own kind and own the
@@ -149,7 +149,7 @@ node --conditions=@agent-plexus/source packages/cli/src/cli.ts eval --config exa
 | `check` | The prototype config passes (exit 0). |
 | `run` | The billing answer on stdout, one line per hop on stderr (`triage completed`, `billing completed`). |
 | `check --profile production` | Exit 1: two FAIL, the prototype host and the prototype-only `memory-execution`. |
-| `eval` | Two cases pass; the crash case fails and is attributed to layer `member`, member `billing` (exit 1). |
+| `eval` | Two cases pass; the crash and wrong-answer cases fail and are attributed to layer `member`, member `billing` (exit 1). |
 
 `dev` runs each typed line as one run. The commands, options and exit codes are in [docs/guide.md](docs/guide.md#cli).
 The example is described in [examples/offline](examples/offline/README.md).

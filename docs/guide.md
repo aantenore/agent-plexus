@@ -571,7 +571,10 @@ FAIL billing-crash
   score expected.output 0 failed: contains
   score expected.member billing 0 failed: status
   attribution member billing 0.60 code:error,hop:<hopId>,node:root.steps[1]
-eval: 2 passed, 1 failed
+FAIL billing-wrong-answer
+  score expected.member billing 0 failed: contains
+  attribution member billing 0.60 expectation:member,hop:<hopId>,node:root.steps[1]
+eval: 2 passed, 2 failed
 ```
 
 The attribution rules are in [layers/attribution.md](layers/attribution.md).

@@ -8,9 +8,11 @@
 
 - **Any agent is a member, and the limits travel with every call.** A function, an agent-layers stack or any agent
   reachable over A2A joins one system through `plexus.json`; the deadline, the budget and the hop limit go along with
-  each member call, across frameworks and over the wire.
+  each member call, across frameworks. Over A2A they travel as a custom extension (`bounds-v1`): a peer that implements
+  it, today agent-layers, enforces them; any other A2A peer gets a timeout on the caller's side only.
 - **`eval` names the culprit.** A failed case is attributed to a member and a layer from the hop record of the run,
-  not left to a reading of logs.
+  using deterministic rules, not left to a reading of logs. Hard failures (crash, timeout, deny, hop limit, no route)
+  are exact; a wrong answer from a run that completed is a low-confidence guess at the last hop.
 - **The host keeps control.** Identity, policy, telemetry and scoring come from the host through four hooks; the core
   has zero dependencies and runs offline with prototype defaults.
 
@@ -33,8 +35,8 @@ fixes: [docs/guide.md#troubleshooting](docs/guide.md#troubleshooting).
 
 **Why not LangGraph, Mastra or Microsoft Agent Framework?** They orchestrate agents of their own kind and own the
 loop; across frameworks they meet over A2A without a shared deadline, budget or hop limit. agent-plexus sits between
-agents: an agent built with any of them is a member, every call is bounded the same way, and a failure is attributed
-to a member and a layer. Pick one of them when every agent is written in it; the named comparison is in
+agents: an agent built with any of them is a member, every call is bounded the same way (enforced by the peer only if
+it implements the `bounds-v1` extension), and a failure is attributed to a member and a layer by deterministic rules. Pick one of them when every agent is written in it; the named comparison is in
 [docs/product.md](docs/product.md#how-it-compares).
 
 ## What it is

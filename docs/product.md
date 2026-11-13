@@ -104,8 +104,9 @@ host. What it adds is the composition between agents. The landscape is in [resea
 
 ### Named alternatives
 
-As of November 2026. Each covers part of what agent-plexus does; none carries the deadline, budget and hop limit of a
-run across members of different frameworks and attributes a failure to a member and a layer.
+As of November 2026. Each covers part of what agent-plexus does; none that we know of carries the deadline, budget and hop limit of a
+run across members of different frameworks. Failure attribution on agent traces is a research and tooling area of its
+own, listed below.
 
 | Project | What it is | What agent-plexus adds | Pick it when |
 |---|---|---|---|
@@ -114,6 +115,9 @@ run across members of different frameworks and attributes a failure to a member 
 | a2a-mesh | Plumbing for agents that speak A2A: servers, clients, discovery | A topology over the agents, bounds that travel with each call, members that are not A2A agents (functions, agent-layers stacks) | Every agent already speaks A2A and you need the transport and discovery pieces |
 | LangGraph supervisor and swarm | Multi-agent patterns of LangGraph: a supervisor that hands work to agents, or agents that hand off to each other | Members from other frameworks under the same limits; one place where a failure is attributed | Every agent is a LangGraph graph and you want LangGraph's checkpoints and tooling |
 | Mastra supervisor | A Mastra agent that delegates to other Mastra agents | The same, for agents outside Mastra | Every agent is a Mastra agent in one TypeScript application |
+| ag2tracer (PyPI) | Attributes a failure in a multi-agent trace to an agent and a step (who and when); we have not evaluated it | Cheap deterministic rules at no model cost, bounds on every call; the rules catch hard failures only, so a wrong answer from a run that completed is a low-confidence guess | You need to find the responsible agent and step in a trace of a wrong answer |
+| AgentDebugX | A tool for failure attribution on agent traces; we have not evaluated it | The same: deterministic rules, hard failures only, plus the composition and the limits | You need trace-based diagnosis of failed multi-agent runs |
+| Who&When benchmark (arXiv 2505.00212) | A benchmark task for who and when failure attribution in multi-agent systems; the reference task, not a tool | Nothing: agent-plexus has not been scored on it, and its rules are not meant to solve it | You want to measure an attribution method |
 | Microsoft Agent Framework workflows | Graph workflows of agents and functions, with checkpoints and human approval, in .NET and Python | Members of any framework under shared limits; attribution | Your agents are built with Microsoft Agent Framework |
 
 **When not to use agent-plexus:** one framework and one team. If every agent is written in the same framework and

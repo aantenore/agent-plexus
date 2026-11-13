@@ -810,3 +810,46 @@ test('the bare handoff and delegate keys of 0.1.0 are still read (deprecated); t
   assert.deepEqual((await run(SUPERVISE, delegated.scope)).output, 'sup done');
   assert.deepEqual(delegated.calls.map((c) => c.member), ['sup', 'a', 'sup']);
 });
+
+const feeds = (calls: Call[]) => Object.fromEntries(calls.map((c) => [c.member, c.options.inputFrom]));
+
+test('calls name the hops whose output they receive: sequence, original input and loop', async () => {
+  const seq = fakeScope();
+  await run({ kind: 'sequence', steps: ['a', 'b', { kind: 'sequence', input: 'original', steps: ['c', 'd'] }] }, seq.scope);
+  assert.deepEqual(feeds(seq.calls), { a: [], b: ['h1'], c: [], d: ['h3'] });
+  const looped = fakeScope();
+  await run({ kind: 'loop', body: 'a', until: { matches: '^a\\(a\\(' } }, looped.scope);
+  assert.deepEqual(looped.calls.map((c) => c.options.inputFrom), [[], ['h1']]);
+});
+
+test('calls name the hops whose output they receive: parallel branches get the node\'s input, the merge every branch', async () => {
+  const { scope, calls } = fakeScope(async (member, input) => {
+    if (member === 'a') await tick();
+    return echo(member, input, { node: '' }, 0);
+  });
+  await run({ kind: 'sequence', steps: ['up', { kind: 'parallel', branches: ['a', { kind: 'sequence', steps: ['b', 'c'] }], merge: 'm' }, 'last'] }, scope);
+  const id = (member: string) => calls.find((c) => c.member === member)!.hopId;
+  const from = feeds(calls);
+  assert.deepEqual([from.up, from.a, from.b, from.c], [[], [id('up')], [id('up')], [id('b')]]);
+  assert.deepEqual(from.m, [id('a'), id('c')]);
+  assert.deepEqual(from.last, [id('m')]);
+  const joined = fakeScope();
+  await run({ kind: 'sequence', steps: [{ kind: 'parallel', branches: ['a', 'b'] }, 'last'] }, joined.scope);
+  assert.deepEqual(feeds(joined.calls).last, ['h1', 'h2']);
+});
+
+test('calls name the hops whose output they receive: route, handoff, supervise and graph', async () => {
+  const routed = fakeScope(echo, { route: () => ({ member: 'b' }) });
+  await run({ kind: 'sequence', steps: ['a', { kind: 'route', candidates: ['b'] }] }, routed.scope);
+  assert.deepEqual(feeds(routed.calls), { a: [], b: ['h1'] });
+  const handed = fakeScope((member) => ok(member, member === 'a' ? { ext: { 'plexus.handoff': 'b' } } : {}));
+  await run({ kind: 'handoff', start: 'a', members: ['a', 'b'] }, handed.scope);
+  assert.deepEqual(feeds(handed.calls), { a: [], b: ['h1'] });
+  let turn = 0;
+  const delegated = fakeScope((member) => (member === 'sup' && turn++ === 0 ? ok('plan', { ext: { 'plexus.delegate': { member: 'a' } } }) : ok(`${member} done`)));
+  await run(SUPERVISE, delegated.scope);
+  assert.deepEqual(delegated.calls.map((c) => c.options.inputFrom), [[], ['h1'], ['h2']]);
+  const walked = fakeScope();
+  await run({ kind: 'graph', start: 'x', nodes: { x: 'x', y: 'y' }, edges: [{ from: 'x', to: 'y' }], end: ['y'] }, walked.scope);
+  assert.deepEqual(feeds(walked.calls), { x: [], y: ['h1'] });
+});

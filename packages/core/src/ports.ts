@@ -62,6 +62,11 @@ export interface CallOptions {
   /** Topology path of the calling node, e.g. `root.steps[1]`. */
   node: string;
   parentHopId?: string;
+  /**
+   * Hop ids whose output is this call's input, kept in the hop record. Empty: the input is the caller's, no hop
+   * produced it. Omitted: the topology does not know.
+   */
+  inputFrom?: readonly string[];
   /** Fraction of the remaining budget to reserve (parallel branches); default: everything not reserved. */
   share?: number;
   signal?: AbortSignal;

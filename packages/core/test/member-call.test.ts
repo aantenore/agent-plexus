@@ -33,6 +33,15 @@ test('the record holds keys, not texts, and the hop span ends with status and co
   assert.equal(span.attrs['plexus.node.path'], 'root');
 });
 
+test('the record keeps the hops the topology named as the source of the input, and omits them when it named none', async () => {
+  const { record } = await call({ members: { m: () => completed('done') } });
+  assert.ok(!('inputFrom' in record));
+  const s = await setup({ members: { m: () => completed('done') } });
+  await memberCall(s.env, s.run, 'm', 'hello', { node: 'root', inputFrom: ['h1', 'h2'] });
+  await memberCall(s.env, s.run, 'm', 'hello', { node: 'root', inputFrom: [] });
+  assert.deepEqual(s.run.records.map((r) => r.inputFrom), [['h1', 'h2'], []]);
+});
+
 test('a put that fails is reported as plexus.execution.write_failed with the key put, never the text; the record keeps no key', async () => {
   const journal = memoryExecution();
   const begin = journal.begin.bind(journal);

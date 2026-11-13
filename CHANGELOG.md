@@ -4,6 +4,13 @@ Every package under `packages/*` is released with the same version. See [RELEASI
 
 ## Unreleased
 
+### Added
+
+- `HopRecord.inputFrom` and `CallOptions.inputFrom`: the ids of the hops whose output was a call's input (empty for the
+  caller's input, absent when the topology does not say). `basic-topology` fills it for every kind, and
+  `rule-attribution` follows it to find the upstream member of a `guard_block`, so a `parallel` or `graph` run no longer
+  blames whichever hop happened to come before in the record. Records without the field are read as before.
+
 ### Fixed
 
 - A command that needs a config (`check`, `run`, `resume`, `cancel`, `eval`, `dev`) in a folder without `plexus.json`, or

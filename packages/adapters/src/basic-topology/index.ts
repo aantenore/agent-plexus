@@ -14,6 +14,10 @@ interface Frame {
   hops?: string[];
 }
 
+/** The hops whose output is a node's input: empty for the caller's input, undefined when not known. */
+type From = readonly string[] | undefined;
+const CALLER: readonly string[] = [];
+
 const stopped = (code: string, layer: string, by?: string, detail?: string): MemberResult => ({
   status: 'stopped',
   output: '',
@@ -31,7 +35,16 @@ const routingFailed = (decision: RouteDecision): MemberResult => ({
 const namesWaiting = (condition: Condition): boolean =>
   condition.status === 'waiting' || (Array.isArray(condition.status) && condition.status.includes('waiting'));
 
-/** `base` with usage and cost summed over `all`. */
+/** The hops whose output a result carries; a result without an entry has no known producer. */
+const producers = new WeakMap<MemberResult, readonly string[]>();
+
+/** `result`, marked as produced by `hops` when they are known. */
+function producedBy(result: MemberResult, hops: readonly string[] | undefined): MemberResult {
+  if (hops) producers.set(result, hops);
+  return result;
+}
+
+/** `base` with usage and cost summed over `all`; its producers stay those of `base`. */
 function withTotals(base: MemberResult, all: readonly MemberResult[]): MemberResult {
   let usage: Usage | undefined;
   let costUsd: number | undefined;
@@ -40,7 +53,7 @@ function withTotals(base: MemberResult, all: readonly MemberResult[]): MemberRes
     if (r.costUsd !== undefined) costUsd = (costUsd ?? 0) + r.costUsd;
   }
   const { usage: _usage, costUsd: _costUsd, ...rest } = base;
-  return { ...rest, ...(usage ? { usage } : {}), ...(costUsd !== undefined ? { costUsd } : {}) };
+  return producedBy({ ...rest, ...(usage ? { usage } : {}), ...(costUsd !== undefined ? { costUsd } : {}) }, producers.get(base));
 }
 
 /** One block of a joined text: `[<label>]` then the output, as parallel joins its branches and supervise reports a turn. */
@@ -121,79 +134,87 @@ function bindRun(spec: TopologySpec): BoundTopology {
       const aborted = (frame: Frame): boolean => scope.ctx.signal?.aborted === true || frame.signal?.aborted === true;
       const abortedResult = (): MemberResult => stopped('aborted', 'topology', NAME);
 
-      async function member(id: string, path: string, input: RunInput, frame: Frame, route?: CallOptions['route']): Promise<MemberResult> {
+      /** `from`: the hops whose output is `input`; empty for the caller's input, undefined when not known. */
+      async function member(id: string, path: string, input: RunInput, from: From, frame: Frame, route?: CallOptions['route']): Promise<MemberResult> {
         if (aborted(frame)) return abortedResult();
         const options: CallOptions = { node: path };
+        if (from) options.inputFrom = from;
         if (frame.share !== undefined) options.share = frame.share;
         if (frame.signal) options.signal = frame.signal;
         if (route) options.route = route;
         const outcome = await scope.call(id, input, options);
         frame.hops?.push(outcome.hopId);
-        return outcome.result;
+        // A copy, so a result object the scope hands out twice keeps one producer per call.
+        return producedBy({ ...outcome.result }, [outcome.hopId]);
       }
 
-      async function node(n: TopologyNode, path: string, incoming: RunInput, frame: Frame): Promise<MemberResult> {
-        if (typeof n === 'string') return member(n, path, incoming, frame);
+      async function node(n: TopologyNode, path: string, incoming: RunInput, incomingFrom: From, frame: Frame): Promise<MemberResult> {
+        if (typeof n === 'string') return member(n, path, incoming, incomingFrom, frame);
         if (aborted(frame)) return abortedResult();
-        const input = n.input === 'original' ? scope.input : incoming;
+        const [input, from] = n.input === 'original' ? [scope.input, CALLER] : [incoming, incomingFrom];
         switch (n.kind) {
-          case 'sequence': return sequence(n, path, input, frame);
-          case 'route': return route(n, path, input, frame);
-          case 'loop': return loop(n, path, input, frame);
-          case 'parallel': return parallel(n, path, input, frame);
-          case 'handoff': return handoff(n, path, input, frame);
-          case 'supervise': return supervise(n, path, input, frame);
-          case 'graph': return graph(n, path, input, frame);
+          case 'sequence': return sequence(n, path, input, from, frame);
+          case 'route': return route(n, path, input, from, frame);
+          case 'loop': return loop(n, path, input, from, frame);
+          case 'parallel': return parallel(n, path, input, from, frame);
+          case 'handoff': return handoff(n, path, input, from, frame);
+          case 'supervise': return supervise(n, path, input, from, frame);
+          case 'graph': return graph(n, path, input, from, frame);
           default: throw new TypeError(`${NAME}: node "${path}" has unsupported kind "${(n as { kind: string }).kind}"`);
         }
       }
 
-      async function sequence(n: Extract<TopologySpec, { kind: 'sequence' }>, path: string, input: RunInput, frame: Frame): Promise<MemberResult> {
+      async function sequence(n: Extract<TopologySpec, { kind: 'sequence' }>, path: string, input: RunInput, from: From, frame: Frame): Promise<MemberResult> {
         const results: MemberResult[] = [];
         let current = input;
+        let currentFrom = from;
         for (let i = 0; i < n.steps.length; i++) {
-          const result = await node(n.steps[i] as TopologyNode, `${path}.steps[${i}]`, current, frame);
+          const result = await node(n.steps[i] as TopologyNode, `${path}.steps[${i}]`, current, currentFrom, frame);
           results.push(result);
           if (result.status !== 'completed') return withTotals(result, results);
           current = result.output;
+          currentFrom = producers.get(result);
         }
         return withTotals(results[results.length - 1] as MemberResult, results);
       }
 
-      async function route(n: Extract<TopologySpec, { kind: 'route' }>, path: string, input: RunInput, frame: Frame): Promise<MemberResult> {
+      async function route(n: Extract<TopologySpec, { kind: 'route' }>, path: string, input: RunInput, from: From, frame: Frame): Promise<MemberResult> {
         const decision = await scope.route({ input, candidates: n.candidates, ...(n.router !== undefined ? { router: n.router } : {}), node: path });
         if (decision.member) {
           const chosen = { member: decision.member, ...(decision.ranked ? { ranked: decision.ranked } : {}) };
-          return member(decision.member, path, input, frame, chosen);
+          return member(decision.member, path, input, from, frame, chosen);
         }
-        if (n.fallback !== undefined) return node(n.fallback, `${path}.fallback`, input, frame);
+        if (n.fallback !== undefined) return node(n.fallback, `${path}.fallback`, input, from, frame);
         return decision.failed ? routingFailed(decision) : stopped('rejected', 'routing');
       }
 
-      async function loop(n: Extract<TopologySpec, { kind: 'loop' }>, path: string, input: RunInput, frame: Frame): Promise<MemberResult> {
+      async function loop(n: Extract<TopologySpec, { kind: 'loop' }>, path: string, input: RunInput, from: From, frame: Frame): Promise<MemberResult> {
         const max = n.maxIterations ?? scope.limits.maxIterations;
         const results: MemberResult[] = [];
         let current = input;
+        let currentFrom = from;
         for (let iteration = 1; iteration <= max; iteration++) {
-          const result = await node(n.body, `${path}.body#${iteration}`, current, frame);
+          const result = await node(n.body, `${path}.body#${iteration}`, current, currentFrom, frame);
           results.push(result);
           if (result.status !== 'completed' || scope.matches(n.until, result)) return withTotals(result, results);
           current = result.output;
+          currentFrom = producers.get(result);
         }
         const last = results[results.length - 1] as MemberResult;
         const by = n.maxIterations === undefined ? 'limits.system.maxIterations' : `${path}.maxIterations`;
         return withTotals({ ...last, status: 'stopped', reason: { code: 'limit', layer: 'topology', by } }, results);
       }
 
-      async function handoff(n: Extract<TopologySpec, { kind: 'handoff' }>, path: string, input: RunInput, frame: Frame): Promise<MemberResult> {
+      async function handoff(n: Extract<TopologySpec, { kind: 'handoff' }>, path: string, input: RunInput, from: From, frame: Frame): Promise<MemberResult> {
         const max = n.maxHandoffs ?? scope.limits.maxHandoffs;
         const turnPath = (turn: number): string => `${path}.turns[${turn}]`;
         const results: MemberResult[] = [];
         let current = n.start;
         let incoming = input;
+        let incomingFrom = from;
         let chosen: CallOptions['route'];
         for (let turn = 0; ; turn++) {
-          const result = await member(current, turnPath(turn), incoming, frame, chosen);
+          const result = await member(current, turnPath(turn), incoming, incomingFrom, frame, chosen);
           results.push(result);
           if (result.status !== 'completed') return withTotals(result, results);
 
@@ -223,15 +244,17 @@ function bindRun(spec: TopologySpec): BoundTopology {
           }
           current = next;
           incoming = result.output;
+          incomingFrom = producers.get(result);
         }
       }
 
-      async function supervise(n: Extract<TopologySpec, { kind: 'supervise' }>, path: string, input: RunInput, frame: Frame): Promise<MemberResult> {
+      async function supervise(n: Extract<TopologySpec, { kind: 'supervise' }>, path: string, input: RunInput, from: From, frame: Frame): Promise<MemberResult> {
         const max = scope.limits.maxHandoffs;
         const results: MemberResult[] = [];
         let incoming = input;
+        let incomingFrom = from;
         for (let turn = 0; ; turn++) {
-          const result = await member(n.supervisor, `${path}.supervisor[${turn}]`, incoming, frame);
+          const result = await member(n.supervisor, `${path}.supervisor[${turn}]`, incoming, incomingFrom, frame);
           results.push(result);
           if (result.status !== 'completed') return withTotals(result, results);
           // The protocol key; the bare `delegate` of 0.1.0 is still read (deprecated).
@@ -248,19 +271,21 @@ function bindRun(spec: TopologySpec): BoundTopology {
           }
           if (turn + 1 > max) return withTotals({ ...result, status: 'stopped', reason: { code: 'limit', layer: 'topology', by: 'limits.system.maxHandoffs' } }, results);
 
-          const delegated = await member(target, `${path}.members[${turn}]`, (delegate?.input as RunInput | undefined) ?? result.output, frame);
+          const delegated = await member(target, `${path}.members[${turn}]`, (delegate?.input as RunInput | undefined) ?? result.output, producers.get(result), frame);
           results.push(delegated);
           if (delegated.status !== 'completed') return withTotals(delegated, results);
           incoming = block(target, delegated.output);
+          incomingFrom = producers.get(delegated);
         }
       }
 
-      async function graph(n: Extract<TopologySpec, { kind: 'graph' }>, path: string, input: RunInput, frame: Frame): Promise<MemberResult> {
+      async function graph(n: Extract<TopologySpec, { kind: 'graph' }>, path: string, input: RunInput, from: From, frame: Frame): Promise<MemberResult> {
         const max = scope.limits.maxIterations;
         const visits = new Map<string, number>();
         const results: MemberResult[] = [];
         let id = n.start;
         let incoming = input;
+        let incomingFrom = from;
         for (;;) {
           const visit = (visits.get(id) ?? 0) + 1;
           if (visit > max) {
@@ -268,7 +293,7 @@ function bindRun(spec: TopologySpec): BoundTopology {
             return withTotals({ ...last, status: 'stopped', reason: { code: 'limit', layer: 'topology', by: 'limits.system.maxIterations' } }, results);
           }
           visits.set(id, visit);
-          const result = await node(n.nodes[id] as TopologyNode, `${path}.nodes.${id}${visit > 1 ? `#${visit}` : ''}`, incoming, frame);
+          const result = await node(n.nodes[id] as TopologyNode, `${path}.nodes.${id}${visit > 1 ? `#${visit}` : ''}`, incoming, incomingFrom, frame);
           results.push(result);
           const completed = result.status === 'completed';
           // A waiting result follows only an edge whose condition names `waiting`; otherwise the graph waits with it.
@@ -277,6 +302,7 @@ function bindRun(spec: TopologySpec): BoundTopology {
           if (edge) {
             id = edge.to;
             incoming = result.output;
+            incomingFrom = producers.get(result);
             continue;
           }
           if (!completed || n.end.includes(id)) return withTotals(result, results);
@@ -284,7 +310,7 @@ function bindRun(spec: TopologySpec): BoundTopology {
         }
       }
 
-      async function parallel(n: Extract<TopologySpec, { kind: 'parallel' }>, path: string, input: RunInput, frame: Frame): Promise<MemberResult> {
+      async function parallel(n: Extract<TopologySpec, { kind: 'parallel' }>, path: string, input: RunInput, from: From, frame: Frame): Promise<MemberResult> {
         const count = n.branches.length;
         const first = n.join === 'first';
         const share = (frame.share ?? 1) / count;
@@ -305,7 +331,7 @@ function bindRun(spec: TopologySpec): BoundTopology {
             running.add(i);
             try {
               const branchFrame: Frame = { share, hops: hops[i] as string[], signal };
-              const result = await node(n.branches[i] as TopologyNode, `${path}.branches[${i}]`, input, branchFrame);
+              const result = await node(n.branches[i] as TopologyNode, `${path}.branches[${i}]`, input, from, branchFrame);
               results[i] = result;
               if (first && winner < 0 && result.status === 'completed') {
                 winner = i;
@@ -336,17 +362,20 @@ function bindRun(spec: TopologySpec): BoundTopology {
           return typeof b === 'string' ? b : `${path}.branches[${i}]`;
         };
         const joined = results.map((r, i) => block(label(i), (r as MemberResult).output)).join('\n\n');
-        if (n.merge === undefined) return withTotals({ status: 'completed', output: joined }, done);
+        // The joined text comes from every branch; not known as soon as one branch's producers are not.
+        const branchFrom = done.map((r) => producers.get(r));
+        const joinedFrom = branchFrom.every((f) => f !== undefined) ? [...new Set(branchFrom.flatMap((f) => f ?? []))] : undefined;
+        if (n.merge === undefined) return withTotals(producedBy({ status: 'completed', output: joined }, joinedFrom), done);
         const mergeFrame: Frame = {};
         if (frame.signal) mergeFrame.signal = frame.signal;
         if (frame.share !== undefined) mergeFrame.share = frame.share;
         if (frame.hops) mergeFrame.hops = frame.hops;
-        const merged = await node(n.merge, `${path}.merge`, joined, mergeFrame);
+        const merged = await node(n.merge, `${path}.merge`, joined, joinedFrom, mergeFrame);
         return withTotals(merged, [...done, merged]);
       }
 
       const rootFrame: Frame = {};
-      return node(spec, 'root', input, rootFrame);
+      return node(spec, 'root', input, CALLER, rootFrame);
     },
   };
 }

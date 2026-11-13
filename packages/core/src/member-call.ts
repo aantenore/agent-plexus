@@ -803,6 +803,7 @@ export async function memberCall(env: MemberCallEnv, run: RunState, member: stri
       ...(options.route ? { route: options.route } : {}),
       ...(outcome.inputRef ? { inputRef: outcome.inputRef } : {}),
       ...(outcome.outputRef ? { outputRef: outcome.outputRef } : {}),
+      ...(options.inputFrom ? { inputFrom: [...options.inputFrom] } : {}),
       ...(outcome.attempt ? { attempt: outcome.attempt } : {}),
       ...(outcome.replayed ? { replayed: true } : {}),
     });

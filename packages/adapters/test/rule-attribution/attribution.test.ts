@@ -413,3 +413,49 @@ test('the input record is not changed', async () => {
   await run(record, [score('x', 0)]);
   assert.equal(JSON.stringify(record), before);
 });
+
+test('inputFrom names the upstream hop: a parallel branch blocked on what the step before the parallel wrote', async () => {
+  const up = hop('writer');
+  const quick = hop('quick', { inputFrom: [up.hopId] });
+  const blocked = stopped('slow', GUARD, { inputFrom: [up.hopId] });
+  // Record order alone blames the sibling branch that completed just before.
+  const [byOrder] = await run([up, { ...quick, inputFrom: undefined }, { ...blocked, inputFrom: undefined }]);
+  assert.equal(byOrder?.member, 'quick');
+  const [att] = await run([up, quick, blocked]);
+  assert.deepEqual([att?.layer, att?.member, att?.hopId, att?.confidence], ['member', 'writer', up.hopId, CONFIDENCE.medium]);
+  assert.ok(att?.evidence.includes(`upstream:${up.hopId}`));
+  const [host] = await run([up, quick, stopped('slow', HOST_GUARD, { inputFrom: [up.hopId] })]);
+  assert.deepEqual([host?.layer, host?.member], ['host', 'writer']);
+});
+
+test('inputFrom empty: the input was the caller\'s, so a sibling branch is not blamed', async () => {
+  const quick = hop('quick', { inputFrom: [] });
+  const [host] = await run([quick, stopped('slow', HOST_GUARD, { inputFrom: [] })]);
+  assert.deepEqual([host?.layer, host?.member], ['host', undefined]);
+  const blocked = stopped('slow', GUARD, { inputFrom: [] });
+  const [att] = await run([quick, blocked]);
+  assert.deepEqual([att?.member, att?.hopId, att?.confidence], ['slow', blocked.hopId, CONFIDENCE.high]);
+});
+
+test('inputFrom with several hops blames the latest of them; hops missing from the record are not replaced by record order', async () => {
+  const a = hop('a');
+  const b = hop('b');
+  const other = hop('other');
+  const [att] = await run([a, b, other, stopped('merge', GUARD, { inputFrom: [a.hopId, b.hopId] })]);
+  assert.deepEqual([att?.member, att?.hopId], ['b', b.hopId]);
+  const gone = stopped('merge', GUARD, { inputFrom: ['not-in-the-record'] });
+  const [none] = await run([a, gone]);
+  assert.deepEqual([none?.member, none?.hopId], ['merge', gone.hopId]);
+});
+
+test('the echo walk follows inputFrom, not record order', async () => {
+  const j = journal();
+  const writer = j.done('writer', 'crash', 'a draft about the crash');
+  const side = j.done('side', 'a draft about the crash', 'unrelated');
+  const relay = { ...j.done('relay', 'a draft about the crash', 'Got: a draft about the crash'), inputFrom: [writer.hopId] };
+  const last = { ...j.blocked('last', GUARD, 'Got: a draft about the crash'), inputFrom: [relay.hopId] };
+  side.inputFrom = [writer.hopId];
+  const [att] = await run([writer, relay, side, last], [], j.source);
+  assert.deepEqual([att?.member, att?.hopId], ['writer', writer.hopId]);
+  assert.deepEqual(att?.evidence.slice(-2), [`upstream:${writer.hopId}`, `echo:${relay.hopId}`]);
+});

@@ -167,6 +167,7 @@ One per member call, written for every call including refusals, and one for a ro
 | `parentHopId?`, `runId?`, `reason?`, `usage?`, `costUsd?` | | |
 | `route?` | `{member?, ranked?}` | The router's decision that chose this member. |
 | `inputRef?`, `outputRef?` | String | Keys of the texts in the execution journal. Records never carry the texts. |
+| `inputFrom?` | [String] | Hop ids whose output was this hop's input, as the topology passed them in `CallOptions.inputFrom`. Empty: the input was the caller's and no hop produced it. Absent: the topology did not say. |
 | `abandoned?` | Boolean | The topology abandoned the branch (a `parallel` with `join: "first"`). |
 | `attempt?` | Integer, >= 1 | The call was continued by `System.resume`: 1 after the first resume. Absent on the first attempt. |
 | `replayed?` | Boolean | The call's journal step replayed: an earlier invocation of the run made the call and spent its `usage` and `costUsd`, which stay on the record but are not counted again in this invocation's result. |

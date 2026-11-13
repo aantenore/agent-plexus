@@ -31,11 +31,13 @@ Confidence values: high 0.9, medium 0.6, low 0.3.
 ## Echo
 
 A completed member hop echoed when its input text, trimmed, is non-empty, is contained in its output text, and is at
-least `echoShare` of the output's length. For a `guard_block` the walk starts at the previous completed hop. While the
+least `echoShare` of the output's length. For a `guard_block` the walk starts at the upstream hop: the hop the record names in
+`inputFrom` (the latest in record order when it names several; none when the list is empty or none of them is in the
+record), or, on a record without `inputFrom`, the previous completed hop in record order. While the
 hop echoed, it goes on to the hop before it if that hop's output is exactly the echoing hop's input; otherwise, or when
 there is no such hop, the content came from the caller (`origin:input`). The first hop that did not echo is blamed.
 Each echoed hop adds `echo:<hopId>` to the evidence. Texts are read with `RecordSource.text`; a missing reference, a
-source without `text` or a failed read counts as not echoed, so the previous completed hop is blamed. Texts are
+source without `text` or a failed read counts as not echoed, so the upstream hop is blamed. Texts are
 compared only, never copied into evidence.
 
 ## Options
@@ -53,5 +55,7 @@ A source that fails to deliver spans is ignored.
 
 ## Limits
 
-None. Rule 4 and the upstream rule are approximations: the record does not say which hop's output fed which, so the
-upstream hop is the previous completed hop in record order, refined by the echo walk when texts are readable. Use a judge or replay adapter for finer blame.
+None. Rule 4 and the upstream rule are approximations. The upstream hop comes from `inputFrom` when the topology
+recorded it; with several hops named, the latest is taken, and without the field the previous completed hop in record
+order stands in, which can be the wrong member in a `parallel` or a `graph`. The echo walk refines both when texts are
+readable. Use a judge or replay adapter for finer blame.

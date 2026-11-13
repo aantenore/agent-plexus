@@ -53,8 +53,16 @@ const hopEvidence = (hop: HopRecord) => [`hop:${hop.hopId}`, `node:${hop.node}`]
 /** Names the hop; a route node has no member, so none is named. */
 const at = (hop: HopRecord): Pick<Finding, 'hopId' | 'member'> => ({ hopId: hop.hopId, ...(hop.member ? { member: hop.member } : {}) });
 
-/** The member hop before `index` in record order that completed: the one whose output fed this hop. */
-const previousCompleted = (hops: HopRecord[], index: number) => hops.slice(0, index).reverse().find((h) => h.status === 'completed' && h.member !== '');
+/**
+ * The member hop whose output fed `hop`. With `inputFrom`, the hop it names: the latest in record order when it names
+ * several, none when it names none or none of them is in the record. Without it, the member hop before `hop` in record
+ * order that completed.
+ */
+function upstreamOf(hops: HopRecord[], hop: HopRecord): HopRecord | undefined {
+  const from = hop.inputFrom;
+  if (from) return hops.findLast((h) => h !== hop && h.member !== '' && from.includes(h.hopId));
+  return hops.slice(0, hops.indexOf(hop)).findLast((h) => h.status === 'completed' && h.member !== '');
+}
 
 /** A stored text of the journal; undefined when the key, the reader or the text is missing, or the read fails. */
 async function readText(source: RecordSource | undefined, key: string | undefined): Promise<string | undefined> {
@@ -79,14 +87,14 @@ interface Origin {
   echoes: string[];
 }
 
-/** Walks upstream from the hop at `index` through the members that only repeated their input. Undefined: no upstream member. */
-async function traceOrigin(hops: HopRecord[], index: number, source: RecordSource | undefined, share: number): Promise<Origin | undefined> {
-  let current = previousCompleted(hops, index);
+/** Walks upstream from `hop` through the members that only repeated their input. Undefined: no upstream member. */
+async function traceOrigin(hops: HopRecord[], hop: HopRecord, source: RecordSource | undefined, share: number): Promise<Origin | undefined> {
+  let current = upstreamOf(hops, hop);
   if (!current) return undefined;
   const echoes: string[] = [];
   while (await echoed(current, source, share)) {
     echoes.push(`echo:${current.hopId}`);
-    const prev = previousCompleted(hops, hops.indexOf(current));
+    const prev = upstreamOf(hops, current);
     if (!prev) return { echoes };
     const [given, received] = await Promise.all([readText(source, prev.outputRef), readText(source, current.inputRef)]);
     if (given === undefined || received === undefined || given !== received) return { echoes };
@@ -128,7 +136,7 @@ function findCandidate(hops: HopRecord[], scores: AttributionInput['scores']): H
 }
 
 /** Rule 3: the stop code of the candidate decides layer, member and confidence. Undefined: not a failure. */
-async function byStopCode(candidate: HopRecord, index: number, hops: HopRecord[], source: RecordSource | undefined, share: number): Promise<Finding | undefined> {
+async function byStopCode(candidate: HopRecord, hops: HopRecord[], source: RecordSource | undefined, share: number): Promise<Finding | undefined> {
   const reason = candidate.reason ?? (candidate.status === 'waiting' ? undefined : ERROR_REASON);
   if (!reason) return undefined;
   const { code } = reason;
@@ -141,7 +149,7 @@ async function byStopCode(candidate: HopRecord, index: number, hops: HopRecord[]
     // A refused receive blocked this hop's own output; a refused send or call blocked what an upstream member produced.
     const receive = reason.stage === 'receive' && candidate.member !== '';
     // Only a content block names a member; `denied` and `needs_auth` refuse the call itself.
-    const origin = receive || code !== 'guard_block' ? undefined : await traceOrigin(hops, index, source, share);
+    const origin = receive || code !== 'guard_block' ? undefined : await traceOrigin(hops, candidate, source, share);
     const upstream = origin?.blamed;
     const member = receive ? candidate.member : upstream?.member;
     const tail = receive ? ['stage:receive'] : upstream ? [`upstream:${upstream.hopId}`, ...origin.echoes] : origin ? [...origin.echoes, 'origin:input'] : [];
@@ -181,7 +189,7 @@ async function byStopCode(candidate: HopRecord, index: number, hops: HopRecord[]
 
   let evidence = base;
   if (code === 'guard_block') {
-    const origin = await traceOrigin(hops, index, source, share);
+    const origin = await traceOrigin(hops, candidate, source, share);
     const upstream = origin?.blamed;
     if (upstream) {
       return { layer: 'member', ...at(upstream), confidence: CONFIDENCE.medium, evidence: [...base, `upstream:${upstream.hopId}`, ...origin.echoes], layerFrom: upstream, reason };
@@ -225,7 +233,7 @@ export function createRuleAttribution(options: RuleAttributionOptions = {}, ctx:
         } else if (routeChoseNothing(candidate)) {
           finding = { layer: 'routing', hopId: candidate.hopId, confidence: CONFIDENCE.high, evidence: ['route:none', ...hopEvidence(candidate)] };
         } else {
-          finding = await byStopCode(candidate, hops.indexOf(candidate), hops, source, echoShare);
+          finding = await byStopCode(candidate, hops, source, echoShare);
         }
       } else {
         const failed = scores.find((s) => s.value < 1);

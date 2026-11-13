@@ -252,6 +252,11 @@ export interface HopRecord {
   /** Keys of the texts in the execution journal; records never carry the texts. */
   inputRef?: string;
   outputRef?: string;
+  /**
+   * Hop ids whose output was this hop's input, as the topology passed them. Empty: the input was the caller's, no hop
+   * produced it. Absent: not known.
+   */
+  inputFrom?: string[];
   /** True when the topology abandoned the branch (a `parallel` with `join: "first"`). */
   abandoned?: boolean;
   /** Attempt of a call continued by `System.resume` (1 for the first resume); absent on the first attempt. */

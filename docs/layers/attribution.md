@@ -52,12 +52,16 @@ records beat log text. See [research/protocols.md](../research/protocols.md).
 - Rules branch on the stop code only; `detail` is never parsed.
 - Hops the topology abandoned are skipped.
 - Waiting is not a failure: `needs_input`, a member's `needs_auth` and `aborted` give no attribution.
-- The upstream rule is an approximation: the record does not say which hop's output fed which, so the upstream hop is
-  the previous completed hop in record order. When the source reads texts, a hop that only repeated its input (its
+- The upstream hop of a hop is the one its record names in `inputFrom`, which the topology fills with the hops whose
+  output it passed on (`basic-topology` does for every kind). When it names several (the merge of a `parallel`), the
+  latest of them in record order is taken, which is an approximation; when it names none, the input was the caller's
+  and there is no upstream hop. A record without `inputFrom` (a topology that does not fill it, or a record written
+  before the field existed) falls back to the previous completed hop in record order, which can name the wrong member
+  in a `parallel` or a `graph`. When the source reads texts, a hop that only repeated its input (its
   output holds the input and the input is at least `echoShare` of the output) is passed over: the walk goes on to the
   hop before it, as long as that hop's output is the echoing hop's input, and stops at the first hop that added text or
   at the caller's input. The adapter compares texts and never copies them into evidence. Without `text`, or when a
-  read fails, the previous completed hop is blamed.
+  read fails, the upstream hop is blamed.
 - `system.attribute` reads at most `limits.attribution.maxRecords` records (over the cap, the first half and the last half of the record) and gives the adapter an in-memory record
   source, `memory`, of the last `limits.attribution.historyRuns` runs (default 100). It has records only; member spans need a trace-backed source (planned).
 
@@ -72,9 +76,9 @@ records beat log text. See [research/protocols.md](../research/protocols.md).
 | 3 | `timeout`, `limit` with `reason.layer` `topology` (the system's own limit or deadline) | `topology` | none | high |
 | 3 | `timeout`, `limit` otherwise | `member` | `limit`: the hop with the most tokens, else the highest cost, else the longest duration, `replayed` hops' usage and cost left out. `timeout`: the longest duration | medium |
 | 3 | `denied`, `needs_auth` from the host | `host` | none | high |
-| 3 | `guard_block` from the host | `host` | `receive`: the hop's own member; `send`: the first upstream member that added text (the previous completed hop's member when texts are not readable); none when every upstream member only repeated the caller's input (evidence `origin:input`) | high |
+| 3 | `guard_block` from the host | `host` | `receive`: the hop's own member; `send`: the first upstream member that added text (the upstream hop's member when texts are not readable); none when every upstream member only repeated the caller's input (evidence `origin:input`) | high |
 | 3 | Any other code with `reason.layer` `topology` | `topology` | none | medium |
-| 3 | `guard_block` from a member, with an earlier completed hop | `member` | The first upstream member that added text (the previous completed hop's member when texts are not readable) | medium |
+| 3 | `guard_block` from a member, with an earlier completed hop | `member` | The first upstream member that added text (the upstream hop's member when texts are not readable) | medium |
 | 3 | `guard_block` from a member, every upstream member only repeated the caller's input | `member` | The hop; evidence has `echo:<hopId>` and `origin:input` | high with a member layer, else medium |
 | 3 | `guard_block` otherwise, `failed`, `error`, other codes | `member` | The hop | high with a member layer, else medium |
 | 3 | `rejected` | `member` | The hop | low |

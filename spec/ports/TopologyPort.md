@@ -34,9 +34,12 @@ What the core gives the adapter for one run.
 | `matches(condition, result) → Boolean` | | Evaluates a `Condition`. |
 | `abandon(hopId)` | | Marks the hop of a cancelled branch, so attribution skips it. |
 
-`CallOptions` is `{node, parentHopId?, share?, signal?, route?}`: the topology path of the calling node, the fraction of
+`CallOptions` is `{node, parentHopId?, inputFrom?, share?, signal?, route?}`: the topology path of the calling node, the
+ids of the hops whose output is the call's input, the fraction of
 the budget not yet spent to reserve (default all that no other call reserved), a cancellation signal, and the router's
-decision that chose the member. `CallOutcome` is `{hopId, result}`; when the call replayed from the journal, `result`
+decision that chose the member. A topology should pass `inputFrom` whenever it knows where the input came from: the
+hop or hops that produced it, or an empty list for the caller's input. The core copies it to the hop record, where
+attribution reads it; a topology that omits it leaves attribution to guess from record order. `CallOutcome` is `{hopId, result}`; when the call replayed from the journal, `result`
 has no `usage` or `costUsd` (an earlier invocation spent them). `RouteRequest` is `{input, candidates, router?, node, optional?}`. With `optional`, choosing nobody is an
 expected answer (a handoff that ends): the core writes no hop record for it. Without `optional`, a decision with no
 member is a hop of its own (`stopped`, `rejected`, layer `routing`), which attribution can name. A decision with

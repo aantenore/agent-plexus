@@ -1,4 +1,9 @@
 /** Rules for the targets the member may talk to, and bounded, redirect-free reads of the documents it fetches. */
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { Agent as HttpAgent, request as httpRequest, type IncomingMessage } from 'node:http';
+import { Agent as HttpsAgent, request as httpsRequest } from 'node:https';
+import type { LookupFunction } from 'node:net';
+import { Readable } from 'node:stream';
 
 /** Raised for a target or a card the rules refuse. The message is fixed text: it never carries remote content. */
 export class Refused extends Error {
@@ -9,7 +14,7 @@ function privateV4(a: number, b: number): boolean {
   return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
 }
 
-/** Loopback, private, link-local and unspecified addresses, and `localhost` names, written literally in a URL. */
+/** Loopback, private, link-local and unspecified addresses, and `localhost` names, as a URL writes them or as DNS gives them. */
 export function isPrivateHost(hostname: string): boolean {
   const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (h === 'localhost' || h.endsWith('.localhost')) return true;
@@ -26,10 +31,25 @@ export function isLoopback(hostname: string): boolean {
   return h === 'localhost' || h.endsWith('.localhost') || h === '::1' || /^127\./.test(h);
 }
 
+/** One address a host name resolves to. */
+export interface ResolvedAddress {
+  address: string;
+  family: number;
+}
+
+/** Resolves a host name to all its addresses; `family` is 4 or 6 when the connection asks for one of them. */
+export type Resolver = (hostname: string, family?: number) => Promise<ResolvedAddress[]>;
+
+const systemResolver: Resolver = (hostname, family) => dnsLookup(hostname, { all: true, ...(family ? { family } : {}) });
+
 export interface TargetRules {
   allowHttp: boolean;
   /** Origins the operator configured: only these may be private or loopback targets. */
   configured: ReadonlySet<string>;
+  /** Configured host names may resolve to private addresses (default false). */
+  allowPrivateDns?: boolean;
+  /** How host names are resolved when a connection opens; default: the system resolver (`dns.lookup`). */
+  resolve?: Resolver;
 }
 
 /** A URL the member may send to: https (or loopback, or `allowHttp`), no credentials in it, private only if configured. */
@@ -44,6 +64,87 @@ export function checkTarget(raw: string, what: string, rules: TargetRules): URL 
   if (url.username || url.password) throw new Refused(`${what} must not carry credentials`);
   if (isPrivateHost(url.hostname) && !rules.configured.has(url.origin)) throw new Refused(`${what} is a private address that is not configured`);
   return url;
+}
+
+/**
+ * The addresses `url`'s host name resolves to, refused when any of them is private. A host name passes `checkTarget`
+ * as written, so this is where a public name that points inside is caught. A configured origin may resolve to a
+ * private address when its name already says so (`localhost`) or with `allowPrivateDns`.
+ */
+export async function resolveTarget(url: URL, rules: TargetRules, family?: number): Promise<ResolvedAddress[]> {
+  const addresses = await (rules.resolve ?? systemResolver)(url.hostname.replace(/^\[|\]$/g, ''), family);
+  if (addresses.length === 0) throw new Refused('the host name has no address');
+  const mayBePrivate = rules.configured.has(url.origin) && (rules.allowPrivateDns === true || isPrivateHost(url.hostname));
+  if (!mayBePrivate && addresses.some((a) => isPrivateHost(a.address))) {
+    throw new Refused('the host name resolves to a private address; set allowPrivateDns to allow it for configured origins');
+  }
+  return addresses;
+}
+
+/**
+ * The `lookup` of one connection to `url`: the socket connects only to addresses `resolveTarget` let through, so the
+ * address that was checked is the address that is used, with no second resolution in between.
+ */
+function guardedLookup(url: URL, rules: TargetRules): LookupFunction {
+  return (_hostname, options, callback) => {
+    resolveTarget(url, rules, options.family === 4 || options.family === 6 ? options.family : undefined).then(
+      (addresses) => {
+        if (options.all) callback(null, addresses);
+        else callback(null, addresses[0]!.address, addresses[0]!.family);
+      },
+      (error: NodeJS.ErrnoException) => callback(error, '', 0),
+    );
+  };
+}
+
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+
+function toResponse(res: IncomingMessage, method: string): Response {
+  const status = res.statusCode ?? 0;
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(res.headers)) {
+    for (const v of Array.isArray(value) ? value : value === undefined ? [] : [value]) headers.append(name, v);
+  }
+  if (method === 'HEAD' || status === 204 || status === 304) {
+    res.resume();
+    return new Response(null, { status, headers });
+  }
+  return new Response(Readable.toWeb(res) as ReadableStream<Uint8Array>, { status, headers });
+}
+
+/**
+ * A `fetch` whose connections resolve host names through the target rules (`resolveTarget`). The global `fetch` takes
+ * no `lookup`, so requests go through `node:http` and `node:https`, on connections of its own that no other code
+ * shares. Redirects are never followed: a redirect answer is an error, whatever `init.redirect` says.
+ */
+export function createGuardedFetch(rules: TargetRules): typeof fetch {
+  const agents = { 'http:': new HttpAgent({ keepAlive: true }), 'https:': new HttpsAgent({ keepAlive: true }) };
+  return async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    const body = request.body ? Buffer.from(await request.arrayBuffer()) : undefined;
+    const headers: Record<string, string> = { 'accept-encoding': 'identity' };
+    request.headers.forEach((value, name) => {
+      headers[name] = value;
+    });
+    if (body) headers['content-length'] = String(body.byteLength);
+    return new Promise<Response>((resolve, reject) => {
+      const options = { method: request.method, headers, lookup: guardedLookup(url, rules), signal: request.signal };
+      const onResponse = (res: IncomingMessage): void => {
+        if (REDIRECTS.has(res.statusCode ?? 0)) {
+          res.destroy();
+          reject(new TypeError('fetch failed: redirect refused'));
+          return;
+        }
+        resolve(toResponse(res, request.method));
+      };
+      const req = url.protocol === 'https:'
+        ? httpsRequest(url, { ...options, agent: agents['https:'] }, onResponse)
+        : httpRequest(url, { ...options, agent: agents['http:'] }, onResponse);
+      req.on('error', reject);
+      req.end(body);
+    });
+  };
 }
 
 /** Whether a card may point at `target`: its own origin, or an entry of `allowed` (an origin or a URL prefix). */
@@ -81,10 +182,10 @@ export async function readBounded(res: Response, maxBytes: number): Promise<stri
 }
 
 /** Fetches a JSON document without credentials and without following redirects; size bounded. */
-export async function fetchDocument(url: URL, maxBytes: number, signal: AbortSignal | undefined): Promise<unknown> {
+export async function fetchDocument(url: URL, maxBytes: number, signal: AbortSignal | undefined, send: typeof fetch = fetch): Promise<unknown> {
   const init: RequestInit = { headers: { accept: 'application/json' }, redirect: 'error', credentials: 'omit' };
   if (signal) init.signal = signal;
-  const res = await fetch(url, init);
+  const res = await send(url, init);
   if (!res.ok) {
     await res.body?.cancel();
     throw new Refused('document could not be fetched');
@@ -102,9 +203,9 @@ export async function fetchDocument(url: URL, maxBytes: number, signal: AbortSig
  * remote side echoes, a credential for instance, never reaches an error), and the body of an ok response is read up to
  * `maxResponseBytes`.
  */
-export function createTransportFetch(maxResponseBytes: number): typeof fetch {
+export function createTransportFetch(maxResponseBytes: number, send: typeof fetch = fetch): typeof fetch {
   return async (input, init) => {
-    const res = await fetch(input, { ...init, redirect: 'error' });
+    const res = await send(input, { ...init, redirect: 'error' });
     if (!res.ok) {
       await res.body?.cancel();
       return new Response(null, { status: res.status });

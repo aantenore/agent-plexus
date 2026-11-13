@@ -141,7 +141,8 @@ An agent served over A2A, in any language or framework, is a member through `a2a
   refused. The endpoint of the card is used only when it has the origin of `url` or is in `allowedEndpoints`.
 - The credential is not an option: the host's gate mints a token for `audience`, and the member sends it to the checked
   endpoint only. Without `audience` the agent is called without a credential.
-- https is required except on loopback; private addresses are refused unless that origin is configured; redirects are
+- https is required except on loopback; private addresses are refused unless that origin is configured, and a host name
+  that resolves to one is refused unless `allowPrivateDns` is set; redirects are
   never followed. The rules are listed in [security](cross-cutting/security.md#remote-agents-over-a2a).
 - A call returns once the remote side has a task. The task id is journaled, the task is polled every `pollMs`, and a
   restart of the same run resumes that task instead of sending the request again. On a deadline the member cancels

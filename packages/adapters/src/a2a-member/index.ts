@@ -33,6 +33,8 @@ export interface A2AMemberOptions {
   allowedEndpoints?: string[];
   /** Allow plain http to hosts that are not loopback (default false). */
   allowHttp?: boolean;
+  /** Allow the host names of configured URLs to resolve to private, loopback or link-local addresses (default false). */
+  allowPrivateDns?: boolean;
   /** Credential audience; from config, never from the card. */
   audience?: string;
   /** Public keys (JWKs) or the URL of a JWKS document, to verify the card signatures. */
@@ -125,7 +127,7 @@ export function createA2AMember(options: A2AMemberOptions, ctx: Pick<AdapterCont
   if (options.allowedEndpoints !== undefined && (!Array.isArray(options.allowedEndpoints) || options.allowedEndpoints.some((e) => typeof e !== 'string'))) {
     throw new TypeError('a2a-member: allowedEndpoints must be strings');
   }
-  for (const key of ['allowHttp', 'requireSigned'] as const) {
+  for (const key of ['allowHttp', 'allowPrivateDns', 'requireSigned'] as const) {
     if (options[key] !== undefined && typeof options[key] !== 'boolean') throw new TypeError(`a2a-member: ${key} must be a boolean`);
   }
   if (options.headers !== undefined && (typeof options.headers !== 'object' || options.headers === null || Object.values(options.headers).some((v) => typeof v !== 'string'))) {
@@ -148,7 +150,7 @@ export function createA2AMember(options: A2AMemberOptions, ctx: Pick<AdapterCont
   const configuredUrls = [options.url, options.endpoint, ...allowedEndpoints, typeof keys === 'string' ? keys : undefined].filter((u): u is string => !!u);
   let rules: TargetRules;
   try {
-    rules = { allowHttp: options.allowHttp === true, configured: new Set(configuredUrls.map((u) => new URL(u).origin)) };
+    rules = { allowHttp: options.allowHttp === true, allowPrivateDns: options.allowPrivateDns === true, configured: new Set(configuredUrls.map((u) => new URL(u).origin)) };
     for (const u of configuredUrls) checkTarget(u, 'a configured URL', rules);
   } catch (error) {
     throw new TypeError(`a2a-member: ${error instanceof Refused ? error.message : 'a configured URL is not a URL'}`);
@@ -324,6 +326,7 @@ export const adapter = defineAdapter<'MemberPort', A2AMemberOptions>({
       endpoint: { type: 'string', minLength: 1 },
       allowedEndpoints: { type: 'array', items: { type: 'string', minLength: 1 } },
       allowHttp: { type: 'boolean' },
+      allowPrivateDns: { type: 'boolean' },
       audience: { type: 'string', minLength: 1 },
       keys: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'array', items: { type: 'object' } }] },
       requireSigned: { type: 'boolean' },

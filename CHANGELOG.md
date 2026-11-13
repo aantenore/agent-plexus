@@ -11,6 +11,14 @@ Every package under `packages/*` is released with the same version. See [RELEASI
   `rule-attribution` follows it to find the upstream member of a `guard_block`, so a `parallel` or `graph` run no longer
   blames whichever hop happened to come before in the record. Records without the field are read as before.
 
+### Changed
+
+- `a2a-member` resolves host names when it connects and refuses a name that resolves to a private, loopback,
+  link-local or unique-local address (IPv4-mapped IPv6 included); until now only addresses written literally in a URL
+  were checked. The connection uses the addresses that were checked. An agent on an internal network that is reached by
+  name now needs the new option `allowPrivateDns: true`; literal private addresses and `localhost` in configured URLs
+  work as before.
+
 ### Fixed
 
 - A command that needs a config (`check`, `run`, `resume`, `cancel`, `eval`, `dev`) in a folder without `plexus.json`, or

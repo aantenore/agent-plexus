@@ -1,7 +1,7 @@
 import { DefaultAgentCardResolver, JsonRpcTransportFactory, Client } from '@a2a-js/sdk/client';
 import { verifyAgentCardSignature, type AgentCard } from '@a2a-js/sdk';
 import type { AgentEntry, Skill } from '@agent-plexus/core';
-import { checkTarget, endpointAllowed, fetchDocument, Refused, createTransportFetch, type TargetRules } from './guard.ts';
+import { checkTarget, createGuardedFetch, endpointAllowed, fetchDocument, Refused, createTransportFetch, type TargetRules } from './guard.ts';
 
 /** A public key the operator configured, as a JWK. */
 export type PublicJwk = Record<string, unknown> & { kty: string; kid?: string };
@@ -68,10 +68,12 @@ function memo<T>(ttlMs: number, load: () => Promise<T>): () => Promise<T> {
 export function createTargetSource(options: CardOptions, rules: TargetRules): () => Promise<Target> {
   const timeout = (): AbortSignal | undefined => (Number.isFinite(options.fetchTimeoutMs) ? AbortSignal.timeout(options.fetchTimeoutMs) : undefined);
   const hasCard = CARD_PATH.test(new URL(options.url).pathname);
+  // Every request of this member, so a host name is checked again as resolved, on the connection that uses it.
+  const send = createGuardedFetch(rules);
 
   const keySet = typeof options.keys === 'string'
     ? memo(options.cardTtlMs, async () => {
-        const doc = await fetchDocument(checkTarget(options.keys as string, 'keys URL', rules), options.maxCardBytes, timeout());
+        const doc = await fetchDocument(checkTarget(options.keys as string, 'keys URL', rules), options.maxCardBytes, timeout(), send);
         return checkKeys(isPlain(doc) ? doc.keys : undefined);
       })
     : async (): Promise<PublicJwk[]> => (options.keys as PublicJwk[] | undefined) ?? [];
@@ -111,7 +113,7 @@ export function createTargetSource(options: CardOptions, rules: TargetRules): ()
     let url: URL;
     if (hasCard) {
       const cardUrl = checkTarget(options.url, 'url', rules);
-      const raw = await fetchDocument(cardUrl, options.maxCardBytes, timeout());
+      const raw = await fetchDocument(cardUrl, options.maxCardBytes, timeout(), send);
       if (!isPlain(raw)) throw new Refused('the agent card is not an object');
       card = resolver.normalizeAgentCard(raw);
       const proof = await verify(card);
@@ -139,7 +141,7 @@ export function createTargetSource(options: CardOptions, rules: TargetRules): ()
       capabilities: { extensions: [] },
       supportedInterfaces: [{ url: url.href, protocolBinding: 'JSONRPC', protocolVersion: '1.0', tenant: '' }],
     } satisfies AgentCard);
-    const transport = await new JsonRpcTransportFactory({ fetchImpl: createTransportFetch(options.maxResponseBytes), legacyCompat: { enabled: true } }).create(url.href, boundCard);
+    const transport = await new JsonRpcTransportFactory({ fetchImpl: createTransportFetch(options.maxResponseBytes, send), legacyCompat: { enabled: true } }).create(url.href, boundCard);
     const client = new Client(transport, boundCard, { polling: true });
     const target: Target = { client, endpoint: url.href, signed };
     if (card) target.card = card;

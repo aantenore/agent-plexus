@@ -21,6 +21,7 @@ or waits. A restart resumes the same task through `resume` instead of sending th
 | `endpoint` | string | from the card | JSON-RPC endpoint to use instead of the one in the card; the card is still read for the entry |
 | `allowedEndpoints` | string[] | none | URLs or origins a card may point to besides its own origin |
 | `allowHttp` | boolean | `false` | Plain http to hosts that are not loopback |
+| `allowPrivateDns` | boolean | `false` | Host names of configured URLs may resolve to private, loopback or link-local addresses (an agent on an internal network) |
 | `audience` | string | none | Credential audience of the entry; from the config, never from the card |
 | `keys` | object[] or string | none | Public keys (JWKs) or the URL of a JWKS document, to verify card signatures |
 | `requireSigned` | boolean | `false` | Refuse a card that is unsigned or not verified by `keys` (needs `keys`) |
@@ -135,9 +136,15 @@ endpoint rule.
   `allowedEndpoints`; otherwise the call is refused unless `endpoint` is set. A card cannot send the credential to
   another host.
 - **https.** Required, except loopback, or with `allowHttp`. A URL with embedded credentials is refused.
-- **Private addresses.** Private, loopback and link-local hosts are refused unless that origin is configured
-  (`url`, `endpoint`, `allowedEndpoints`, or the JWKS URL). Host names are checked as written, not after DNS
-  resolution: restrict egress at the network level too.
+- **Private addresses.** Private, loopback, link-local (the cloud metadata address `169.254.169.254` among them) and
+  unique-local hosts, IPv4-mapped IPv6 included, are refused unless that origin is configured (`url`, `endpoint`,
+  `allowedEndpoints`, or the JWKS URL).
+- **Host names.** A host name is resolved when the connection opens, and the call is refused when any address it
+  resolves to is private, so a public name cannot point the member inside. The socket connects to the addresses that
+  were checked: there is no second resolution to change the answer in between. `localhost` names follow the rule
+  above; any other configured name may resolve to a private address only with `allowPrivateDns`.
+  Limits: with `allowPrivateDns` a configured name is trusted wherever it resolves; an address reached through an
+  outbound proxy or a NAT64 gateway is not seen. Restrict egress at the network level too.
 - **No redirects** on the card, the key set or any call.
 - **Answer size.** The body of a JSON-RPC answer is read up to `maxResponseBytes`; a larger one fails the call with a
   fixed detail.
